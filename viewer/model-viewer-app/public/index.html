@@ -1044,7 +1044,10 @@ function RepoBrowser({onLoadModel,onClose}){
     try{
       const spec=parseRepoSpec(repoInput);
       if(!spec)throw new Error('Could not parse repo. Use https://github.com/owner/repo, owner/repo, or git@github.com:owner/repo');
-      let branch=(branchInput||'').trim()||spec.branch||'';
+      // A branch embedded in a pasted /tree/<branch> URL is the most explicit signal,
+      // so honour it over a stale value left in the Branch box, and reflect it back.
+      let branch=(spec.branch||'').trim()||(branchInput||'').trim();
+      if(spec.branch&&spec.branch!==branchInput){setBranchInput(spec.branch);}
       if(!branch){branch=await fetchDefaultBranch(spec.owner,spec.repo,tokenInput||null);}
       const treeData=await fetchRepoTree(spec.owner,spec.repo,branch,tokenInput||null);
       const built=buildIndustryRows(treeData.tree||[]);
@@ -1115,7 +1118,7 @@ function RepoBrowser({onLoadModel,onClose}){
         h('div',{style:{display:'grid',gridTemplateColumns:'2fr 1fr',gap:10,marginBottom:8}},
           h('div',{},
             h('label',{style:labelStyle},'Repository'),
-            h('input',{type:'text',value:repoInput,onChange:e=>setRepoInput(e.target.value),
+            h('input',{type:'text',value:repoInput,onChange:e=>{const v=e.target.value;setRepoInput(v);const sp=parseRepoSpec(v);if(sp&&sp.branch)setBranchInput(sp.branch);},
               placeholder:'https://github.com/owner/repo  or  owner/repo',
               style:inputStyle,
               onKeyDown:e=>{if(e.key==='Enter')browseRepo();}})
