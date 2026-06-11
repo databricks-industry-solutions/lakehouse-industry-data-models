@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   publish:
-    runs-on: html_publisher
+    runs-on: ubuntu-latest
     environment:
       name: ${{ github.ref_name == 'main' && 'github-pages' || 'preview' }}
       url: ${{ steps.deployment.outputs.page_url }}
