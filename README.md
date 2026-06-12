@@ -289,8 +289,8 @@ Click an industry name to jump to its folder.
 
 ## How models are generated
 
-1. An **LLM-powered modelling pipeline** receives a one-paragraph business description (e.g. *"Agriculture — primary production, supply chain, finance, sustainability ..."*).
-2. It runs an 8-stage pipeline using a per-stage **LLM ensemble + judge**:
+1. An **LLM-powered modelling AI agent** receives user vibes (e.g. *"create 7 domains covering the arilines, ensure flight is one of them, cover airport operations too"*).
+2. It runs an 8-stage AI agent using a per-stage **LLM ensemble + judge**:
    1. Tier classification → 2. Domain generation → 3. Sub-domain expansion → 4. Product (table) generation → 5. Attribute (column) generation → 6. FK linking → 7. Semantic dedup + naming → 8. Metric view + ontology synthesis.
 3. Each stage is gated by structural validators (cycle detector, bidirectional-FK detector, dangling-FK detector, fidelity-precision gate) before the next stage starts.
 4. Output is written to a Unity Catalog volume + workspace folder, then published into this repo.
