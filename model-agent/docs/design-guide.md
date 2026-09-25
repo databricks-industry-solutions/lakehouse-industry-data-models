@@ -25,7 +25,7 @@
 - [15. Vibe System Architecture](#15-vibe-system-architecture)
 - [16. DAG Enforcement Deep Dive](#16-dag-enforcement-deep-dive)
 - [17. Static Analysis Checks](#17-static-analysis-checks)
-- [18. Complete Widget Reference (28 Widgets)](#18-complete-widget-reference-28-widgets)
+- [18. Complete Widget Reference (29 Widgets)](#18-complete-widget-reference-29-widgets)
 - [19. Output Artifacts (Complete Reference)](#19-output-artifacts-complete-reference)
 - [20. Error Handling Patterns](#20-error-handling-patterns)
 - [22. Surgical Mode Architecture (v0.4.0 — v0.5.1)](#22-surgical-mode-architecture-v040--v051)
@@ -1297,7 +1297,7 @@ The agent performs comprehensive code-based validation of the model without LLM 
 
 ---
 
-## 18. Complete Widget Reference (28 Widgets)
+## 18. Complete Widget Reference (29 Widgets)
 
 Widgets are the Databricks notebook input parameters that configure each agent run. Below is the complete reference:
 
@@ -1306,6 +1306,7 @@ Widgets are the Databricks notebook input parameters that configure each agent r
 | 01 | business_name | Name of the business being modeled | Text |
 | 02 | business_description | Detailed description of the business (processes, products, org structure) | Text |
 | 03 | operation | Pipeline operation to execute (see Section 8) | Dropdown |
+| 03a | run_type | `Full Run` (default; deploy to Unity Catalog) or `Dry Run` (build the model and all volume artifacts, including the runnable `schemas/*.sql` DDL, but skip the UC deploy). Applies to generative ops only; install/uninstall always deploy | Dropdown |
 | 04 | model_version | Version identifier for the model (e.g., v1, v2) | Text |
 | 05 | data_model_scopes | MVM or ECM scope selection | Dropdown |
 | 06 | business_domains | Optional: pre-specified domain names (comma-separated) | Text |

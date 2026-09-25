@@ -37,6 +37,7 @@ The **Vibe Data Modeling agent** replaces that with a single Databricks notebook
 - **100% relevant to you** — your terminology, your divisions, your domains — not a sector average.
 - **Trustworthy by construction** — enforceable rules, two architect-persona reviews, and a closed agentic loop that *proves* the model before it ships. The quality score is computed from the model itself, not from an LLM's self-assessment.
 - **Native Unity Catalog deployment** — schemas, tables, foreign keys, classification tags, metric views, an RDFS ontology, a DBML diagram, and sample data, generated and versioned together.
+- **Dry Run mode** (`run_type` widget): build the full model and every volume artifact, including the runnable `schemas/*.sql` DDL, without deploying to Unity Catalog. `Full Run` (the default) deploys as usual; a Dry Run output installs later from its `model.json` path.
 
 ```mermaid
 flowchart LR
@@ -89,7 +90,7 @@ The fastest way to explore a model visually is the **model-viewer app**, a **Dat
 
 ### Deploying a model into Unity Catalog
 
-The **[`model-installer/data-model-installer.ipynb`](./model-installer/data-model-installer.ipynb)** notebook installs any model — catalog, schemas, tables, foreign keys, governance tags, and metric views — with a single `Run All`. It is Databricks Serverless compatible, resolves the latest version of a model automatically, and can render the same logical model as one catalog, a catalog per division, or a catalog per domain.
+The **[`model-installer/data-model-installer.ipynb`](./model-installer/data-model-installer.ipynb)** notebook installs any model — catalog, schemas, tables, foreign keys, governance tags, and metric views — with a single `Run All`. It is Databricks Serverless compatible, resolves the latest version of a model automatically, and can render the same logical model as one catalog, a catalog per division, or a catalog per domain. It also installs any model staged on a Unity Catalog Volume: point `local_install` at the model folder or at its `model.json` (for example a Dry Run output from the agent) and it deploys the sibling `schemas/` DDL.
 
 **Sample data, by construction.** Set `generate_samples` to `Yes` and the installer fills every table with referentially-correct synthetic rows — unique primary keys, every foreign key resolving to a real parent, nothing landing half-broken (an integrity gate re-checks in memory before the first write), and reproducible reruns from a fixed seed. Verified end-to-end against `information_schema` on live installs:
 

@@ -52,12 +52,15 @@ Set only these, leave everything else on its default, and run:
 | **01. Business (name)** | e.g. `Airlines` |
 | **02. Description** | 2–3 sentences on what the business does |
 | **03. Operation** | `new base model` |
+| **03a. Run Type** | `Full Run` (default; deploys to Unity Catalog) or `Dry Run` (build the model and all volume artifacts, including the runnable `schemas/*.sql` DDL, but skip the UC deploy) |
 | **05. Model Scope** | `Minimum Viable Model - MVM` (lean) or `Expanded Coverage Model - ECM` (full) |
 | **09. Installation Catalog** | a UC catalog you own, e.g. `airlines_mvm_v1` (omit to produce the logical model only, no physical deploy) |
 
 > **Notebook layout (v4.2.8+):** the first markdown cell links to the two Databricks Vibe Data Modelling blogs and the [40 Lakehouse Industry Data Models](https://www.databricks.com/blog/jumpstart-your-data-modeling-databricks-industry-data-models) repo. Widget labels in the UI match the table below.
 
 That produces v1: the logical `model.json`, physical schemas/tables/FKs/tags, metric views, sample data, docs, and a `next_vibes.txt`.
+
+**Dry Run vs Full Run (widget 03a).** `Full Run` (the default) deploys the model to Unity Catalog. `Dry Run` runs the entire pipeline and writes every volume artifact (`model.json`, the runnable `schemas/*.sql` and `metrics/*.sql` DDL, DBML, docs) but creates nothing in the catalog. Deploy a Dry Run output later with `install model` or the standalone installer pointed at the `model.json` path. Dry Run applies to the generative operations (`new base model`, `vibe modeling of version`, `shrink ecm`, `enlarge mvm`); `install model` and `uninstall model version` always deploy regardless of Run Type.
 
 ### 2. Every other operation (the cheat-sheet)
 
