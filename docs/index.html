@@ -701,7 +701,7 @@ const TREE_ATTR_CAP = 250;
 const THEME_KEY='dbx-model-theme', PAL_KEY='dbx-model-pal', ANIM_KEY='dbx-model-animate';
 /* Every outbound GitHub link in the chrome points here. Industry model JSON is
    fetched from upstream main via modelUrls(); manifest.source is not used for loads. */
-const UPSTREAM_REPO={owner:'amralieg',repo:'lakehouse-industry-data-models-fork'};
+const UPSTREAM_REPO={owner:'databricks-industry-solutions',repo:'lakehouse-industry-data-models'};
 const PALETTES=[
   {id:'default',label:'Default'},{id:'muted',label:'Muted'},{id:'vivid',label:'Vivid'},
   {id:'ocean',label:'Ocean'},{id:'sunset',label:'Sunset'},{id:'mono',label:'Mono'},
@@ -1626,14 +1626,14 @@ function NodeInfoPanel({selectedNode,selectedEdge,treeClick,graphData,domainSize
       ),
       nodeData.description&&h('p',{style:{
         color:'var(--ink)',fontSize:13,lineHeight:1.6,marginBottom:12,padding:8,
-        background:'var(--veil)',borderRadius:4,
+        background:'var(--veil)',borderRadius:4,flexShrink:0,maxHeight:'40vh',overflowY:'auto',
         borderLeft:`3px solid ${nodeData.color}`
       }},nodeData.description),
       tags.length>0&&h('div',{style:{marginBottom:10}},
         tags.map(t=>h('span',{key:t,className:'tag-pill'},t))
       ),
       h('div',{className:'section-header'},'Attributes'),
-      h('div',{style:{flex:1,overflowY:'auto',background:'var(--well)',borderRadius:6,padding:8}},
+      h('div',{style:{flex:1,minHeight:0,overflowY:'auto',background:'var(--well)',borderRadius:6,padding:8}},
         sortedAttrs.map(attr=>{
           const isPk=attr.pk;
           const isFk=!!attr.fk;
