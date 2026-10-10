@@ -197,6 +197,17 @@ def _build_agent_helpers_module():
 _build_agent_helpers_module()
 
 
+@pytest.fixture(autouse=True)
+def _vov_ledger_isolation():
+    reset = getattr(sys.modules.get("agent_helpers"), "vov_ledger_reset", None)
+    if reset is not None:
+        reset()
+    yield
+    fence_reset = getattr(sys.modules.get("agent_helpers"), "set_vibe_scope_runtime", None)
+    if fence_reset is not None:
+        fence_reset(None)
+
+
 @pytest.fixture(scope="session")
 def agent_source_text():
     """Full notebook Python source (all code cells) — prefer over raw .ipynb JSON."""

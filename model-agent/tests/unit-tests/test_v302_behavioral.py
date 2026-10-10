@@ -57,7 +57,7 @@ def _load_batcher_ns():
         "batch grouper family not found"
     )
     fam_src = "".join(_lines[_fam_start:_fam_end])
-    ns = {}
+    ns = {"_VIBE_SCOPE_RUNTIME": None}
     exec(
         "from dataclasses import dataclass, field\n"
         "from collections import defaultdict\n"

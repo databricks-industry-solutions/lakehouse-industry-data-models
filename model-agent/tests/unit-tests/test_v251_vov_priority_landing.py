@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Optional
 
-from notebook_source_util import notebook_concat_source, slice_function_source
+from notebook_source_util import notebook_concat_source, slice_function_source, vov_ledger_globals
 
 
 SRC = notebook_concat_source()
@@ -67,10 +67,12 @@ class PipelineResult:
     coverage_pct: float
     rejected_handlers: list[tuple[str, str]]
     deferred_vreqs: list = None  # v2.9.6 alias=vov-defer-low-severity (defaulted for the test stub)
+    vibe_input_vreqs: dict = None
 
 
 def _exec_v251_namespace():
     ns = {
+        **vov_ledger_globals(),
         "__name__": "_v251_test_ns",
         "copy": copy,
         "re": re,
@@ -92,6 +94,8 @@ def _exec_v251_namespace():
         # provide them or run_vov_pipeline NameErrors mid-pipeline. Stub with real values.
         "_VOV_BRIDGE_CALL_LOCK": __import__("threading").Lock(),
         "_VOV_BRIDGE_CALL_COUNT": 0,
+        "_VIBE_SCOPE_RUNTIME": None,
+        "_vibe_scope_start_requested": lambda *args, **kwargs: None,
     }
     ordered_defs = [
         "_V251_PRIORITY_LINE_RE",
@@ -112,6 +116,7 @@ def _exec_v251_namespace():
         "_v415_complete_connect_details",
         "_v251_prevalidate_priority",
         "_v327_infer_coltype",
+        "_vibe_scope_note_rename",
         "_v251_apply_priority_deterministic",
         "_v310_apply_rename_ledger",
         "_v251_apply_pass1_priorities",
@@ -133,6 +138,11 @@ def _exec_v251_namespace():
         "_v330_recover_dropped_priorities",
         "_v413_vreq_to_det_op",
         "_v413_apply_det_op_inplace",
+        "_vibe_scope_apply_pass1",
+        "_vibe_scope_apply_det_op",
+        "_vibe_scope_engine_gate",
+        "_vibe_input_absorbed",
+        "_vibe_input_map_vreqs",
         "run_vov_pipeline",
     ]
     for name in ordered_defs:

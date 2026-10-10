@@ -13,6 +13,8 @@ import json
 import logging
 import os
 
+from notebook_source_util import pk_suffix_globals
+
 NB = os.path.join(os.path.dirname(__file__), "..", "..", "agent", "dbx_vibe_modelling_agent.ipynb")
 
 
@@ -22,7 +24,7 @@ def _load_real_funcs():
     tree = ast.parse(full)
     want_funcs = {"strip_domain_prefix", "_v291_user_protected_names", "_v291_ssot_cross_domain_merge"}
     want_assigns = {"_V291_BOILERPLATE_ATTRS"}
-    ns = {"re": __import__("re"), "defaultdict": __import__("collections").defaultdict}
+    ns = {"re": __import__("re"), "defaultdict": __import__("collections").defaultdict, **pk_suffix_globals()}
     segments = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in want_funcs:

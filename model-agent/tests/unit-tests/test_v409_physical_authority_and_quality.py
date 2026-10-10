@@ -1,8 +1,13 @@
 import ast
 import json
 import re
+import sys
 import textwrap
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conftest  # noqa: F401,E402
+import agent_helpers as ah  # noqa: E402
 
 
 NB_PATH = Path(__file__).resolve().parents[2] / "agent" / "dbx_vibe_modelling_agent.ipynb"
@@ -26,7 +31,8 @@ def _extract_diff_scope_fn(src: str):
             break
     mod = ast.Module(body=keep, type_ignores=[])
     ast.fix_missing_locations(mod)
-    ns = {}
+    ns = {"re": re, "_vov_names_in_text": ah._vov_names_in_text,
+          "_vov_text_allows_attribute_removal": ah._vov_text_allows_attribute_removal}
     exec(compile(mod, str(NB_PATH), "exec"), ns)
     return ns["diff_within_summary_scope"]
 

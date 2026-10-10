@@ -401,17 +401,20 @@ def main():
     nb = json.loads(NB.read_text())
     cells = nb["cells"]
 
-    # Re-runnable: when the notebook already carries the cell, refresh it from the
-    # constant above so this script stays the single source of truth for the uninstall,
-    # then fall through so the surrounding edits are brought up to date too.
+    # Re-runnable: once the notebook carries the uninstall cell, the notebook is the source
+    # of truth. A cell that differs from the constant above is refused, never overwritten.
     already = None
     for j, cell in enumerate(cells):
         if "def uninstall(cfg)" in cell_source(cell):
             already = j
-            cells[j]["source"] = UNINSTALL_CELL
             break
 
     if already is not None:
+        if cell_source(cells[already]) != UNINSTALL_CELL:
+            print("refused: cell %d of %s already holds an uninstall cell that differs from this script's copy; "
+                  "the notebook is the source of truth, so nothing was written. Edit the notebook directly."
+                  % (already, NB.name))
+            return 1
         i = find(cells, "def main()")
         text = cell_source(cells[i])
         text = sub(text, PRE_EXISTING_OLD, PRE_EXISTING_NEW)

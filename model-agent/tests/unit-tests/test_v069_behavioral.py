@@ -108,6 +108,10 @@ def test_v069_model_json_root_has_agent_version_first_key():
         r'model_json_root\s*=\s*\{\s*"agent_version"\s*:\s*__AGENT_VERSION__\s*,'
         r'(?:\s*#[^\n]*)?\s*'
         r'(?:"release_version"\s*:\s*__RELEASE_VERSION__\s*,(?:\s*#[^\n]*)?\s*)?'
+        r'(?:\*\*\(\{"_vibe_scope"\s*:\s*_vs_facts\}\s*if\s+_vs_facts\s+is\s+not\s+None\s+else\s*\{\}\)\s*,\s*)?'
+        r'(?:\*\*\(\{"entity_changes"\s*:\s*_entity_changes\}\s*if\s+_entity_changes\s+is\s+not\s+None\s+else\s*\{\}\)\s*,\s*)?'
+        r'(?:\*\*\(\{"input_outcomes"\s*:\s*_vi_outcomes\}\s*if\s+_vi_outcomes\s+is\s+not\s+None\s+else\s*\{\}\)\s*,\s*)?'
+        r'(?:"lineage"\s*:\s*_run_lineage\s*,\s*)?'
         r'"model_requirements"',
         re.MULTILINE,
     )

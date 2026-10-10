@@ -245,8 +245,11 @@ def test_the_files_are_written_from_the_substituted_statement_list():
     block = body[_gate_index(body):]
     assert "for _stmt in metric_view_statements:" in block, (
         "the rewrite no longer iterates the substituted list")
-    assert "_surviving_by_domain.setdefault(_domain_key, []).append(_stmt)" in block
-    assert '";\\n\\n".join(_domain_stmts)' in block, "the file content is built elsewhere now"
+    assert "_write_metric_sql_artifacts(widgets_values, config, business_name, _surviving_stmts, _vs_mv_kept, logger)" in block
+    helper = _slice_function(_source(), "_write_metric_sql_artifacts")
+    assert "for _stmt in _surviving_stmts:" in helper
+    assert "_surviving_by_domain.setdefault(_domain_key, []).append(_stmt)" in helper
+    assert '";\\n\\n".join(_domain_stmts)' in helper, "the file content is built elsewhere now"
 
 
 def test_the_agent_version_is_at_least_the_one_that_shipped_this_fix():

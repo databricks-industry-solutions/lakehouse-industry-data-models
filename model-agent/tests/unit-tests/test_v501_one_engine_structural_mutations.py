@@ -25,7 +25,7 @@ from __future__ import annotations
 import ast
 import re
 
-from notebook_source_util import notebook_concat_source
+from notebook_source_util import notebook_concat_source, vov_ledger_globals
 
 _ENGINE_FNS = [
     "_is_user_pinned_domain",
@@ -64,7 +64,7 @@ def _last_span(name):
 
 
 def _build_engine():
-    g = {"re": re,
+    g = {**vov_ledger_globals(), "re": re,
          "_vibe_set_entity_tag": lambda ent, f, v: ent.__setitem__(f, v),
          "sanitize_attribute_type": lambda t: t}
     blob = "\n\n".join(_last_span(n) for n in (_CONSTS + _ENGINE_FNS))

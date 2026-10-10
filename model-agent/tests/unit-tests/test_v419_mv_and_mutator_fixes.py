@@ -5,6 +5,8 @@ import re
 
 import pytest
 
+from notebook_source_util import vov_ledger_globals
+
 NB_HEAD = os.path.join(os.path.dirname(__file__), "..", "..", "agent", "dbx_vibe_modelling_agent.ipynb")
 NB_PRE = "/tmp/agent_pre_v419.ipynb"
 
@@ -157,7 +159,7 @@ def _load_hint_fn(path):
     src = _nb_source(path)
     fn_src = _extract_func(src, "_v204_ast_class_hints")
     assert fn_src, "_v204_ast_class_hints not found in notebook"
-    ns = {"re": re, "logger": _DummyLogger()}
+    ns = {**vov_ledger_globals(), "re": re, "logger": _DummyLogger()}
     exec(compile(fn_src, "<hintfn>", "exec"), ns)
     return ns["_v204_ast_class_hints"]
 

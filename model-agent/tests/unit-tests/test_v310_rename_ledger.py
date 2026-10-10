@@ -20,15 +20,16 @@ state changes, plus an anti-tautology proof (pre-ledger the sibling target stays
 on the old name; post-ledger it is redirected). Per CLAUDE.md 8.10.
 """
 import logging
+import re
 
 import pytest
 
-from notebook_source_util import exec_function_namespace
+from notebook_source_util import exec_functions_namespace
 
 
 @pytest.fixture(scope="module")
 def ledger_fn():
-    ns = exec_function_namespace("_v310_apply_rename_ledger")
+    ns = exec_functions_namespace(["_vov_redirect_fqn", "_vov_redirect_text", "_v310_apply_rename_ledger"], extra_globals={"re": re})
     return ns["_v310_apply_rename_ledger"]
 
 

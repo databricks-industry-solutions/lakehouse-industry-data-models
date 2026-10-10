@@ -58,7 +58,11 @@ def _logger():
 
 @pytest.fixture(scope="module")
 def cell1_ns():
-    return _load_cell_namespace(1)
+    import agent_helpers as ah
+    ns = _load_cell_namespace(1)
+    ns["vov_rename_events"] = ah.vov_rename_events
+    ns["_vibe_scope_note_rename"] = ah._vibe_scope_note_rename
+    return ns
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -80,7 +84,6 @@ def test_v83_agent_version_at_least_083():
         ("user-renamed-attribute-record", "P50"),
         ("autofix-p016-user-vibe-skip", "P50"),
         ("connect-table-upsert-fk", "P51"),
-        ("vov-auto-latest-version-when-v1", "P52"),
         ("install-mv-hard-gate", "P53"),
         ("unconditional-cascade-drop-extras", "P54"),
         ("honest-adherence-precision", "P56"),
@@ -102,11 +105,9 @@ def test_p50_record_and_check_round_trip(cell1_ns):
     ns = cell1_ns
     record = ns["_record_user_renamed_attribute"]
     check = ns["_is_user_renamed_attribute"]
-    runtime_set = ns["_USER_RENAMED_ATTRIBUTES_RUNTIME"]
-    runtime_set.clear()
 
     assert check("clinical", "note_template", "parent_note_template_id") is False
-    record("clinical", "note_template", "parent_note_template_id", logger=_logger(), source="test")
+    record("clinical", "note_template", "parent_note_template_id", logger=_logger(), source="test", old_attribute_name="parent_id")
     assert check("clinical", "note_template", "parent_note_template_id") is True
     assert check("clinical", "note_template", "OTHER_NAME") is False
     assert check("OTHER_DOMAIN", "note_template", "parent_note_template_id") is False
@@ -116,13 +117,12 @@ def test_p50_record_handles_empty_inputs(cell1_ns):
     ns = cell1_ns
     record = ns["_record_user_renamed_attribute"]
     check = ns["_is_user_renamed_attribute"]
-    runtime_set = ns["_USER_RENAMED_ATTRIBUTES_RUNTIME"]
-    runtime_set.clear()
 
-    record("", "p", "a")
-    record("d", "", "a")
-    record("d", "p", "")
-    assert len(runtime_set) == 0
+    record("", "p", "a", old_attribute_name="b")
+    record("d", "", "a", old_attribute_name="b")
+    record("d", "p", "", old_attribute_name="b")
+    record("d", "p", "a")
+    assert ns["vov_rename_events"]() == []
     assert check("", "", "") is False
 
 
@@ -182,16 +182,11 @@ def test_p51_handler_adds_foreign_key_tag():
 # ───────────────────────────────────────────────────────────────────────────
 
 
-def test_p52_promotes_widget_when_higher_version_exists():
-    """The P52 guard must scan the volume for higher ECM versions and promote
-    `_base_ver_auto` so vibes patch the latest model, not rebuild from v1."""
+def test_p52_next_vibes_version_promotion_removed_with_the_auto_load():
     src = notebook_concat_source()
-    assert "widget model_version=1 but volume has" in src, (
-        "P52: log marker confirming the promotion path"
-    )
-    assert "_base_ver_auto = _highest" in src, (
-        "P52: must overwrite _base_ver_auto when promotion fires"
-    )
+    assert "widget model_version=1 but volume has" not in src
+    assert "_base_ver_auto = _highest" not in src
+    assert "[vov-vibes-required FIRED v5.1.4]" in src
 
 
 def test_p53_install_mv_hard_gate_fires_on_zero_deployed():

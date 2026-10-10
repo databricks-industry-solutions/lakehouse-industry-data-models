@@ -69,7 +69,7 @@ def _run_snippet(code, breakdown, stale_root, target_volume="/Volumes/vibe_x_v1/
         def info(self, *a, **k):
             pass
 
-    g = {"_LAST_VOV_QUALITY_BREAKDOWN": breakdown, "logger": _L(), "json": json}
+    g = {"_LAST_VOV_QUALITY_BREAKDOWN": breakdown, "logger": _L(), "json": json, "io": io}
     ns = {"widgets_values": {"config": {"TARGET_VOLUME": target_volume}}, "logger": _L()}
     exec(code, g, ns)
     return _FakeUpload.last

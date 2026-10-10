@@ -151,10 +151,13 @@ def test_dynamic_only_fk_is_not_explicit_user_vibed():
 def test_post_normalization_writer_blocks_cycle_through_shared_guard():
     namespace = exec_functions_namespace(
         [
+            "get_vibe_scope_runtime",
+            "_vibe_scope_product_test",
             "_v458_assign_fk_if_acyclic",
             "_post_normalization_deterministic_fk_linker",
         ],
         {
+            "_VIBE_SCOPE_RUNTIME": None,
             "get_pk_suffix": lambda config: "_id",
             "build_pk_map": lambda products, config: {
                 "alpha.child": "child_id",

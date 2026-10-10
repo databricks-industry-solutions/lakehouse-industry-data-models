@@ -856,7 +856,7 @@ Enumerate every PRIORITY (`PRIORITY N — <action>: <target>`) and every SA find
 B.2 Submit a `vibe modeling of version` run with:
 - `operation = "vibe modeling of version"`
 - `model_version = "1"`
-- `model_vibes = ""` (no NEW user-vibes — just consume the auto-generated next_vibes from v1)
+- `model_vibes = "/Volumes/<catalog>/_metamodel/vol_root/business/<biz>/v1/<scope>/vibes/next_vibes.txt"` (no NEW user-vibes; pass the path of v1's auto-generated next_vibes explicitly. Since agent 5.1.4 the parent's next_vibes are never merged automatically and an empty `model_vibes` fails preflight)
 - Same business + catalog as v1.
 
 B.3 Use the §10.7 protocol: cleanup the prior runs (but NOT the catalog — vibe-of-version reads v1 from it), upload versioned, patch JOB notebook_path, submit.

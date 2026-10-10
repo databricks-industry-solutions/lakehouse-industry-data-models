@@ -295,7 +295,6 @@ def test_v068_preserves_v0_6_x_aliases():
     """All v0.6.x aliases must remain — defense in depth."""
     txt = _agent_text()
     expected = [
-        "vov-auto-next-vibes",
         "ssot-stem-autofix",
         "perf-cap-16",
         "perf-llm-throttle-16",

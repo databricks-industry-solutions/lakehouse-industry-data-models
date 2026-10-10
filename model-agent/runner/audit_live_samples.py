@@ -27,6 +27,23 @@ TEMPORAL_ORDER_PAIRS = [
     ("admission", "discharge"), ("depart", "arriv"), ("first", "last"),
 ]
 PLACEHOLDER = re.compile(r"^sample_\d+$")
+FK_SQL = """
+        SELECT ck.table_schema AS child_schema, ck.table_name AS child_table,
+               ck.column_name AS child_column,
+               pk.table_schema AS parent_schema, pk.table_name AS parent_table,
+               pk.column_name AS parent_column
+        FROM `{catalog}`.information_schema.referential_constraints rc
+        JOIN `{catalog}`.information_schema.key_column_usage ck
+          ON ck.constraint_catalog = rc.constraint_catalog
+         AND ck.constraint_schema = rc.constraint_schema
+         AND ck.constraint_name = rc.constraint_name
+        JOIN `{catalog}`.information_schema.key_column_usage pk
+          ON pk.constraint_catalog = rc.unique_constraint_catalog
+         AND pk.constraint_schema = rc.unique_constraint_schema
+         AND pk.constraint_name = rc.unique_constraint_name
+         AND pk.ordinal_position = ck.ordinal_position
+        WHERE ck.table_schema NOT LIKE '\\_%'
+          AND ck.table_schema <> 'information_schema'"""
 
 
 def _token_pos(parts, token):
@@ -91,18 +108,7 @@ def main():
               AND kcu.table_schema <> 'information_schema'"""):
         pk_of.setdefault((r["table_schema"], r["table_name"]), []).append(r["column_name"])
 
-    fks = rows(profile, f"""
-        SELECT kcu.table_schema AS child_schema, kcu.table_name AS child_table,
-               kcu.column_name AS child_column,
-               ccu.table_schema AS parent_schema, ccu.table_name AS parent_table,
-               ccu.column_name AS parent_column
-        FROM `{catalog}`.information_schema.key_column_usage kcu
-        JOIN `{catalog}`.information_schema.table_constraints tc
-          ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-        JOIN `{catalog}`.information_schema.constraint_column_usage ccu
-          ON ccu.constraint_name = kcu.constraint_name
-        WHERE tc.constraint_type = 'FOREIGN KEY' AND kcu.table_schema NOT LIKE '\\_%'
-          AND kcu.table_schema <> 'information_schema'""")
+    fks = rows(profile, FK_SQL.format(catalog=catalog))
 
     tables = sorted(cols_by_table)
     print(f"tables={len(tables)} fk_constraints={len(fks)}")

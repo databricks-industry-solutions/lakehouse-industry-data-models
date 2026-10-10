@@ -13,6 +13,7 @@ NO hardcoding of "retail"/"customer" by using a DIFFERENT root domain name ("mem
 import re
 
 from v435_helpers import concat_source, slice_functions
+from notebook_source_util import pk_predicate_globals, vov_ledger_globals
 
 
 class _Log:
@@ -31,7 +32,7 @@ class _Log:
 
 def _finalize_ns():
     return slice_functions(["_v441_reviewer_finalization"], concat_source(),
-                           extra_globals={"re": re})
+                           extra_globals={"re": re, **pk_predicate_globals(), **vov_ledger_globals()})
 
 
 # Reviewer directive text mirroring the retail SME review shape, but the tests below also run a
@@ -328,7 +329,7 @@ def test_generic_root_domain_name():
 
 
 def _harden_ns():
-    return slice_functions(["_v443_structural_hardening"], concat_source(), extra_globals={"re": re})
+    return slice_functions(["_v443_structural_hardening"], concat_source(), extra_globals={"re": re, **pk_predicate_globals(), **vov_ledger_globals()})
 
 
 def _harden_model():
@@ -394,6 +395,25 @@ def test_g1_asserts_pk_on_table_missing_flag():
     acct = _find_prod(dm, "party", "party_account")
     pk = next(a for a in acct["attributes"] if a["name"] == "party_account_id")
     assert pk.get("is_primary_key") is True, "G1 must flag <product>_id as PK when none present"
+
+
+def test_g1_reads_the_primary_key_tag_inside_a_tag_list():
+    ns = _harden_ns()
+    dm = _harden_model()
+    party = next(d for d in dm["model"]["domains"] if d["name"] == "party")
+    party["products"].append({"name": "party_note", "attributes": [
+        {"name": "party_note_id", "type": "BIGINT", "tags": "primary_key,role=primary_key"},
+        {"name": "note_text", "type": "STRING"},
+    ]})
+    party["products"].append({"name": "party_address", "attributes": [
+        {"name": "party_address_id", "type": "BIGINT", "tags": "primary_key,restricted,pii_address"},
+    ]})
+    ns["_v443_structural_hardening"](dm, _Log())
+    for prod in ("party_note", "party_address"):
+        pk = _find_prod(dm, "party", prod)["attributes"][0]
+        assert "is_primary_key" not in pk, f"live R20 361205040527084 wrote is_primary_key into model.json for {prod}"
+    acct = _find_prod(dm, "party", "party_account")
+    assert next(a for a in acct["attributes"] if a["name"] == "party_account_id").get("is_primary_key") is True
 
 
 def test_g3_coerces_fk_type_to_target_pk_type():

@@ -105,7 +105,9 @@ def test_v205_f3_purge_runs_and_emits_alias(caplog):
                 return [call_box["synthetic_cycle"]]
         return []
 
-    ns = {"__name__": "_v205_test"}
+    from notebook_source_util import pk_predicate_globals
+
+    ns = {"__name__": "_v205_test", **pk_predicate_globals()}
     ns["_detect_cycles_dfs"] = mock_detect_cycles_dfs
     exec(_extract_def("_cycle_to_edges"), ns)
     exec(purge_src, ns)

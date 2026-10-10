@@ -33,6 +33,7 @@
 - [13. Timing Characteristics](#13-timing-characteristics)
 - [14. Edge Cases and Error Handling](#14-edge-cases-and-error-handling)
 - [15. SQL Quick Reference](#15-sql-quick-reference)
+- [16. Model App Contract](#16-model-app-contract)
 
 ---
 
@@ -84,7 +85,7 @@ When the UI creates the job, it **MUST** set these exact tag keys. All values mu
 | `dbx_vibe_modelling_launcher_source` | Source that launched the job: `Vibe_Modelling_Notebook` when launched from a notebook, `Vibe_Modelling_App` when launched from an external app/UI | `Vibe_Modelling_Notebook`, `Vibe_Modelling_App` |
 | `dbx_vibe_modelling_business` | Sanitized business name (spaces → `_`, special chars removed) | `gov_transport`, `Acme_Corp` |
 | `dbx_vibe_modelling_model` | `{scope}_v{version}` where scope is `mvm` or `ecm` | `mvm_v1`, `ecm_v2` |
-| `dbx_vibe_modelling_operation` | Sanitized operation name (spaces → `_`) | `new_base_model`, `vibe_modeling_of_version`, `shrink_ecm`, `enlarge_mvm`, `install_model`, `uninstall_model_version`, `generate_sample_data` |
+| `dbx_vibe_modelling_operation` | Sanitized operation name (spaces → `_`) | `new_base_model`, `vibe_modeling_of_version`, `shrink_ecm`, `enlarge_mvm`, `install_model`, `uninstall_model_version` |
 | `dbx_vibe_modelling_domains` | `0` (updated by agent at end of run) | `0` → `8` |
 | `dbx_vibe_modelling_products` | `0` (updated by agent at end of run) | `0` → `47` |
 | `dbx_vibe_modelling_attributes` | `0` (updated by agent at end of run) | `0` → `312` |
@@ -105,19 +106,21 @@ When the UI creates the job, it **MUST** set these exact tag keys. All values mu
 | `business_name` | Business name |
 | `business_description` | Business description |
 | `operation` | Operation type |
-| `model_version` | Model version number |
+| `run_type` | `Full Run` (default) or `Dry Run`. A Dry Run builds the model and every volume artifact but deploys nothing to Unity Catalog, and registers the version with `deploy_status = dry_run`. Its adherence comes from the model verdicts: the physical ground-truth audit is skipped because Unity Catalog still holds the previous version. Applies to the generative operations; `install model` and `uninstall model version` always deploy |
+| `model_version` | Model version number. For `vibe modeling of version` it is the base version; blank means the highest-numbered completed version that is not a Dry Run and whose domains are registered |
 | `data_model_scopes` | `Minimum Viable Model - MVM` or `Expanded Coverage Model - ECM` |
-| `business_domains` | Comma-separated domain hints (optional) |
+| `business_domains` | Comma-separated domain hints (optional). Under a scoped `vibe_scope` it is required and is the scope list: `d1, d2` for `Some Domains`, `d1.s1, d2.s2` for `Some Subdomains` |
+| `vibe_scope` | `All Domains` (default), `Some Domains` or `Some Subdomains`. Only `vibe modeling of version` and `new base model` accept a scoped value. Under `All Domains`, agent 5.1.6 or later changes only what the vibe names in a `vibe modeling of version`; see [Vibe Scope Semantics](design-guide.md#vibe-scope-semantics-widget-06a). See [16. Model App Contract](#16-model-app-contract) |
 | `org_divisions` | `Operations`, `Operations and Business`, or `Operations, Business and Corporate` |
-| `model_vibes` | Inline vibes text (max 2,000 chars) or file path to `.txt` on a UC Volume (e.g., `/Volumes/.../vibes.txt`) |
+| `model_vibes` | Inline vibes text (max 2,000 chars) or file path to `.txt` on a UC Volume (e.g., `/Volumes/.../vibes.txt`). Required for `vibe modeling of version`: an empty value fails preflight. It is the only instruction source. The agent never applies a version's `vibes/next_vibes.txt` on its own; pass that file's path here to use it |
 | `deployment_catalog` | Target Unity Catalog name |
+| `metamodel_catalog` | Catalog that holds the `_metamodel` registry schema and its `vol_root` volume (model.json, logs, next_vibes). Blank = same as `deployment_catalog` |
 | `cataloging_style` | `One Catalog`, `Catalog per Division`, or `Catalog per Domain` |
 | `catalog_prefix` | Prefix for catalog names |
 | `catalog_suffix` | Suffix for catalog names |
-| `generate_samples` | `0`, `5`, `10`, `15`, `20`, `25`, `50`, or `100` |
 | `context_file` | Path to previously generated model.json file (optional, for re-install or continuation) |
 | `naming_convention` | `snake_case`, `camelCase`, `PascalCase`, or `SCREAMING_CASE` |
-| `primary_key_suffix` | Primary key suffix (default `_id`) |
+| `primary_key_suffix` | Primary key suffix (default `_id`). Used for every primary key and FK column name the agent writes or repairs |
 | `schema_prefix` | Schema prefix |
 | `schema_suffix` | Schema suffix |
 | `tag_prefix` | Tag prefix (default `dbx_`) |
@@ -130,6 +133,11 @@ When the UI creates the job, it **MUST** set these exact tag keys. All values mu
 | `housekeeping_columns` | `No` or `Yes` |
 | `history_tracking_columns` | `No` or `Yes` |
 | `vibe_session_id` | **Must be set** — the session ID string generated in step 1 |
+| `runtime_budget_seconds` | Not a widget. The run's time budget in seconds; set it to the job task timeout. When it is missing the agent budgets 14,400 seconds (4 hours) |
+
+`generate_samples` is no longer a parameter. Since agent 4.8.0 sample data comes from the standalone model installer (`model-installer/data-model-installer.ipynb`, widgets `9. generate samples` and `10. sample rows`). The agent ignores the parameter if it is sent.
+
+**Conventions in `vibe modeling of version`:** the base model's `model_conventions` win over the convention parameters (`naming_convention`, `primary_key_suffix`, `schema_prefix`, `tag_prefix`, `table_id_type`, `boolean_format`, `date_format`, `timestamp_format`, `classification_levels`). An `All Domains` run uses a parameter only where the base leaves that convention empty. A scoped run keeps the base conventions exactly. Every ignored value is listed in a WARN (`vov-base-conventions-win`).
 
 **End-of-run tag update:** When the pipeline completes successfully inside a job context (i.e., `vibe_session_id` was provided), the agent automatically updates the six count tags (`domains`, `products`, `attributes`, `foreign_keys`, `tags`, `metrics`) with actual values from the run. The UI does not need to do anything for this — it happens server-side.
 
@@ -144,6 +152,8 @@ flowchart LR
 ```
 
 > For most keys, a blank widget value falls back to the model file. For the six `EXPLICIT_OVERRIDE_KEYS` (`schema_prefix`, `schema_suffix`, `catalog_prefix`, `catalog_suffix`, `tag_prefix`, `tag_suffix`), an **empty widget value explicitly overrides** the value in the model file — letting operators deliberately clear a prefix/suffix at install time without editing the file.
+
+> This merge rule is for `install model`. In `vibe modeling of version` the base model's conventions win instead (see the note under the parameter table).
 
 ### Mode B — Notebook Auto-Launches Itself
 
@@ -1293,6 +1303,8 @@ This event provides the **complete model snapshot** after all QA.
 
 ### Stage 16: Generating Sample Data
 
+Agent 4.8.0 and later never emit this stage: sample data moved to the standalone model installer. Older agents emit it as below.
+
 | Field | Value |
 |---|---|
 | `stage_name` | `"Generating Sample Data"` |
@@ -1626,7 +1638,7 @@ The agent supports multiple operations. Not all stages fire in every mode. The U
 | **New Base Model** | All stages in full. |
 | **Surgical / Selective** | Subset of stages depending on scope. |
 | **Vibe Mode** | Includes Interpreting Instructions + generation stages. |
-| **Deploy Only** | Physical Schema Construction, Tags, FKs, Sample Data. |
+| **Deploy Only** | Physical Schema Construction, Tags, FKs. |
 
 The client should **not** hardcode a stage list. Dynamically render whatever `stage_name` values appear in the progress table.
 
@@ -1808,6 +1820,108 @@ WHERE session_id = <session_id_bigint>
   AND status = 'stage_ended'
   AND result_json:status::STRING = 'success'
 ```
+
+---
+
+## 16. Model App Contract
+
+The model app launches the agent itself (Mode A) and keeps its own copy of every version in Lakebase. This section is the contract between the app and agent 5.1.4 or later. "Today" means the app code under `model-app/src/app/src/vibe_modeling/backend/` at the time of writing.
+
+### 16.1 Re-vendor the agent
+
+The app is pinned to agent 4.9.9 (`model-app/src/app/vendored/agent/VERSIONS.json`). Agent 4.9.9 has no `run_type`, `vibe_scope` or `metamodel_catalog` widget, and it silently ignores parameters it does not know. A `Dry Run` request would still deploy, and a scoped request would change the whole model with no fence. Re-vendor agent 5.1.4 or later before the app offers either option.
+
+### 16.2 Launch parameters
+
+Today `build_widget_map` (`core/_widgets.py`) sends neither `vibe_scope` nor `run_type`, and it still sends `generate_samples`, which agent 5.1.4 ignores. Add these:
+
+| Parameter | Value |
+|---|---|
+| `vibe_scope` | `All Domains`, `Some Domains` or `Some Subdomains`, the exact dropdown labels. A launch without it runs as `All Domains`. |
+| `business_domains` | Under a scope, the scope list: `d1, d2` for `Some Domains`, `d1.s1, d2.s2` for `Some Subdomains`. Under `All Domains` it keeps its meaning: optional seed domains. |
+| `run_type` | `Full Run` or `Dry Run`. |
+
+The agent enforces these rules. A broken rule fails the run before anything changes; preflight errors arrive as one `ValueError` that lists every problem. Show the message to the user.
+
+- A scoped value works only with `vibe modeling of version` (VOV) and `new base model`. Every other operation rejects it at preflight.
+- A VOV needs `model_vibes`. An empty value fails preflight. The agent never applies a version's `next_vibes.txt` on its own, so the compiled text must carry every item the user selected, next-vibes suggestions included. A path to a `next_vibes.txt` file also works.
+- A scoped VOV is refused when its base is behind the head version (16.6). The error names the base and the head.
+- At setup, a VOV, shrink or enlarge run clears the old schemas of this business from the target catalog. It drops only schemas the business owns: a schema is owned when a version of this business that is not a Dry Run registered it in `_metamodel.domain`. It drops nothing on a Dry Run or in a scoped run. If the new model needs a schema that already exists and is not owned by this business, a Full Run is refused before anything is dropped; a Dry Run only warns, because it deploys nothing.
+- `install model` of a scoped `model.json` is accepted only when the catalog's latest installed version is the scoped run's base (`_vibe_scope.base_version`), or when the catalog holds none of the model's schemas. A failed install reverts the registry row it wrote, so a Dry Run that fails to install stays a draft.
+
+For a VOV, send the base model's convention values or leave them blank. The base model's `model_conventions` win, and a WARN lists every value the agent ignored. `primary_key_suffix` applies to every primary key and FK column the agent writes.
+
+### 16.3 Compiled feedback format
+
+The app compiles feedback items into the `model_vibes` text (`_compile.py`). Add two things:
+
+1. **Inline anchor.** Start each bullet's text with its target in brackets: `- (medium) [procurement.livestock_procurement] Rename to livestock_procurement_allocation.` Today the bullet relies on the `#### Product:` heading above it. Agent 5.1.4 or later also reads heading-anchored bullets, so the inline anchor is a second line of defense. Keep the frontend preview twin and the compile fixture (`tests/fixtures/compile_blocks_fixture.json`) in step.
+2. **K1 marker.** Add one marker per item, in exactly this format: `<!-- vi:<uuid> target=<full name> -->`. `<uuid>` is the item's `VibeInput` id. `<full name>` is the dotted name of the item's anchor, for example `procurement.livestock_procurement`. The agent strips every marker before an LLM sees the text and maps each requirement back to its item. `input_outcomes` reports that map.
+
+```markdown
+## Domain: procurement
+#### Product: livestock_procurement
+- (medium) [procurement.livestock_procurement] Rename to livestock_procurement_allocation. <!-- vi:5b6f0c2e-8d1a-4f3b-9a77-2c4e1d0b9f10 target=procurement.livestock_procurement -->
+```
+
+### 16.4 Run metadata in model.json
+
+Agent 5.1.4 or later adds these root keys to `model.json`:
+
+| Key | Written on | Contents |
+|---|---|---|
+| `_vibe_scope` | Scoped runs, and `All Domains` VOVs whose `requested` fence is on (agent 5.1.6 or later) | Mode (`domains`, `subdomains` or `requested`) and entries, the base (`base_version`, `base_scope`, `base_catalog`), the products changed and preserved (`changed_in_scope_products`, `preserved_products`), every permitted boundary delta with its cause, the rename and change ledgers, restored drops and the scope outcome of each requirement. See [Vibe Scope Semantics](design-guide.md#vibe-scope-semantics-widget-06a). |
+| `lineage` | Every run | The operation, the output version and the base version it was built from (`lineage.base_version`; empty for a new base model). It always records the head at setup and at the write (`head_at_start`, `head_at_write`) and a `stale` flag; when the base is behind the head, `intervening_versions` lists the versions in between. Dry Run versions never count as head. |
+| `entity_changes` | Every VOV, scoped or not | One entry per domain, subdomain, product and metric view compared with the base, and one per attribute and FK that changed. Each entry gives the change (unchanged, modified, renamed, moved, dropped, added, restored, merged or split; a metric view renamed with its product or domain is `renamed` with its old name in `base_path`) and its cause: the item ids, the requirement, the permitted delta (P1 to P5) or the autofix. A change that only an agent pass explains cites the stage that made it as `pass:<stage>` (`vov_engine`, `logical_schema_review`, `after_subdomains`, `after_metric_views`, `after_selffixer` or `finalize`). Working fields that model.json does not store, such as `is_primary_key`, `nullable` or `classification`, are not compared. |
+| `input_outcomes` | Every VOV, scoped or not | One entry per K1 item: `item_id`, `target`, `status`, `reason` and `vreq_ids`, the requirement ids it became. The agent matches requirements to items by exact quote, single-item chunk or fuzzy match; the method is logged per requirement (`vibe-input-map`) and is not part of the entry. An item the agent could not map is `unmapped`. A VOV without markers writes an empty list. |
+
+### 16.5 Resolving and carrying feedback
+
+- Resolve only items whose `input_outcomes` status is `applied`.
+- Every other status keeps the item open: `partial`, `failed`, `deferred`, `scope_rejected`, `scope_dependency_conflict`, `scope_fence_violation` and `unmapped`. So does an item with no entry at all. Show the reason next to the item.
+- Carry open items forward along `lineage.base_version`. An item open at version V stays open on every descendant of V until a run resolves it. Never move the original link.
+- A `scope_rejected` item belongs to the domain that owns its target. Keep it open there, so a later run scoped to that domain can apply it.
+- Today the app marks every item it sent as consumed when a run succeeds (`progress_tracker.py`). That loses every `scope_rejected` item, and every partial or failed one. Replace it with the rules above.
+
+### 16.6 Head, drafts and branches
+
+- The head is the highest-numbered completed version of a business and scope whose `deploy_status` is not `dry_run` and whose domains are registered in `_metamodel.domain`. A failed run ends its session at 100% with `results_json.status = pipeline_error` but registers no domains, so it is never head.
+- A Dry Run version (`deploy_status = dry_run`) is a draft. It is never head and never the default base, and links carried onto it are disposable.
+- A version's base is `lineage.base_version`, which is not always the previous number. Diff against the base and relink along it.
+- A scoped VOV is refused when its base is behind the head. An `All Domains` VOV may still branch from an older version.
+
+### 16.7 What to persist in Lakebase
+
+Persist the raw `_vibe_scope`, `lineage`, `entity_changes` and `input_outcomes` blocks with each version. Today sync keeps only the `model` block (`model_sync.py`), so a scoped run loses its rename ledger, its permitted deltas and its outcomes.
+
+### 16.8 Recommended ledger design (option A)
+
+Keep one ledger on the current schema:
+
+- `VibeInput` stays the identity of an item.
+- At sync, create links for open items on the new version, following `lineage.base_version`. Match entities by content digest first, then by `entity_changes` renames and moves.
+- Each run link stores `outcome`, `reason`, `vreq_ids` and `sent_text_sha` (the hash of the text the run received).
+- The raw run metadata is stored per version (16.7).
+- "Open at version V" means not resolved on any ancestor of V.
+
+This gives most of the value of an entity-keyed ledger (option B) for two migrations and a sync hook instead of a rewrite. Copying items onto each new version (option C) creates duplicates and edits that drift apart.
+
+### 16.9 Edge cases
+
+| Case | What breaks today | What the app does |
+|---|---|---|
+| Any new version | Nothing links open items to it, so other domains' feedback disappears | Relink open items during sync, after the version is linked to its base |
+| Product unchanged by the run | Review marks are per version and reset | Carry review marks for products that `entity_changes` marks unchanged. `_vibe_scope.preserved_products` also lists out-of-scope products that only got a boundary delta, so check `permitted_deltas` before reusing it |
+| Rename or move of the anchored entity | Renames come only from progress-event logs; a cross-domain move looks like a drop plus an add | Read `entity_changes` first, logs second |
+| Boundary FK re-pointed, cleared or added (P1 to P4) | An FK anchor holds only its link id, so the item is deprecated | Build FK lineage from the permitted deltas (old FK to new FK) and carry the item, flagged for review |
+| Drop, split or fence restore | A drop becomes a silent deprecation | Add an "obsolete by drop" state with its cause; flag carried items for review when the entity changed |
+| Model-level item in a scoped run | Model metadata is frozen, so the item comes back `scope_rejected` | Do not send model-level items in scoped runs; keep them open |
+| Stale base or branch | Relink picks the newest link by time | Relink along `lineage.base_version`; launch scoped runs from the head |
+| Dry Run left behind | It becomes head and collects carried items | Treat it as a draft (16.6) |
+| Two teams in sequence | `selected_for_run` is one shared flag, so team A's run sends team B's picks | Keep the selection per user or per draft, and filter by scope when composing |
+| Typo in the scope list | An unknown entry is accepted as a new domain, and the real domain stays frozen | Check entries against the base model's names before launch. After a run, `_vibe_scope.resolved.closest` lists the near matches of each new entry |
+| Edit during a run | The text is snapshotted at launch, so a later edit is consumed unseen | Store `sent_text_sha` and resolve only the revision that was sent |
+| Re-reported findings | Agent items are keyed by version and position, so a carried finding that is reported again exists twice | Key agent items on category, fingerprint and entity; never mirror `scope_rejected` lines as new items |
 
 ---
 

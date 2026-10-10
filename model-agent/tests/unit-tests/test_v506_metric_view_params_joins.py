@@ -57,7 +57,7 @@ def test_v506_prompt_teaches_deeper_patterns():
 # ---------------- behavioral: parameters emitter ----------------
 
 def test_v506_parameters_yaml():
-    ns = _load(["_emit_mv_parameters_yaml"])
+    ns = _load(["_sql_string_escape", "_emit_mv_parameters_yaml"])
     # v5.1.0 v510-mv-param-string-quote: STRING default gets normalized to the SQL literal "'USD'"
     out = ns["_emit_mv_parameters_yaml"]([{"name": "p_target_currency", "data_type": "string", "default": "'USD'"}])
     assert out == [
@@ -75,7 +75,7 @@ def test_v506_parameters_yaml():
 def test_v510_string_param_default_sql_quoted():
     """Regression: UC rejects an UNQUOTED string default (METRIC_VIEW_INVALID_VIEW_DEFINITION).
     The emitter must SQL-quote STRING defaults and leave numeric/boolean verbatim."""
-    ns = _load(["_emit_mv_parameters_yaml"])
+    ns = _load(["_sql_string_escape", "_emit_mv_parameters_yaml"])
     f = ns["_emit_mv_parameters_yaml"]
     # bare string -> SQL-quoted YAML scalar "'OPERATED'"
     assert f([{"name": "p_leg_status", "data_type": "STRING", "default": "OPERATED"}])[-1] == "      default: \"'OPERATED'\""
@@ -87,8 +87,8 @@ def test_v510_string_param_default_sql_quoted():
     assert f([{"name": "p_x", "default": "42"}])[-1] == "      default: 42"
     # no data_type, non-numeric -> quoted as string
     assert f([{"name": "p_y", "default": "ACTIVE"}])[-1] == "      default: \"'ACTIVE'\""
-    # embedded apostrophe -> SQL-escaped (doubled)
-    assert f([{"name": "p_z", "data_type": "STRING", "default": "O'Hare"}])[-1] == "      default: \"'O''Hare'\""
+    # embedded apostrophe -> backslash-escaped (Spark reads 'O''Hare' as the two literals 'O' 'Hare' = OHare)
+    assert f([{"name": "p_z", "data_type": "STRING", "default": "O'Hare"}])[-1] == "      default: \"'O\\\\'Hare'\""
 
 
 # ---------------- behavioral: nested-join emitter (correct UC syntax) ----------------

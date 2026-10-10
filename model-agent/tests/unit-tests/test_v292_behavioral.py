@@ -44,7 +44,7 @@ def _load_real():
     nb = json.load(open(NB))
     full = "\n\n".join("".join(c["source"]) for c in nb["cells"] if c.get("cell_type") == "code")
     tree = ast.parse(full)
-    want_funcs = {"_v292_audit_extraction_completeness", "_v292_residual_signature"}
+    want_funcs = {"_v292_audit_extraction_completeness", "_v292_residual_signature", "_v292_duplicate_of"}
     want_assigns = {"_V292_EXTRACTION_AUDIT_PROMPT"}
     ns = {}
     # RawVREQ is a trivial data container (not the logic under test); inject a faithful stub with
@@ -62,6 +62,7 @@ def _load_real():
         is_user_directive: bool = False  # v2.9.6 alias=vov-merge-user-first
         priority_id: int = 9999  # v2.9.6 alias=vov-severity-first
     ns["RawVREQ"] = RawVREQ
+    ns["re"] = __import__("re")
     segs = []
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name in want_funcs:

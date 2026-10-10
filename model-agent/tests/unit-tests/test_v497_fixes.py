@@ -107,9 +107,10 @@ def test_empty_vibes_passed_branch_marked_non_producing():
     # into the convention average (57.5% instead of 75.8%). Both branches must exclude it.
     src = _tester_main_cell()
     passed_branch = src.split('if r12.status == "PASSED":', 1)[1].split("elif r12.status", 1)[0]
-    assert "r12.produced_model = False" in passed_branch, \
-        "empty_vibes PASSED branch must mark produced_model=False before R.append(r12)"
-    assert passed_branch.index("r12.produced_model = False") < passed_branch.index("R.append(r12)")
+    assert "R.append(r12)" not in passed_branch
+    assert 'R.append(TestResult("10_empty_vibes", "Empty Vibes Graceful Exit", "FAILED"' in passed_branch
+    assert 'td_10["params"], produced_model=False))' in passed_branch, \
+        "empty_vibes PASSED branch must record a non-producing FAILED result (decision 8A)"
 
 
 def test_audit_loop_skips_non_producing_tests():

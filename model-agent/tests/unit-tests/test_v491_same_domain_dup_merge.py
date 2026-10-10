@@ -28,7 +28,7 @@ import re
 import pytest
 
 from notebook_source_util import (assert_agent_version_at_least, cell_containing,
-                                  slice_function_source)
+                                  pk_predicate_globals, slice_function_source, vov_ledger_globals)
 
 COLLISION_ANCHOR = "P0.74-COLLISION-CROSSDOMAIN"
 IMMUT_ANCHOR = "IMMUTABLE VIOLATION: Cannot merge protected product"
@@ -52,7 +52,8 @@ class _Log:
 def _run_collisions(products, attributes=None, domains=None):
     """Run the real collision autofix over flat pipeline lists, nothing stubbed."""
     src = cell_containing(COLLISION_ANCHOR)
-    ns = {"re": re}
+    ns = {**vov_ledger_globals(), "re": re, "_VIBE_SCOPE_RUNTIME": None, **pk_predicate_globals()}
+    exec(slice_function_source("_vibe_scope_product_test", cell_containing("def _vibe_scope_product_test")), ns)
     fns = ["_p074_qualified_rename", "_validate_product_name_collisions"]
     exec("\n\n".join(slice_function_source(f, src) for f in fns), ns)
     # deduplicate_attributes_in_place lives in an earlier cell; the merge path calls it.
@@ -266,7 +267,7 @@ def _run_merge_guard(sources, target, protected, domain="wholesale"):
     start = src.index('        for pm in _coerce_list_of_dicts(data.get("products_to_merge"')
     end = src.index('        for ps in _coerce_list_of_dicts(data.get("products_to_split"')
     body = src[start:end]
-    ns = {"re": re, "errors": [], "logger": _Log(),
+    ns = {**vov_ledger_globals(), "re": re, "errors": [], "logger": _Log(),
           "_all_protected_products_lower": {p.lower() for p in protected},
           "_coerce_list_of_dicts": lambda v: [x for x in (v or []) if isinstance(x, dict)],
           "data": {"products_to_merge": [{"source_products": sources,

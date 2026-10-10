@@ -149,7 +149,6 @@ def test_p59_cosmetic_check_excludes_critical_overlap(nb_cells):
 @pytest.mark.parametrize("alias", [
     "autofix-p016-user-vibe-skip",
     "connect-table-upsert-fk",
-    "vov-auto-latest-version-when-v1",
     "install-mv-hard-gate",
     "unconditional-cascade-drop-extras",
     "honest-adherence-precision",

@@ -12,6 +12,8 @@ import re
 
 import pytest
 
+from notebook_source_util import vov_ledger_globals
+
 NB = os.path.join(os.path.dirname(__file__), "..", "..", "agent", "dbx_vibe_modelling_agent.ipynb")
 
 
@@ -38,6 +40,7 @@ def _load_v371_namespace():
         return False
 
     ns = {
+        **vov_ledger_globals(),
         "re": re,
         "_coerce_tags_to_string_v250": lambda v: "" if v is None else (v if isinstance(v, str) else str(v)),
         "_vibe_set_entity_tag": _vibe_set_entity_tag,

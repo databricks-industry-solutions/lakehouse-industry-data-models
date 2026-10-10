@@ -1,0 +1,44 @@
+{
+  "_source": "live Unity Catalog probe 2026-10-08: SQL warehouse DBSQL 2026.38 (statement API) and serverless 19.9.x-photon through Databricks Connect 19.2.0",
+  "warehouse": {
+    "U01_create_catalog_quota": "[RequestId=b12ddb69-8d6e-46cf-8923-c8df69483c62 ErrorClass=QUOTA_EXCEEDED.UC_RESOURCE_QUOTA_EXCEEDED] Cannot create 1 Catalog(s) in Metastore 00000000-0000-0000-0000-000000000000 (estimated count: 1000, limit: 1000).",
+    "U13_constraint_exists": "[DELTA_CONSTRAINT_ALREADY_EXISTS] Constraint 'fk_b_child_parent_id' already exists. Please delete the old constraint first.\nOld constraint:\nfk_b_child_parent_id FOREIGN KEY (`parent_id`) REFERENCES `vibe_dryrun_smoke_v1`.`vs_probe_v514_a`.`parent` (`parent_id`)\n",
+    "U18_field_exists": "[FIELD_ALREADY_EXISTS] Cannot add column, because `new_ref_id` already exists in \"STRUCT<child_id: BIGINT NOT NULL, parent_id: BIGINT, new_ref_id: BIGINT COMMENT 'probe'>\". SQLSTATE: 42710; line 1 pos 0",
+    "D01_fk_parent_missing": "[TABLE_OR_VIEW_NOT_FOUND] The table or view `vibe_dryrun_smoke_v1`.`vs_probe_v514_a`.`parent` cannot be found. Verify the spelling and correctness of the schema and catalog.\nSearch path: [`vibe_dryrun_smoke_v1`.`vs_probe_v514_a`].\nIf you did not qualify the name with a schema, verify the current_schema() output, or qualify the name with the correct schema and catalog.\nTo tolerate the error on drop use DROP VIEW IF EXISTS or DROP TABLE IF EXISTS. SQLSTATE: 42P01",
+    "H5g_fk_type_mismatch": "The foreign key child column type does not match the parent column type. Foreign key child column `parent_id` has type LONG and parent column `parent_id` has type STRING.",
+    "H6b_multi_column_field_exists": "[FIELD_ALREADY_EXISTS] Cannot add column, because `new_ref_id` already exists in \"STRUCT<child_id: BIGINT NOT NULL, parent_id: BIGINT, new_ref_id: BIGINT COMMENT 'probe'>\". SQLSTATE: 42710; line 1 pos 0",
+    "statement_id_with_429": "01f1c331-6833-1020-b84c-0bda4298f4af"
+  },
+  "serverless": {
+    "S02": {
+      "label": "S02 FK add with type mismatch (parent STRING, child BIGINT)",
+      "getCondition": null,
+      "getSqlState": "XXKCM",
+      "str_e_head": "The foreign key child column type does not match the parent column type. Foreign key child column `parent_id` has type LONG and parent column `parent_id` has type STRING.\n\nJVM stacktrace:\ncom.databricks.sql.managedcatalog.ForeignKeyColumnsMismatchedException\n\tat com.databricks.sql.managedcatalog.client.ManagedCatalogClientImpl.createConstraintInternal(ManagedCatalogClientImpl.scala:4573)\n\tat com.databricks.sql.managedcatalog.client.ManagedCatalogClientImpl.$anonfun$createTableConstraint$1(ManagedCatalogClientImpl.scala:4611)\n\tat scala.runtime.java8.JFunction0$mcV$sp.apply(JFunction0$mcV$sp.scala:18)\n\tat com.databricks.sql.managedcatalog.client.ManagedCatalogClientImpl.$anonfun$recordAndWrapExceptionBase$2(ManagedCatalogClientImpl.scala:8754)\n\tat com.databricks.spark.util.FrameProfiler$.$anonfun$record$1(FrameProfiler.scala:114)\n\tat com.databricks.spark.util.FrameProfilerExporter$.maybeEx",
+      "str_e_len": 17932
+    },
+    "S05": {
+      "label": "S05 FK re-add (already exists)",
+      "getCondition": "DELTA_CONSTRAINT_ALREADY_EXISTS",
+      "getSqlState": "42710",
+      "str_e_head": "[DELTA_CONSTRAINT_ALREADY_EXISTS] Constraint 'fk_b_child_parent_id' already exists. Please delete the old constraint first.\nOld constraint:\nfk_b_child_parent_id FOREIGN KEY (`parent_id`) REFERENCES `vibe_dryrun_smoke_v1`.`vs_probe_v514_a`.`parent` (`parent_id`)\n\n\nJVM stacktrace:\ncom.databricks.sql.transaction.tahoe.DeltaAnalysisException\n\tat com.databricks.sql.transaction.tahoe.DeltaErrorsBase.constraintAlreadyExists(DeltaErrors.scala:392)\n\tat com.databricks.sql.transaction.tahoe.DeltaErrorsBase.constraintAlreadyExists$(DeltaErrors.scala:391)\n\tat com.databricks.sql.transaction.tahoe.DeltaErrors$.constraintAlreadyExists(DeltaErrors.scala:4791)\n\tat com.databricks.sql.transaction.tahoe.commands.AlterTableAddTableConstraintDeltaCommand.$anonfun$run$101(alterDeltaTableCommands.scala:2819)\n\tat scala.Option.foreach(Option.scala:437)\n\tat com.databricks.sql.transaction.tahoe.commands.AlterTableAd",
+      "str_e_len": 15069
+    },
+    "S06": {
+      "label": "S06 ADD COLUMNS existing column",
+      "getCondition": "FIELD_ALREADY_EXISTS",
+      "getSqlState": "42710",
+      "str_e_head": "[FIELD_ALREADY_EXISTS] Cannot add column, because `new_ref_id` already exists in \"STRUCT<child_id: BIGINT NOT NULL, parent_id: BIGINT, new_ref_id: BIGINT COMMENT 'probe'>\". SQLSTATE: 42710; line 1 pos 0;\nAddColumns [qualifiedcoltype(None, new_ref_id, LongType, true, Some(probe), None, None, None)]\n+- ResolvedTable com.databricks.sql.managedcatalog.UnityCatalogV2Proxy@0, vs_probe_v514_b.child, DeltaTableV2(org.apache.spark.sql.classic.SparkSession@0,abfss://storage@account.dfs.core.windows.net/__unitystorage/catalogs/c/tables/t,Some(CatalogTable(\nCatalog: vibe_dryrun_smoke_v1\nDatabase: vs_probe_v514_b\nTable: child\nOwner: owner@example.com\nCreated Time: Thu Oct 08 15:54:59 UTC 2026\nLast Access: UNKNOWN\nCreated By: Spark \nType: MANAGED\nProvider: delta\nCollat",
+      "str_e_len": 15887
+    },
+    "S09": {
+      "label": "S09 FK add while parent missing",
+      "getCondition": "TABLE_OR_VIEW_NOT_FOUND",
+      "getSqlState": "42P01",
+      "str_e_head": "[TABLE_OR_VIEW_NOT_FOUND] The table or view `vibe_dryrun_smoke_v1`.`vs_probe_v514_a`.`parent` cannot be found. Verify the spelling and correctness of the schema and catalog.\nSearch path: [`vibe_dryrun_smoke_v1`.`vs_probe_v514_a`].\nIf you did not qualify the name with a schema, verify the current_schema() output, or qualify the name with the correct schema and catalog.\nTo tolerate the error on drop use DROP VIEW IF EXISTS or DROP TABLE IF EXISTS. SQLSTATE: 42P01\n\nJVM stacktrace:\norg.apache.spark.sql.catalyst.analysis.NoSuchTableException\n\tat com.databricks.sql.managedcatalog.client.ManagedCatalogClientImpl.createConstraintInternal(ManagedCatalogClientImpl.scala:4516)\n\tat com.databricks.sql.managedcatalog.client.ManagedCatalogClientImpl.$anonfun$createTableConstraint$1(ManagedCatalogClientImpl.scala:4611)\n\tat scala.runtime.java8.JFunction0$mcV$sp.apply(JFunction0$mcV$sp.scala:18)\n\tat com.d",
+      "str_e_len": 18216
+    }
+  },
+  "serverless_runCommand_context_2504": ".execution.QueryExecution$.runCommand(QueryExecution.scala:2504) | \tat org.",
+  "_scrubbed": "owner e-mail, metastore id, storage URL and JVM object ids replaced; error classes, SQLSTATEs, messages and frames are verbatim"
+}

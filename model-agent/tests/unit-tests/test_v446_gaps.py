@@ -22,12 +22,13 @@ import re
 import pytest
 
 from v435_helpers import concat_source, slice_functions
+from notebook_source_util import pk_suffix_globals
 
 
 def _scope_ns():
     return slice_functions(
         ["diff_within_summary_scope", "_vov446_allowed_new_domains"],
-        concat_source(), extra_globals={"re": re})
+        concat_source(), extra_globals={"re": re, **pk_suffix_globals()})
 
 
 def _coerce_ns():
@@ -136,7 +137,7 @@ def _connect_ns():
                if isinstance(n, _ast.FunctionDef)
                and (n.name.startswith("_v251_") or n.name.startswith("_v410_"))]
     names = list(dict.fromkeys(helpers + ["_v415_complete_connect_details"]))
-    return slice_functions(names, src, extra_globals={"re": re})
+    return slice_functions(names, src, extra_globals={"re": re, **pk_suffix_globals()})
 
 
 def _automotive_connect_model():
@@ -200,7 +201,7 @@ def test_gap2_correct_in_domain_resolution_left_alone():
 
 # ===================================================== GAP-3
 def _forcekeep_ns():
-    return slice_functions(["_v446_force_keep_shrink"], concat_source(), extra_globals={"re": re})
+    return slice_functions(["_v446_force_keep_shrink"], concat_source(), extra_globals={"re": re, **pk_suffix_globals()})
 
 
 _GAP3_REVIEWER = (

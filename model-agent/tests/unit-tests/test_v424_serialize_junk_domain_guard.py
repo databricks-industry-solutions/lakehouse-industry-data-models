@@ -46,7 +46,9 @@ def _guard_ns():
     def _stub_is_junk(name):
         return str(name or "").strip().lower() in _JUNK
 
-    ns = {"__name__": "_v424_guard_test", "_v357_is_junk_domain_name": _stub_is_junk}
+    ns = {"__name__": "_v424_guard_test", "_v357_is_junk_domain_name": _stub_is_junk, "_VIBE_SCOPE_RUNTIME": None}
+    runtime_start = src_concat.find("def get_vibe_scope_runtime(")
+    exec(src_concat[runtime_start:src_concat.find("\ndef ", runtime_start + 10)], ns)
     exec(fn_src, ns)
     return ns["_v424_reject_junk_empty_domains_in_serialized_model"]
 

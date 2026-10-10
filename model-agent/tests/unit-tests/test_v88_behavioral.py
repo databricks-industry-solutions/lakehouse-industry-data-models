@@ -240,8 +240,6 @@ def test_p71_no_raise_in_critical_vreq_path(agent_src: str):
         "rdfs-business-row-asdict",
         # v0.8.2 P50
         "autofix-p016-user-vibe-skip",
-        # v0.8.2 P52
-        "vov-auto-latest-version-when-v1",
     ],
 )
 def test_prior_aliases_still_present(alias: str, agent_src: str):

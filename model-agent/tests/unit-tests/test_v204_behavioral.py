@@ -200,7 +200,7 @@ def test_v204_f3_known_classes_enumerated():
 def test_v204_f3_retry_loop_invokes_hints_builder():
     src = _nb_src()
     # The retry user-block builder must call _v204_ast_class_hints
-    assert "_v204_ast_class_hints(prior_failure_trace)" in src, (
+    assert "_v204_ast_class_hints(prior_failure_trace" in src, (
         "v204 F3: synthesize_handler must append _v204_ast_class_hints(prior_failure_trace) "
         "to the retry user block."
     )

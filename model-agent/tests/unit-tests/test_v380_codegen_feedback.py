@@ -12,8 +12,11 @@ It is a real behavioral test (distinct input traces -> distinct, asserted hint t
 """
 import json
 import os
+import re
 
 import pytest
+
+from notebook_source_util import vov_ledger_globals
 
 NB = os.path.join(os.path.dirname(__file__), "..", "..", "agent", "dbx_vibe_modelling_agent.ipynb")
 
@@ -40,7 +43,7 @@ def _load_hints_fn():
         def warning(self, *a, **k):
             pass
 
-    ns = {"logger": _DummyLogger()}
+    ns = {**vov_ledger_globals(), "re": re, "logger": _DummyLogger()}
     exec(fn_src, ns)
     return ns["_v204_ast_class_hints"]
 

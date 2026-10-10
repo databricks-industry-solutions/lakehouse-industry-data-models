@@ -70,7 +70,8 @@ def test_rawvreq_carries_new_fields():
 def test_sort_wired_into_both_branches():
     src = _code_src()
     # raw branch
-    assert "_remaining_vreqs = _v296_sort_vreqs(list(deduped))" in src
+    assert "_vs_work = list(deduped)" in src
+    assert "_remaining_vreqs = _v296_sort_vreqs(list(_vs_work))" in src
     # priority branch
     assert "_v296_sort_vreqs([_v251_priority_to_vreq(_p) for _p in _parsed_priorities])" in src
 
@@ -88,11 +89,11 @@ def test_defer_writes_to_next_vibes():
     assert "deferred_vreqs: list = field(default_factory=list)" in src
 
 
-def test_merge_user_first_replaces_skip():
+def test_merge_user_first_replaced_by_single_source_vibes():
     src = _code_src()
-    assert "MERGED user vibes" in src
-    assert "=== USER VIBES (SUPREME AUTHORITY" in src
-    assert "=== AUTO-GENERATED NEXT_VIBES (LOWER PRIORITY" in src
+    assert "MERGED user vibes" not in src
+    assert "def _vov_single_source_vibes(" in src
+    assert "[vov-vibes-required FIRED v5.1.4]" in src
 
 
 # ---------------- behavioral (real extracted code) ----------------

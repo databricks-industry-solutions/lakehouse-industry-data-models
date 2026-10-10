@@ -222,7 +222,7 @@ def test_missed_rollup_unions_orchestrator_and_vov_deferred():
 
 def test_next_vibes_rendered_from_missed_rollup():
     # next_vibes must source from the unified rollup (not only VOV deferred)
-    assert "_missed_nv = _v304_vibe_missed_rollup(widgets_values)" in SRC
+    assert "_missed_nv, _vs_missed_oos = _vibe_scope_partition_missed(widgets_values, _v304_vibe_missed_rollup(widgets_values))" in SRC
     assert "MISSED VIBES (carried" in SRC
     # user directives first
     assert "not _m.get('is_user_directive')" in SRC

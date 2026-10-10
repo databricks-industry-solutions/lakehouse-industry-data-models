@@ -9,7 +9,7 @@ from functools import lru_cache
 from typing import Any, Callable
 
 import agent_helpers as ah
-from agent_coverage_util import notebook_concat_source, notebook_symbol_inventory
+from agent_coverage_util import notebook_code_cells, notebook_concat_source, notebook_symbol_inventory
 from coverage_report import full_agent_inventory
 
 _CONTEST_STUB_FUNCS = frozenset(
@@ -114,7 +114,7 @@ def call_site_counts() -> dict[str, Any]:
     tree = ast.parse(source)
     visitor = _CallSiteVisitor()
     visitor.visit(tree)
-    cell_markers = source.split("# COMMAND ----------")
+    cell_markers = notebook_code_cells()
     n_cells = max(1, len(cell_markers))
     return {
         "by_name": visitor.by_name,

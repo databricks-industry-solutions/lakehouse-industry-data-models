@@ -24,6 +24,7 @@ import re
 import copy
 
 from v435_helpers import concat_source, slice_functions
+from notebook_source_util import vov_ledger_globals
 
 
 class _StubVREQ:
@@ -164,8 +165,9 @@ def test_fixJ2_handler_blanks_value_regex():
 def test_fixJ3_move_lands_after_reviewer_named_domain_created():
     ns = slice_functions(
         ["_v337_apply_move_product", "_v337_find_product", "_v337_iter_products",
-         "_v337_rewire_fks", "_v337_parse_fk_fqn"],
-        concat_source(), extra_globals={"re": re, "copy": copy})
+         "_v337_rewire_fks", "_v337_parse_fk_fqn", "_vibe_scope_note_rename",
+         "_v337_table_pairs", "_v337_rewire_metric_views", "_vov285_san"],
+        concat_source(), extra_globals={**vov_ledger_globals(), "re": re, "copy": copy, "_VIBE_SCOPE_RUNTIME": None})
     mdl = _model()
     # pre: 'service' domain absent -> mover defers (returns None) — this is the v4.3.8 behavior
     assert ns["_v337_apply_move_product"](mdl, "customer", "service_case", "service") is None

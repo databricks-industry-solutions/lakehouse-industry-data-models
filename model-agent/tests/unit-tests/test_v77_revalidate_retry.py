@@ -41,7 +41,7 @@ AGENT_NB = REPO_ROOT / "agent" / "dbx_vibe_modelling_agent.ipynb"
 
 def _load_apply_mutations():
     """Slice `_llm_fallback_apply_mutations` from full notebook (all cells)."""
-    from notebook_source_util import exec_function_namespace
+    from notebook_source_util import exec_functions_namespace
 
     stubs = {
         "logging": logging,
@@ -66,8 +66,12 @@ def _load_apply_mutations():
         "_p091_is_valid_identifier": lambda s: (True, ""),
         "_p091_reject_name_mutation": lambda *a, **k: False,
         "_preseed_rename_maps": lambda mutations: ({}, {}, {}),
+        "_disk_cached_call": lambda prefix, key_parts, compute_fn: compute_fn(),
     }
-    return exec_function_namespace("_llm_fallback_apply_mutations", extra_globals=stubs)
+    return exec_functions_namespace(
+        ["_build_fk_adjacency", "_would_create_cycle", "_sync_fk_type_with_pk", "_llm_fallback_apply_mutations"],
+        extra_globals=stubs,
+    )
 
 
 @pytest.fixture(scope="module")

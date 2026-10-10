@@ -108,8 +108,13 @@ def test_shortcircuit_wired_before_batching():
 # Fix B — None-deref retry hint
 # ---------------------------------------------------------------------------
 
+def _hint_globals():
+    import agent_helpers as ah
+    return {k: getattr(ah, k) for k in ("_VOV_RENAME_HINT_NEEDLE", "_VOV_RENAME_RETRY_HINT", "_VOV_SCOPE_RETRY_HINTS")}
+
+
 def test_none_deref_hint_emitted_on_trace():
-    ns = exec_function_namespace("_v204_ast_class_hints")
+    ns = exec_function_namespace("_v204_ast_class_hints", extra_globals=_hint_globals())
     fn = ns["_v204_ast_class_hints"]
     trace = (
         "iter=1 batch=orphan-rec-0000__s5 status=rejected_unsafe "
@@ -124,7 +129,7 @@ def test_none_deref_hint_emitted_on_trace():
 
 def test_none_deref_hint_absent_when_trace_clean():
     """Non-tautology: the hint is conditional on the failure signature."""
-    ns = exec_function_namespace("_v204_ast_class_hints")
+    ns = exec_function_namespace("_v204_ast_class_hints", extra_globals=_hint_globals())
     fn = ns["_v204_ast_class_hints"]
     out = fn("iter=1 batch=B0001 status=applied")
     assert "NONE-DEREF" not in out

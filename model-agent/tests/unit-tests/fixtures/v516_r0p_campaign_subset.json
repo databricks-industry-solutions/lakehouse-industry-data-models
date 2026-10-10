@@ -1,0 +1,2120 @@
+{
+ "source": "live run 161935925891676 (agent 5.1.4, vs514 retail) model.json, trimmed to the campaign products and their referencers",
+ "model": {
+  "type": "business",
+  "name": "Vs514 Retail",
+  "version": "v1_mvm",
+  "model_conventions": {
+   "data_asset_naming_convention": "snake_case",
+   "primary_key_suffix": "_id",
+   "schema_prefix": "",
+   "schema_suffix": "",
+   "tag_prefix": "dbx_",
+   "tag_suffix": "",
+   "table_id_type": "BIGINT",
+   "boolean_format": "Boolean (True/False)",
+   "date_format": "yyyy-MM-dd",
+   "timestamp_format": "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+   "data_classification_levels": "restricted=restricted, confidential=confidential, internal=Internal, public=public",
+   "housekeeping_columns": "",
+   "history_tracking_columns": ""
+  },
+  "domains": [
+   {
+    "name": "order",
+    "division": "operations",
+    "description": "Single source of truth for the omnichannel order lifecycle across channels \u2014 POS in-store, e-commerce, BOPIS, ROPIS, BORIS, and SFS. Owns order capture, order header/line, shipment, delivery, OMS fulfillment orchestration (DOM), fulfillment routing, SLA",
+    "database_name": "order",
+    "references": "Manhattan Active Omni / IBM Sterling OMS",
+    "tags": "",
+    "tag_set": [
+     {
+      "key": "dbx_domain",
+      "value": "order",
+      "kind": "key_value",
+      "source": "derived"
+     },
+     {
+      "key": "dbx_division",
+      "value": "operations",
+      "kind": "key_value",
+      "source": "derived"
+     }
+    ],
+    "products": [
+     {
+      "name": "order_promotion",
+      "table_name": "order_promotion",
+      "primary_key": "order_promotion_id",
+      "subdomain": "order_management",
+      "description": "Association record linking a promotion or coupon applied to a sales order or order line. Captures promotion code, promotion type (BOGO, markdown, LTO, percentage-off, free-shipping), discount amount applied, promotion source (loyalty, campaign, POS",
+      "type": "Transactional",
+      "division": "",
+      "function": "",
+      "data_type": "transactional_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "Order Discount / Promotion Application",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "transactional_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "order_management",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "order_promotion_id",
+        "column_name": "order_promotion_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Order Promotion ID",
+        "description": "Unique surrogate identifier for the order-promotion association record in the OMS. Primary key for this junction/transaction entity.",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "Manhattan Active Omni OMS",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Order Promotion ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Marketing Campaign ID",
+        "description": "Reference to the marketing campaign that generated or distributed this promotion. Enables campaign ROI measurement and attribution of discount spend to specific marketing initiatives.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "product.campaign.campaign_id",
+        "references": "Salesforce Marketing Cloud / Braze",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Marketing Campaign ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "product_promotion_id",
+        "column_name": "product_promotion_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Promotion ID",
+        "description": "Reference to the master promotion definition record in the Pricing and Promotions system that governs the rules, eligibility, and discount logic for this promotion.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "product.product_promotion.product_promotion_id",
+        "references": "Oracle Retail Pricing / Salesforce Marketing Cloud",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Promotion ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "application_level",
+        "column_name": "application_level",
+        "type": "STRING",
+        "business_glossary_term": "Promotion Application Level",
+        "description": "Indicates whether the promotion discount was applied at the order header level, a specific order line level, or the shipment level. Determines how discount_amount is allocated.",
+        "value_regex": "order|line|shipment",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Manhattan Active Omni OMS",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Promotion Application Level",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "applied_timestamp",
+        "column_name": "applied_timestamp",
+        "type": "TIMESTAMP",
+        "business_glossary_term": "Promotion Applied Timestamp",
+        "description": "The date and time when the promotion was applied to the order or order line. Represents the business event time of promotion redemption. Format: yyyy-MM-ddTHH:mm:ss.SSSXXX.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Manhattan Active Omni OMS",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Promotion Applied Timestamp",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "approval_required",
+        "column_name": "approval_required",
+        "type": "BOOLEAN",
+        "business_glossary_term": "Manager Approval Required Flag",
+        "description": "Indicates whether this promotion application required manager or supervisor approval before being applied (True), such as for high-value manual overrides at POS.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "NCR POS / Oracle Xstore",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Manager Approval Required Flag",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "customer",
+    "division": "business",
+    "description": "Single source of truth for all customer identity, profile, accounts, household relationships, segmentation, and loyalty data. Owns CRM records, RFM scoring, CLTV, CAC, NPS, loyalty program membership, purchase history, preferences, and consent/privacy",
+    "database_name": "customer",
+    "references": "Salesforce CRM / CCPA / GDPR",
+    "tags": "",
+    "tag_set": [
+     {
+      "key": "dbx_domain",
+      "value": "customer",
+      "kind": "key_value",
+      "source": "derived"
+     },
+     {
+      "key": "dbx_division",
+      "value": "business",
+      "kind": "key_value",
+      "source": "derived"
+     }
+    ],
+    "products": [
+     {
+      "name": "segment_membership",
+      "table_name": "segment_membership",
+      "primary_key": "segment_membership_id",
+      "subdomain": "loyalty_engagement",
+      "description": "Association entity recording which customer profiles belong to which segments at any point in time. Tracks profile reference, segment reference, membership start date, membership end date, membership status (active, expired), assignment method",
+      "type": "Transactional",
+      "division": "",
+      "function": "",
+      "data_type": "association_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "Salesforce Marketing Cloud \u2014 Segment Membership",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "association_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "loyalty_engagement",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "segment_membership_id",
+        "column_name": "segment_membership_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Segment Membership ID",
+        "description": "Unique surrogate identifier for each segment membership record in the Databricks Silver layer. Primary key for the segment_membership entity.",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Segment Membership ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Campaign ID",
+        "description": "Identifier of the marketing campaign that triggered or is associated with this segment membership assignment. Populated when assignment_method is campaign.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.campaign.campaign_id",
+        "references": "Salesforce Marketing Cloud",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Campaign ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "assigned_by",
+        "column_name": "assigned_by",
+        "type": "STRING",
+        "business_glossary_term": "Assigned By",
+        "description": "Username or system process identifier that created or last modified this segment membership assignment. Supports audit trail for manual and automated assignments.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Salesforce Marketing Cloud",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Assigned By",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "assignment_method",
+        "column_name": "assignment_method",
+        "type": "STRING",
+        "business_glossary_term": "Segment Assignment Method",
+        "description": "Method by which the customer was assigned to this segment. Rule-based = automated criteria engine; manual = analyst override; ml_model = predictive model output; import = batch ETL load.",
+        "value_regex": "rule_based|manual|ml_model|import|api|campaign",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Salesforce Marketing Cloud",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Segment Assignment Method",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "ccpa_opt_out_flag",
+        "column_name": "ccpa_opt_out_flag",
+        "type": "BOOLEAN",
+        "business_glossary_term": "California Consumer Privacy Act (CCPA) Opt-Out Flag",
+        "description": "Indicates whether the customer has exercised their CCPA right to opt out of sale/sharing of personal data for this segment's use. True = opted out; segment use restricted.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "CCPA / CPRA",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "California Consumer Privacy Act (CCPA) Opt-Out Flag",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     },
+     {
+      "name": "interaction",
+      "table_name": "interaction",
+      "primary_key": "interaction_id",
+      "subdomain": "service_analytics",
+      "description": "Records every tracked customer touchpoint and engagement event across all channels at Vs514 Retail, sourced from Salesforce Service Cloud cases and Marketing Cloud engagement data.",
+      "type": "Transactional",
+      "division": "",
+      "function": "",
+      "data_type": "transactional_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "Salesforce Service Cloud \u2014 Activity / Engagement Event",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "transactional_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "service_analytics",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "interaction_id",
+        "column_name": "interaction_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Customer Interaction ID",
+        "description": "Unique surrogate identifier for each customer touchpoint or engagement event record in the Silver layer. Primary key for the interaction data product.",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "Internal Data Modeling Standard",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Customer Interaction ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Marketing Campaign ID",
+        "description": "Identifier of the marketing campaign in Salesforce Marketing Cloud or Braze that triggered or is associated with this outbound interaction event.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.campaign.campaign_id",
+        "references": "Salesforce Marketing Cloud",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Marketing Campaign ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "journey_id",
+        "column_name": "journey_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Customer Journey ID",
+        "description": "Identifier of the automated customer journey in Salesforce Marketing Cloud that this interaction belongs to, enabling journey-level engagement analytics.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.journey.journey_id",
+        "references": "Salesforce Marketing Cloud",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Customer Journey ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "session_id",
+        "column_name": "session_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Web Session ID",
+        "description": "Unique identifier for the web or app session during which this interaction occurred, enabling session-level journey stitching and conversion rate analysis.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.session.session_id",
+        "references": "Salesforce Commerce Cloud",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Web Session ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "bounce_type",
+        "column_name": "bounce_type",
+        "type": "STRING",
+        "business_glossary_term": "Email Bounce Type",
+        "description": "Classifies the type of email bounce if the message was not delivered: hard bounce (permanent delivery failure) or soft bounce (temporary failure). Null if delivered.",
+        "value_regex": "hard|soft|none",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Salesforce Marketing Cloud",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Email Bounce Type",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "browser_type",
+        "column_name": "browser_type",
+        "type": "STRING",
+        "business_glossary_term": "Browser Type",
+        "description": "Web browser used by the customer during a web-based interaction (e.g., Chrome, Safari, Firefox), used for digital experience optimization and accessibility compliance.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Salesforce Commerce Cloud; ADA/WCAG",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Browser Type",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_name",
+        "column_name": "campaign_name",
+        "type": "STRING",
+        "business_glossary_term": "Marketing Campaign Name",
+        "description": "Human-readable name of the marketing campaign associated with this interaction, used for reporting and attribution analysis.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Salesforce Marketing Cloud",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Marketing Campaign Name",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     },
+     {
+      "name": "nps_response",
+      "table_name": "nps_response",
+      "primary_key": "nps_response_id",
+      "subdomain": "service_analytics",
+      "description": "Stores individual Net Promoter Score survey responses collected from customers at Vs514 Retail across post-purchase, post-service, and periodic relationship surveys.",
+      "type": "Transactional",
+      "division": "",
+      "function": "",
+      "data_type": "transactional_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "Net Promoter Score \u2014 Bain & Company / Salesforce Marketing Cloud",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "transactional_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "service_analytics",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "nps_response_id",
+        "column_name": "nps_response_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Net Promoter Score (NPS) Response ID",
+        "description": "Unique surrogate identifier for each individual NPS survey response record in the Vs514 Retail customer domain silver layer.",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Net Promoter Score (NPS) Response ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Campaign ID",
+        "description": "Identifier of the marketing or CRM campaign that distributed this NPS survey, sourced from Salesforce Marketing Cloud or Braze.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.campaign.campaign_id",
+        "references": "Salesforce Marketing Cloud; Braze",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Campaign ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "survey_id",
+        "column_name": "survey_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Survey ID",
+        "description": "Identifier of the survey template or campaign from which this response was collected, sourced from Salesforce Marketing Cloud or Braze.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.survey.survey_id",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Survey ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "ccpa_opt_out_flag",
+        "column_name": "ccpa_opt_out_flag",
+        "type": "BOOLEAN",
+        "business_glossary_term": "California Consumer Privacy Act (CCPA) Opt-Out Flag",
+        "description": "Indicates whether the customer has exercised their CCPA right to opt out of sale/sharing of personal data, affecting permissible use of this response.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "CCPA; CPRA",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "California Consumer Privacy Act (CCPA) Opt-Out Flag",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "country_code",
+        "column_name": "country_code",
+        "type": "STRING",
+        "business_glossary_term": "Country Code",
+        "description": "ISO 3166-1 alpha-3 country code of the customer's location at the time of survey response, used for geographic NPS segmentation.",
+        "value_regex": "^[A-Z]{3}$",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "ISO 3166-1",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Country Code",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "created_timestamp",
+        "column_name": "created_timestamp",
+        "type": "TIMESTAMP",
+        "business_glossary_term": "Created Timestamp",
+        "description": "Date and time when this NPS response record was first created in the silver layer data product.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Created Timestamp",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     },
+     {
+      "name": "value",
+      "table_name": "value",
+      "primary_key": "value_id",
+      "subdomain": "customer_identity",
+      "description": "Point-in-time computed customer value record per profile capturing CLTV (customer lifetime value), predicted CLTV, CAC (customer acquisition cost) attributed at acquisition, total historical spend, average order value, margin contribution, value tier, and",
+      "type": "",
+      "division": "",
+      "function": "",
+      "data_type": "master_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "master_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "customer_identity",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "value_id",
+        "column_name": "value_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Customer Value ID",
+        "description": "Unique surrogate identifier for the customer value record. One record per customer per snapshot period representing the point-in-time computed value profile.",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Customer Value ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "acquisition_campaign_id",
+        "column_name": "acquisition_campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Acquisition Campaign ID",
+        "description": "Identifier of the marketing campaign in Salesforce Marketing Cloud or Braze that drove the customer acquisition event. Links CAC to specific campaign spend.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.campaign.campaign_id",
+        "references": "Salesforce Marketing Cloud",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Acquisition Campaign ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "acquisition_channel",
+        "column_name": "acquisition_channel",
+        "type": "STRING",
+        "business_glossary_term": "Customer Acquisition Channel",
+        "description": "Marketing or sales channel through which the customer was originally acquired. Used to compute channel-level Customer Acquisition Cost (CAC) efficiency and Return on Investment (ROI).",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Salesforce Marketing Cloud",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Customer Acquisition Channel",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "aov",
+        "column_name": "aov",
+        "type": "DECIMAL(18,2)",
+        "business_glossary_term": "Average Order Value (AOV)",
+        "description": "Average Order Value (AOV) computed as total net revenue divided by total order count for this customer. Key metric for basket-building and upsell strategy.",
+        "value_regex": "",
+        "tags": "confidential,pii_financial",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "confidential",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "pii_financial",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Average Order Value (AOV)",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "cac_amount",
+        "column_name": "cac_amount",
+        "type": "DECIMAL(18,2)",
+        "business_glossary_term": "Customer Acquisition Cost (CAC) Amount",
+        "description": "Customer Acquisition Cost (CAC) attributed to this customer at the time of acquisition. Includes marketing spend, promotional discounts, and channel costs allocated at acquisition.",
+        "value_regex": "",
+        "tags": "confidential,pii_financial",
+        "foreign_key_to": "",
+        "references": "FASB ASC 340-40",
+        "tag_set": [
+         {
+          "key": "confidential",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "pii_financial",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Customer Acquisition Cost (CAC) Amount",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     },
+     {
+      "name": "session",
+      "table_name": "session",
+      "primary_key": "session_id",
+      "subdomain": "customer_identity",
+      "description": "Master reference table for session. Referenced by session_id.",
+      "type": "master",
+      "division": "business",
+      "function": "core",
+      "data_type": "master_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "master_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "customer_identity",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "session_id",
+        "column_name": "session_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Session Identifier",
+        "description": "Primary key for session",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Session Identifier",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Campaign Id",
+        "description": "Reference to the marketing campaign that drove this session. Used to attribute sessions and conversions to specific marketing initiatives.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.campaign.campaign_id",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Campaign Id",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "app_version",
+        "column_name": "app_version",
+        "type": "STRING",
+        "business_glossary_term": "App Version",
+        "description": "Version of the Vs514 Retail mobile or web application used during the session. Used for release impact analysis and bug tracking.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "App Version",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "browser",
+        "column_name": "browser",
+        "type": "STRING",
+        "business_glossary_term": "Browser",
+        "description": "Web browser name and version used during the session (e.g., Chrome 120, Safari 17). Applicable to web and mobile-web sessions.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Browser",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "cart_add_count",
+        "column_name": "cart_add_count",
+        "type": "INT",
+        "business_glossary_term": "Cart Add Count",
+        "description": "Number of times a product was added to the shopping cart during the session. Used for cart abandonment analysis and conversion funnel reporting.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Cart Add Count",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     },
+     {
+      "name": "campaign",
+      "table_name": "campaign",
+      "primary_key": "campaign_id",
+      "subdomain": "loyalty_engagement",
+      "description": "Master reference table for campaign. Referenced by acquisition_campaign_id.",
+      "type": "master",
+      "division": "business",
+      "function": "core",
+      "data_type": "master_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "master_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "loyalty_engagement",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "actual_spend",
+        "column_name": "actual_spend",
+        "type": "DECIMAL(18,2)",
+        "business_glossary_term": "Actual Spend",
+        "description": "Total amount actually spent on this campaign to date in the operating currency (USD). Used for budget variance and ROI analysis.",
+        "value_regex": "",
+        "tags": "confidential",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "confidential",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Actual Spend",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "approved_date",
+        "column_name": "approved_date",
+        "type": "DATE",
+        "business_glossary_term": "Approved Date",
+        "description": "Date on which the campaign was formally approved by the marketing governance or finance team for execution.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Approved Date",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "budget_amount",
+        "column_name": "budget_amount",
+        "type": "DECIMAL(18,2)",
+        "business_glossary_term": "Budget Amount",
+        "description": "Total approved budget allocated to this campaign in the operating currency (USD). Represents planned spend before execution.",
+        "value_regex": "",
+        "tags": "confidential",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "confidential",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Budget Amount",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     },
+     {
+      "name": "journey",
+      "table_name": "journey",
+      "primary_key": "journey_id",
+      "subdomain": "loyalty_engagement",
+      "description": "Master reference table for journey. Referenced by journey_id.",
+      "type": "master",
+      "division": "business",
+      "function": "core",
+      "data_type": "master_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "master_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "loyalty_engagement",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "journey_id",
+        "column_name": "journey_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Journey Identifier",
+        "description": "Primary key for journey",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Journey Identifier",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Campaign Id",
+        "description": "Reference to the marketing campaign that owns or initiated this journey. Links journey performance back to campaign-level reporting.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.campaign.campaign_id",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Campaign Id",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "ab_test_group",
+        "column_name": "ab_test_group",
+        "type": "STRING",
+        "business_glossary_term": "Ab Test Group",
+        "description": "Experimental group assignment for the customer within this journey, enabling controlled A/B or multivariate test analysis of journey performance.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Ab Test Group",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "channel",
+        "column_name": "channel",
+        "type": "STRING",
+        "business_glossary_term": "Channel",
+        "description": "Primary channel through which this journey is delivered to the customer (e.g., email, in-store, mobile app). [ENUM-REF-CANDIDATE: email|sms|push|in_store|web|mobile_app|direct_mail|social \u2014 promote to reference product]",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Channel",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "consent_status",
+        "column_name": "consent_status",
+        "type": "STRING",
+        "business_glossary_term": "Consent Status",
+        "description": "Customer's current marketing consent status at the time of journey enrollment. Ensures journey execution complies with privacy and consent regulations.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Consent Status",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     },
+     {
+      "name": "earning_rule",
+      "table_name": "earning_rule",
+      "primary_key": "earning_rule_id",
+      "subdomain": "loyalty_engagement",
+      "description": "Master reference table for earning_rule. Referenced by earning_rule_id.",
+      "type": "master",
+      "division": "business",
+      "function": "core",
+      "data_type": "master_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "master_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "loyalty_engagement",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "earning_rule_id",
+        "column_name": "earning_rule_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Earning Rule Identifier",
+        "description": "Primary key for earning_rule",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Earning Rule Identifier",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Campaign Id",
+        "description": "Identifier of the marketing campaign that triggered or is associated with this earning rule, if the rule is campaign-driven.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.campaign.campaign_id",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Campaign Id",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "accrual_delay_days",
+        "column_name": "accrual_delay_days",
+        "type": "INT",
+        "business_glossary_term": "Accrual Delay Days",
+        "description": "Number of days after a qualifying transaction before earned points are posted to the customer account (e.g., to allow for return window).",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Accrual Delay Days",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "applicable_channel",
+        "column_name": "applicable_channel",
+        "type": "STRING",
+        "business_glossary_term": "Applicable Channel",
+        "description": "The sales or interaction channel(s) through which this earning rule is valid. Supports omnichannel retail operations across store and e-commerce.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Applicable Channel",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "applicable_tier",
+        "column_name": "applicable_tier",
+        "type": "STRING",
+        "business_glossary_term": "Applicable Tier",
+        "description": "The loyalty program tier(s) eligible for this earning rule (e.g., Silver, Gold, Platinum). Null or 'all' indicates the rule applies to all tiers.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Applicable Tier",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     },
+     {
+      "name": "survey",
+      "table_name": "survey",
+      "primary_key": "survey_id",
+      "subdomain": "service_analytics",
+      "description": "Master reference table for survey. Referenced by survey_id.",
+      "type": "master",
+      "division": "business",
+      "function": "core",
+      "data_type": "master_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "master_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "service_analytics",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "survey_id",
+        "column_name": "survey_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Survey Identifier",
+        "description": "Primary key for survey",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Survey Identifier",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Campaign Id",
+        "description": "Reference to the marketing campaign that triggered or is associated with this survey distribution. Links survey results to campaign performance.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.campaign.campaign_id",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Campaign Id",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "parent_survey_id",
+        "column_name": "parent_survey_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Parent Survey Id",
+        "description": "Reference to the original survey from which this version was derived. Supports version lineage tracking for recurring or revised surveys.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.survey.survey_id",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Parent Survey Id",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "brand",
+        "column_name": "brand",
+        "type": "STRING",
+        "business_glossary_term": "Brand",
+        "description": "The retail brand or banner under which this survey is conducted. Relevant for multi-brand retailers to segment survey results by brand.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Brand",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "business_domain",
+        "column_name": "business_domain",
+        "type": "STRING",
+        "business_glossary_term": "Business Domain",
+        "description": "The primary business domain this survey is associated with, used for routing results to the appropriate data domain and stakeholder team.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Business Domain",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "closed_timestamp",
+        "column_name": "closed_timestamp",
+        "type": "TIMESTAMP",
+        "business_glossary_term": "Closed Timestamp",
+        "description": "Timestamp when the survey was closed and stopped accepting responses, whether by scheduled end_date, manual closure, or max_responses_target reached.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Closed Timestamp",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     }
+    ]
+   },
+   {
+    "name": "product",
+    "division": "business",
+    "description": "Single source of truth for all merchandise catalog data including SKU, UPC, EAN, GTIN, product attributes, hierarchy (department/class/subclass), assortment and planogram planning, pricing (MSRP, MAP, AUR, AUC, ASP), promotions (BOGO, LTO, markdown)",
+    "database_name": "product",
+    "references": "GS1 GTIN / Akeneo PIM / Salsify / Oracle Retail Merchandising",
+    "tags": "",
+    "tag_set": [
+     {
+      "key": "dbx_domain",
+      "value": "product",
+      "kind": "key_value",
+      "source": "derived"
+     },
+     {
+      "key": "dbx_division",
+      "value": "business",
+      "kind": "key_value",
+      "source": "derived"
+     }
+    ],
+    "products": [
+     {
+      "name": "product_promotion",
+      "table_name": "product_promotion",
+      "primary_key": "product_promotion_id",
+      "subdomain": "pricing_promotions",
+      "description": "Master record for all promotional pricing events managed by Vs514 Retail including markdowns, BOGO (Buy One Get One), LTO (Limited Time Offer), percentage-off, fixed-price, and clearance events.",
+      "type": "Master",
+      "division": "",
+      "function": "",
+      "data_type": "master_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "Promotion / Markdown / LTO / BOGO \u2014 Oracle Retail Pricing",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "master_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "pricing_promotions",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "product_promotion_id",
+        "column_name": "product_promotion_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Product Promotion ID",
+        "description": "Unique surrogate identifier for a promotional pricing event record in the Vs514 Retail merchandise catalog. Primary key for the product_promotion data product.",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "Internal Data Standard",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Product Promotion ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Marketing Campaign ID",
+        "description": "Reference to the marketing campaign that sponsors or drives this promotional event. Links promotion execution to campaign performance measurement in the Marketing and Loyalty domain.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.campaign.campaign_id",
+        "references": "Salesforce Marketing Cloud; Braze",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Marketing Campaign ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "applies_to_scope",
+        "column_name": "applies_to_scope",
+        "type": "STRING",
+        "business_glossary_term": "Promotion Applies-To Scope",
+        "description": "Merchandise hierarchy level at which the promotion is defined and applied. Values: sku, style, subclass, class, department. Determines breadth of SKU eligibility within the hierarchy.",
+        "value_regex": "sku|style|subclass|class|department",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Oracle Retail Merchandising Module",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Promotion Applies-To Scope",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "approved_by",
+        "column_name": "approved_by",
+        "type": "STRING",
+        "business_glossary_term": "Approved By",
+        "description": "Name or employee identifier of the merchandising or pricing manager who approved this promotional event. Required for SOX-compliant pricing change authorization workflows.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "SOX Section 404; Oracle Retail Pricing Approval Workflow",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Approved By",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "approved_timestamp",
+        "column_name": "approved_timestamp",
+        "type": "TIMESTAMP",
+        "business_glossary_term": "Promotion Approved Timestamp",
+        "description": "Timestamp when the promotional event received final business approval and was authorized for scheduling. Part of the SOX-compliant pricing change audit trail.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "SOX Section 404; Oracle Retail Pricing Approval Workflow",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Promotion Approved Timestamp",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     },
+     {
+      "name": "digital_asset",
+      "table_name": "digital_asset",
+      "primary_key": "digital_asset_id",
+      "subdomain": "merchandise_catalog",
+      "description": "Digital Asset Management (DAM) reference record for all media assets associated with a style or SKU. Stores asset_id, asset type (hero image, swatch, lifestyle photo, video, 360-spin, size guide, care label), asset URL or DAM system reference, file",
+      "type": "Master",
+      "division": "",
+      "function": "",
+      "data_type": "master_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "Digital Asset / DAM \u2014 Akeneo / Salsify / Bynder",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "master_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "merchandise_catalog",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "digital_asset_id",
+        "column_name": "digital_asset_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Digital Asset ID",
+        "description": "Unique surrogate identifier for each digital asset record in the Digital Asset Management (DAM) system. Primary key for the digital_asset product in the Databricks Silver layer.",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "Internal Data Governance Standard",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Digital Asset ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Campaign ID",
+        "description": "Reference to the marketing campaign for which this asset was created or is associated. Links DAM assets to campaign execution records in Salesforce Marketing Cloud or Braze.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.campaign.campaign_id",
+        "references": "Salesforce Marketing Cloud / Braze",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Campaign ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "alt_text",
+        "column_name": "alt_text",
+        "type": "STRING",
+        "business_glossary_term": "Alternative Text",
+        "description": "Descriptive alternative text for image assets used by screen readers and search engine optimization (SEO). Required for ADA/WCAG 2.1 accessibility compliance on digital storefronts.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "ADA / WCAG 2.1",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Alternative Text",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "asset_name",
+        "column_name": "asset_name",
+        "type": "STRING",
+        "business_glossary_term": "Asset Name",
+        "description": "Human-readable name or title of the digital asset as defined in the DAM system. Used for search, discovery, and display in internal merchandising and e-commerce workflows.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Akeneo PIM / Salsify PIM",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Asset Name",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "asset_status",
+        "column_name": "asset_status",
+        "type": "STRING",
+        "business_glossary_term": "Asset Status",
+        "description": "Current lifecycle status of the digital asset within the DAM workflow. Controls whether the asset is eligible for use on e-commerce storefronts, PIM enrichment, or marketing channels.",
+        "value_regex": "active|inactive|pending_review|approved|rejected|archived",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Akeneo PIM / Salsify PIM",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Asset Status",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     },
+     {
+      "name": "collection",
+      "table_name": "collection",
+      "primary_key": "collection_id",
+      "subdomain": "merchandise_catalog",
+      "description": "Marketing/merchandising collection or curated category record for the digital storefront, distinct from the buyer-facing merchandise_hierarchy. Represents storefront navigation groupings such as 'Summer Essentials', 'New Arrivals', 'Back to School', or",
+      "type": "",
+      "division": "",
+      "function": "",
+      "data_type": "master_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "master_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "merchandise_catalog",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "collection_id",
+        "column_name": "collection_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Product Collection ID",
+        "description": "Unique surrogate identifier for a marketing or merchandising collection record on the digital storefront (e.g., Summer Essentials, New Arrivals, Back to School).",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "Salesforce Commerce Cloud / Shopify Plus \u2014 Catalog Module",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Product Collection ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Campaign ID",
+        "description": "External identifier of the marketing campaign (from Salesforce Marketing Cloud or Braze) that launched or is associated with this collection, enabling campaign ROI attribution.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "customer.campaign.campaign_id",
+        "references": "Salesforce Marketing Cloud / Braze \u2014 Campaign Management",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Campaign ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "product_promotion_id",
+        "column_name": "product_promotion_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Promotion ID",
+        "description": "Reference to the promotion record associated with this collection when is_promotional is true. Links to the pricing and promotions domain for BOGO, LTO, or markdown events.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "product.product_promotion.product_promotion_id",
+        "references": "Oracle Retail Pricing / SAP S/4HANA Retail \u2014 Promotions Module",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Promotion ID",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "age_group",
+        "column_name": "age_group",
+        "type": "STRING",
+        "business_glossary_term": "Age Group",
+        "description": "Target age demographic for this collection, used for storefront navigation, CPSIA compliance filtering, and marketing audience segmentation.",
+        "value_regex": "adult|teen|kids|toddler|infant",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "CPSIA \u2014 Consumer Product Safety Improvement Act; Akeneo PIM",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Age Group",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "approved_by",
+        "column_name": "approved_by",
+        "type": "STRING",
+        "business_glossary_term": "Approved By",
+        "description": "Name or employee code of the manager or director who approved this collection for publication, supporting governance and change management workflows.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Akeneo PIM \u2014 Workflow Approval; Internal Governance",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Approved By",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "approved_timestamp",
+        "column_name": "approved_timestamp",
+        "type": "TIMESTAMP",
+        "business_glossary_term": "Approved Timestamp",
+        "description": "Date and time when this collection was formally approved for publication by the designated approver, recorded in ISO 8601 format with timezone offset.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "Akeneo PIM \u2014 Workflow Approval",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Approved Timestamp",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     },
+     {
+      "name": "campaign",
+      "table_name": "campaign",
+      "primary_key": "campaign_id",
+      "subdomain": "pricing_promotions",
+      "description": "Master reference table for campaign. Referenced by campaign_id.",
+      "type": "master",
+      "division": "business",
+      "function": "core",
+      "data_type": "master_data",
+      "source_domains": "",
+      "association_edges": "",
+      "reference": "",
+      "tags": "",
+      "tag_set": [
+       {
+        "key": "dbx_data_type",
+        "value": "master_data",
+        "kind": "key_value",
+        "source": "derived"
+       },
+       {
+        "key": "dbx_subdomain",
+        "value": "pricing_promotions",
+        "kind": "key_value",
+        "source": "derived"
+       }
+      ],
+      "steward": "",
+      "attributes": [
+       {
+        "name": "campaign_id",
+        "column_name": "campaign_id",
+        "type": "BIGINT",
+        "business_glossary_term": "Campaign Identifier",
+        "description": "Primary key for campaign",
+        "value_regex": "",
+        "tags": "primary_key",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "primary_key",
+          "value": "",
+          "kind": "label",
+          "source": "explicit"
+         },
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Campaign Identifier",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "applicable_price_type",
+        "column_name": "applicable_price_type",
+        "type": "STRING",
+        "business_glossary_term": "Applicable Price Type",
+        "description": "The price type on which the campaign discount is calculated. Options include Manufacturer Suggested Retail Price (MSRP), Minimum Advertised Price (MAP), Average Unit Retail (AUR), or Average Selling Price (ASP).",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Applicable Price Type",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "approved_by",
+        "column_name": "approved_by",
+        "type": "STRING",
+        "business_glossary_term": "Approved By",
+        "description": "Name or identifier of the merchandising or marketing manager who approved this campaign for execution. Supports governance and audit requirements.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Approved By",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       },
+       {
+        "name": "approved_date",
+        "column_name": "approved_date",
+        "type": "DATE",
+        "business_glossary_term": "Approved Date",
+        "description": "Date on which the campaign received final approval from the authorized merchandising or marketing stakeholder.",
+        "value_regex": "",
+        "tags": "",
+        "foreign_key_to": "",
+        "references": "",
+        "tag_set": [
+         {
+          "key": "dbx_business_glossary_term",
+          "value": "Approved Date",
+          "kind": "key_value",
+          "source": "derived"
+         }
+        ],
+        "steward": ""
+       }
+      ]
+     }
+    ]
+   }
+  ],
+  "metric_views": []
+ }
+}

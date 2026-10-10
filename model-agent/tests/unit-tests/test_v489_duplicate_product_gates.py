@@ -21,7 +21,7 @@ import re
 import pytest
 
 from notebook_source_util import (assert_agent_version_at_least, cell_containing,
-                                 slice_function_source)
+                                 slice_function_source, vov_ledger_globals)
 
 I3_ANCHOR = '"duplicate_product_pair"'
 COLLISION_ANCHOR = "P0.74-COLLISION-CROSSDOMAIN"
@@ -43,14 +43,14 @@ class _Log:
 
 def _norm():
     src = cell_containing("def _v489_norm_entity")
-    ns = {"re": re}
+    ns = {"re": re, **vov_ledger_globals()}
     exec(slice_function_source("_v489_norm_entity", src), ns)
     return ns["_v489_norm_entity"]
 
 
 def _run_collisions(products, domains=None):
     src = cell_containing(COLLISION_ANCHOR)
-    ns = {"re": re}
+    ns = {"re": re, **vov_ledger_globals()}
     exec("\n\n".join(slice_function_source(f, src) for f in
                      ("_p074_qualified_rename", "_validate_product_name_collisions")), ns)
     log = _Log()
@@ -66,12 +66,15 @@ def _run_i3(products_by_domain):
     end = src.index("    # I4:")
     body = src[start:end]
     if "_v489_norm_entity" in body:
-        ns = {"re": re}
+        ns = {"re": re, **vov_ledger_globals()}
         exec(slice_function_source("_v489_norm_entity",
                                    cell_containing("def _v489_norm_entity")), ns)
     else:
-        ns = {"re": re}
-    ns.update({"issues": [], "products_by_domain": products_by_domain, "logger": _Log()})
+        ns = {"re": re, **vov_ledger_globals()}
+    products_data = [dict(p, domain=p.get("domain") or d) if isinstance(p, dict) else {"domain": d, "product": p}
+                     for d, ps in products_by_domain.items() for p in ps]
+    ns.update({"issues": [], "products_by_domain": products_by_domain, "logger": _Log(),
+               "products_data": products_data, "attributes_data": []})
     exec("if True:\n" + body, ns)
     return ns["issues"]
 

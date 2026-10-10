@@ -58,7 +58,7 @@ Set only these, leave everything else on its default, and run:
 
 > **Notebook layout (v4.2.8+):** the first markdown cell links to the two Databricks Vibe Data Modelling blogs and the [40 Lakehouse Industry Data Models](https://www.databricks.com/blog/jumpstart-your-data-modeling-databricks-industry-data-models) repo. Widget labels in the UI match the table below.
 
-That produces v1: the logical `model.json`, physical schemas/tables/FKs/tags, metric views, sample data, docs, and a `next_vibes.txt`.
+That produces v1: the logical `model.json`, physical schemas/tables/FKs/tags, metric views, docs, and a `next_vibes.txt`. Sample data comes from the standalone [model installer](../model-installer/data-model-installer.ipynb).
 
 **Dry Run vs Full Run (widget 03a).** `Full Run` (the default) deploys the model to Unity Catalog. `Dry Run` runs the entire pipeline and writes every volume artifact (`model.json`, the runnable `schemas/*.sql` and `metrics/*.sql` DDL, DBML, docs) but creates nothing in the catalog. Deploy a Dry Run output later with `install model` or the standalone installer pointed at the `model.json` path. Dry Run applies to the generative operations (`new base model`, `vibe modeling of version`, `shrink ecm`, `enlarge mvm`); `install model` and `uninstall model version` always deploy regardless of Run Type.
 
@@ -68,28 +68,30 @@ Same notebook — change **03. Operation** and fill the few widgets each mode ne
 
 | To do this | Set Operation to | Also set |
 |:---|:---|:---|
-| **Refine an existing version (VOV)** | `vibe modeling of version` | **04. Version** = the version to build on · **08. Model Vibes** = your changes in plain English (or paste `next_vibes.txt`). Writes a **new** version N+1; the source version is untouched. |
+| **Refine an existing version (VOV)** | `vibe modeling of version` | **04. Version** = the version to build on · **08. Model Vibes** (required) = your changes in plain English, or the path of the source version's `vibes/next_vibes.txt`. The source version's next_vibes are never applied automatically. Writes a **new** version N+1; the source version is untouched. |
 | **Shrink an ECM to a lean MVM** | `shrink ecm` | **04. Version** · **09. Installation Catalog** |
 | **Enlarge an MVM to a full ECM** | `enlarge mvm` | **04. Version** · **09. Installation Catalog** |
 | **Deploy a logical model to the catalog** | `install model` | **11. Model JSON File** (path to a `model.json`) · **09. Installation Catalog** |
 | **Remove a version's physical objects** | `uninstall model version` | **01. Business** · **04. Version** · **09. Installation Catalog** |
-| **Add sample rows to a deployed model** | `generate sample data` | **11. Model JSON File** · **09. Installation Catalog** · **10. Sample Records** (> 0) |
+| **Add sample rows to a deployed model** | Not an agent operation | Use the standalone [model installer](../model-installer/data-model-installer.ipynb): **8. local install** = the `model.json` path · **9. generate samples** = `Yes` · **10. sample rows** |
+
+In `vibe modeling of version`, the base model's conventions win over the convention widgets (12, 13, 15, 16 and 17 to 21). The run logs a WARN that lists every widget value it ignored. A scoped run (**06a**) is refused when its base is older than the latest version that is not a Dry Run.
 
 **Vibes** (widget 08) are free-form English — inline (up to 2,000 chars) or a path to a `.txt` on a UC Volume. Examples: `"Add a compliance domain with regulatory_filing and audit_trail tables"`, `"Mark all email columns as PII"`, `"Merge customer_support into the customer domain"`.
 
 ### 3. Where the outputs land
 
-**Artifact files — on a UC Volume** under the installation catalog:
+**Artifact files**, on a UC Volume under the metamodel catalog (widget **10**; blank = the installation catalog):
 
 ```
 /Volumes/{catalog}/_metamodel/vol_root/
-├── business/{business}/{scope}_v{N}/      # e.g. airlines/mvm_v1
+├── business/{business}/v{N}/{scope}/      # e.g. airlines/v1/mvm
 │   ├── model.json                         # the authoritative logical model
-│   ├── domains/ products/ attributes/ fk_links/
-│   ├── artifacts/                         # README, Excel, DBML diagram, RDFS ontology
-│   ├── samples/                           # one CSV per table
+│   ├── readme.md                          # model overview
+│   ├── schemas/ metrics/                  # runnable DDL and metric-view SQL
+│   ├── docs/ diagram/ ontology/           # Excel/CSV, DBML diagram, RDF ontology
 │   └── vibes/next_vibes.txt               # suggested refinements for the next run
-└── logs/{business}/{scope}_v{N}/          # info + error logs for the run
+└── logs/{business}/v{N}/{scope}/          # info + error logs for the run
 ```
 
 **Model state — in the `_metamodel` schema** (query it with plain SQL):
@@ -232,11 +234,11 @@ Findings are applied automatically, tracked as landed / regressed / blocked, and
 - **A physical deployment in Unity Catalog** — schemas, tables, foreign keys (informational), and classification tags.
 - **Unity Catalog metric views** — reusable KPI definitions on the products, ready for AI/BI dashboards and Genie.
 - **An RDFS ontology** for semantic tools and AI agents, and a **DBML file** for dbdiagram.io.
-- **Synthetic sample data** generated against the same model, plus a full pipeline log and a **`next_vibes.txt`** file of suggested refinements.
+- **A full pipeline log** and a **`next_vibes.txt`** file of suggested refinements. Synthetic sample data comes from the standalone [model installer](../model-installer/data-model-installer.ipynb), against the same model.
 
 ### `model.json`: one source of truth
 
-Everything the agent produces derives from one artifact: **`model.json`**. The physical deployment, the ontology, the DBML diagram, the metric views, the sample data, the docs, and the `next_vibes` suggestions are all generated from it. Nothing is authored twice, so the logical model and every downstream artifact can never drift apart.
+Everything the agent produces derives from one artifact: **`model.json`**. The physical deployment, the ontology, the DBML diagram, the metric views, the docs, and the `next_vibes` suggestions are all generated from it. Nothing is authored twice, so the logical model and every downstream artifact can never drift apart.
 
 | Artifact | What it is |
 |:---|:---|
@@ -258,7 +260,7 @@ When you set a deployment catalog, **domains become schemas, products become Del
 | **Foreign keys** | Informational FK constraints between tables |
 | **Tags** | Unity Catalog tags on schemas, tables, and columns |
 | **Metric views** | Reusable KPI definitions for dashboards and Genie |
-| **Sample data** | Synthetic records with valid FK references |
+| **Sample data** | Synthetic records with valid FK references, loaded by the standalone model installer |
 
 ---
 
@@ -317,7 +319,8 @@ The same notebook does more than build a first model. The **operation** widget s
 | **`enlarge mvm`** | Expand an MVM into a comprehensive ECM |
 | **`install model`** | Deploy a logical model into physical Unity Catalog objects |
 | **`uninstall model version`** | Remove a version's physical artifacts from the catalog |
-| **`generate sample data`** | Generate synthetic records for a deployed model |
+
+Sample data is not an agent operation since agent 4.8.0; the standalone model installer generates it.
 
 ### How to vibe a version
 
@@ -395,14 +398,16 @@ The notebook exposes fine-grained widgets for naming conventions, tag prefixes, 
 | 01 | **Business (name)** | Yes | Your business/organization name |
 | 02 | **Description** | Recommended | What your business does — richer input, richer model |
 | 03 | **Operation** | Yes | Pipeline operation (see table above) |
-| 04 | **Version** | Conditional | Version to build on (for vibe/shrink/enlarge/install) |
+| 03a | **Run Type** | No | `Full Run` (default) deploys to Unity Catalog. `Dry Run` builds the model and every volume artifact but deploys nothing. A Dry Run version is a draft: it never counts as the latest version |
+| 04 | **Version** | Conditional | Version to build on (for vibe/shrink/enlarge) or to uninstall. A `vibe modeling of version` with this blank builds on the latest completed version that is not a Dry Run |
 | 05 | **Model Scope** | Yes | MVM (lean) or ECM (comprehensive) |
-| 06 | **Business Domains** | No | Comma-separated seed domains — kept verbatim if you set them |
+| 06 | **Business Domains** | Conditional | Comma-separated domains. With **06a** on `All Domains`: optional seed domains, kept verbatim if you set them. Under a scope: required, and it is the scope list, `d1, d2` for `Some Domains` or `d1.s1, d2.s2` (domain.subdomain) for `Some Subdomains` |
+| 06a | **Vibe Scope** | No | `All Domains` (default), `Some Domains` or `Some Subdomains`. A scoped value limits a `vibe modeling of version` or `new base model` run to the entries in **06**. Everything else stays frozen, apart from a few boundary FK and metric-view fixes. Other operations reject a scoped value, and a scoped `vibe modeling of version` is refused when its base is older than the latest version that is not a Dry Run. See [Vibe Scope Semantics](docs/design-guide.md#vibe-scope-semantics-widget-06a) |
 | 07 | **Included Org Divisions** | Yes | Operations / Operations and Business / all three |
-| 08 | **Model Vibes** | Conditional | Natural-language instructions — inline text or a path to a `.txt` on a UC Volume |
+| 08 | **Model Vibes** | Conditional | Natural-language instructions — inline text or a path to a `.txt` on a UC Volume. Required for `vibe modeling of version` (an empty value fails preflight; pass the source version's `vibes/next_vibes.txt` path to apply its suggestions) |
 | 09 | **Installation Catalog** | Conditional | Unity Catalog target for physical deployment |
 | 09a | **Cataloging Style** | No | Physical catalog layout: `One Catalog` (whole model in one), `Catalog per Division`, or `Catalog per Domain` |
-| 10 | **Sample Records** | No | Synthetic records per table (0 = none) |
+| 10 | **Metamodel Catalog** | No | Catalog for the `_metamodel` registry and its volume (model.json, logs, next_vibes). Blank = the installation catalog. Sample data moved to the standalone model installer in agent 4.8.0 |
 | 11 | **Model JSON File** | Conditional | Path to a previously generated `model.json` for re-install or continuation |
 
 ---

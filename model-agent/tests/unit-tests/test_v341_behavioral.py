@@ -164,6 +164,7 @@ def _bind_run_selffixer():
     ns = {
         "SelfFixer": _FakeSelfFixer,
         "execute_in_sandbox": lambda *a, **k: None,
+        "_VIBE_SCOPE_RUNTIME": None,
     }
     exec(fn, ns)
     return ns["run_selffixer_or_skip"], captured

@@ -1,6 +1,6 @@
 import ast
 
-from notebook_source_util import agent_version_line
+from notebook_source_util import agent_version_line, pk_suffix_globals
 import json
 import re
 from pathlib import Path
@@ -50,6 +50,7 @@ def _validator_class():
         "_vov_user_product_tokens": lambda config: set(),
         "_vibe_get_system_meta": lambda value, key: "",
         **_coerce_helpers(),
+        **pk_suffix_globals(),
     }
     exec(match.group(0).lstrip("\n"), namespace)
     return namespace["SmartWorkerValidator"]

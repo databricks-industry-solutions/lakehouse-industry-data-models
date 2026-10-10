@@ -129,3 +129,49 @@ def test_alias_markers_present():
     src = _all_source()
     for alias in ("alias=dry-run-mode", "alias=dry-run-skip-physical"):
         assert alias in src, alias
+
+
+class _GtLog:
+    def __init__(self):
+        self.infos = []
+
+    def info(self, msg, *a, **k):
+        self.infos.append(str(msg))
+
+    warning = error = debug = info
+
+
+class _GtSpark:
+    def __init__(self):
+        self.queries = []
+
+    def sql(self, query):
+        self.queries.append(query)
+        raise RuntimeError("the physical catalog holds the previous version")
+
+
+def _gt_inputs(dry_run):
+    import types
+    req = types.SimpleNamespace(req_id="VREQ-0001", text="add adjustment_reason_code to inventory.stock_adjustment")
+    orch = types.SimpleNamespace(manifest=types.SimpleNamespace(requirements=[req]))
+    log, spark = _GtLog(), _GtSpark()
+    wv = {"logger": log, "spark": spark, "vibe_orchestrator": orch, "_dry_run": dry_run,
+          "config": {"TARGET_CATALOG": "cat", "CATALOGING_STYLE": "one_catalog", "MODEL_CONVENTIONS": {}},
+          "domains": [{"domain": "inventory"}],
+          "products": [{"domain": "inventory", "product": "stock_adjustment", "table_name": "stock_adjustment"}]}
+    return wv, log, spark
+
+
+def test_a_dry_run_never_grounds_adherence_on_the_previous_physical_catalog():
+    wv, log, spark = _gt_inputs(dry_run=True)
+    ah._run_ground_truth_audit(wv)
+    assert spark.queries == []
+    assert "_ground_truth_scorecard" not in wv
+    assert any("gt-skip-dry-run FIRED v5.2.1" in m for m in log.infos)
+
+
+def test_a_full_run_still_reads_the_physical_catalog():
+    wv, log, spark = _gt_inputs(dry_run=False)
+    ah._run_ground_truth_audit(wv)
+    assert spark.queries and "information_schema.columns" in spark.queries[0]
+    assert not any("gt-skip-dry-run" in m for m in log.infos)

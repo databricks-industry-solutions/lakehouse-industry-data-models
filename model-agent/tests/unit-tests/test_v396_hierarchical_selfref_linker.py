@@ -50,7 +50,10 @@ def _deps(src, cycle_returns=False):
         "_would_create_bidirectional_fk": lambda *a, **k: (False, None),
         "_would_create_cycle": lambda *a, **k: cycle_returns,
         "_sync_fk_type_with_pk": lambda attr, fk_ref, attrs, logger: None,
+        "_VIBE_SCOPE_RUNTIME": None,
     }
+    for dep in ("get_vibe_scope_runtime", "_vibe_scope_product_test"):
+        exec(compile(slice_function_source(dep, src), "<vibe-scope>", "exec"), g)
     # real detector
     exec(compile(slice_function_source(DETECTOR, src), "<det>", "exec"), g)
     return g

@@ -158,11 +158,12 @@ def test_rc4_mixed_drops_only_malformed_token():
 # --------------------------------------------------------------------------- RC3
 def _load_v403():
     ns = exec_functions_namespace(
-        ["_detect_direct_bidirectional_links", "_detect_cycles_dfs",
+        ["_vibe_scope_product_test", "_detect_direct_bidirectional_links", "_detect_cycles_dfs",
          "_v403_break_cycles_in_serialized_model"],
         extra_globals={
             "defaultdict": __import__("collections").defaultdict,
             "_break_cycles_heuristic_internal": (lambda *a, **k: ([], [])),
+            "_VIBE_SCOPE_RUNTIME": None,
         },
     )
     return ns["_v403_break_cycles_in_serialized_model"]

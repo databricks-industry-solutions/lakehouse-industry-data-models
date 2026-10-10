@@ -1,9 +1,16 @@
 import json
 import os
 import re
+import sys
 import types
+from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conftest  # noqa: F401,E402
+import agent_helpers  # noqa: F401,E402
+from notebook_source_util import pk_predicate_globals, vov_ledger_globals  # noqa: E402
 
 NB = os.path.join(os.path.dirname(__file__), "..", "..", "agent", "dbx_vibe_modelling_agent.ipynb")
 
@@ -38,20 +45,25 @@ def _slice_def(src, name):
     return body
 
 
+def _cell_defining(cells, name):
+    pattern = re.compile(r"^\s*def %s\b" % re.escape(name), re.MULTILINE)
+    return next(src for src in cells if pattern.search(src))
+
+
 def _load_parser_and_finalizer():
     cells = _cells()
-    ns = {"re": re}
-    exec(_slice_def(cells[56], "_vov_named_create_targets"), ns)
-    exec(_slice_def(cells[138], "_v441_reviewer_finalization"), ns)
+    ns = {"re": re, **pk_predicate_globals(), **vov_ledger_globals()}
+    exec(_slice_def(_cell_defining(cells, "_vov_named_create_targets"), "_vov_named_create_targets"), ns)
+    exec(_slice_def(_cell_defining(cells, "_v441_reviewer_finalization"), "_v441_reviewer_finalization"), ns)
     return ns
 
 
 def _load_pcc():
     """_verify_product_create_coverage sliced as a standalone fn; drop leading `self` at call."""
     cells = _cells()
-    ns = {"re": re}
-    exec(_slice_def(cells[56], "_vov_named_create_targets"), ns)
-    body = _slice_def(cells[100], "_verify_product_create_coverage")
+    ns = {"re": re, **pk_predicate_globals(), **vov_ledger_globals()}
+    exec(_slice_def(_cell_defining(cells, "_vov_named_create_targets"), "_vov_named_create_targets"), ns)
+    body = _slice_def(_cell_defining(cells, "_verify_product_create_coverage"), "_verify_product_create_coverage")
     exec(body, ns)
     return ns
 

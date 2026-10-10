@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOK_PATH = REPO_ROOT / "agent" / "dbx_vibe_modelling_agent.ipynb"
 
 
-def notebook_concat_source() -> str:
+def notebook_code_cells() -> list[str]:
     nb = json.loads(NOTEBOOK_PATH.read_text(encoding="utf-8"))
     parts = []
     for cell in nb.get("cells", []):
@@ -21,7 +21,11 @@ def notebook_concat_source() -> str:
             src = "".join(src)
         if src.strip():
             parts.append(src)
-    return "\n\n".join(parts)
+    return parts
+
+
+def notebook_concat_source() -> str:
+    return "\n\n".join(notebook_code_cells())
 
 
 def notebook_symbol_inventory() -> dict[str, Any]:

@@ -1,6 +1,11 @@
 import ast
 import json
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conftest  # noqa: F401,E402
+import agent_helpers as ah  # noqa: E402
 
 NB_PATH = Path(__file__).resolve().parents[2] / "agent" / "dbx_vibe_modelling_agent.ipynb"
 
@@ -20,7 +25,7 @@ def _build_ns():
     keep = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name.startswith(_PREFIXES)]
     mod = ast.Module(body=keep, type_ignores=[])
     ast.fix_missing_locations(mod)
-    ns = {"re": __import__("re"), "copy": __import__("copy")}
+    ns = dict(vars(ah), re=__import__("re"), copy=__import__("copy"))
     exec(compile(mod, str(NB_PATH), "exec"), ns)
     return ns
 

@@ -82,8 +82,10 @@ def test_v505_both_builders_emit_display_name_and_format():
     """Deterministic-fallback builder AND LLM builder must call the format emitter + display_name."""
     src = _all_source()
     assert src.count("_emit_mv_format_yaml(") >= 3, "v5.0.5: format emitter must be called in both builders"
-    assert "yaml_lines.extend(_emit_mv_window_yaml(meas.get(\"window\"), 6))" in src, "v5.0.5: LLM builder must emit window"
-    assert "yaml_lines.extend(_emit_mv_partition_yaml(meas.get(\"partition\"), 6))" in src, "v5.0.5: LLM builder must emit partition"
+    assert "_block.extend(_emit_mv_window_yaml(_meas_window, 6))" in src, "v5.0.5: LLM builder must emit window"
+    assert "_block.extend(_emit_mv_partition_yaml(_meas_partition, 6))" in src, "v5.0.5: LLM builder must emit partition"
+    assert "_mv_resolve_measure_refs(meas.get(\"window\"), meas.get(\"partition\"), _emitted_dims)" in src, (
+        "v5.1.5: the emitted window/partition are the ones resolved against the emitted dimensions")
 
 
 def test_v505_agg_derived_measures_exempt_from_colcheck():

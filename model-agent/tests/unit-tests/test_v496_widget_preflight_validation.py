@@ -52,8 +52,11 @@ def _extract_toplevel_func(src, name):
 
 
 def _load(name):
+    import agent_helpers as ah
+
     src = _src_containing("def %s(" % name)
-    g = {}
+    g = {dep: getattr(ah, dep) for dep in ("parse_vibe_scope", "_VIBE_SCOPE_SUPPORTED_OPERATIONS",
+                                            "_vibe_scope_convention_changes", "_vibe_scope_model_conventions")}
     exec(_extract_toplevel_func(src, name), g)
     return g[name]
 

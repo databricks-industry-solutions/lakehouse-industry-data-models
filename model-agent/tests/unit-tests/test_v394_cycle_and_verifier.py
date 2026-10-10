@@ -93,7 +93,7 @@ def _extract_method(class_name, method_name):
 
 
 def _ns_with(func_sources):
-    ns = {"defaultdict": defaultdict}
+    ns = {"defaultdict": defaultdict, "_VIBE_SCOPE_RUNTIME": None}
     blob = "\n\n".join(func_sources)
     exec(compile(blob, "<v394-extract>", "exec"), ns)
     return ns
@@ -103,6 +103,8 @@ def _ns_with(func_sources):
 # FIX #1 -- deterministic SSOT cycle/bidirectional break at VOV finalize
 # ---------------------------------------------------------------------------
 _CYCLE_DEPS = [
+    "_vibe_scope_product_test",
+    "_vibe_scope_frozen_edges",
     "_detect_direct_bidirectional_links",
     "_detect_cycles_dfs",
     "_compute_edge_betweenness_for_cycles",

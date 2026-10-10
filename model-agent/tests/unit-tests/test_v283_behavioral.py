@@ -24,6 +24,8 @@ so the assertion fails on the pre-patch HEAD (which never emits TARGET_ENTITIES_
 [VOV-OUTCOME-SUMMARY], or a populated _inlined_chunks).
 """
 import json
+
+from notebook_source_util import vov_ledger_globals
 import re
 import textwrap
 import logging
@@ -175,7 +177,8 @@ def test_outcome_summary_reports_by_status():
         _OC("B4", "rejected_unsafe", ["VREQ-4"], "post-condition FAILED — none intersected target_entities"),
     ]
     lg = _FakeLogger()
-    ns = {"_new_outcomes": new_outcomes, "_eloop": 2, "logger": lg}
+    ns = {**vov_ledger_globals(), "_new_outcomes": new_outcomes, "_eloop": 2, "logger": lg,
+          "outcomes": list(new_outcomes), "_outcomes_before": 0, "_remaining_vreqs": [], "initial_model": {}, "model": {}}
     exec(compile(block, "<summary>", "exec"), ns)
 
     summ = [m for m in lg.infos if "VOV-OUTCOME-SUMMARY FIRED" in m]

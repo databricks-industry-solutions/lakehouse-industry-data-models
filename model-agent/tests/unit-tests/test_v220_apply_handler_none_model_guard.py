@@ -84,6 +84,10 @@ def _exec_fn(src: str, name: str, ns_extra=None):
         "Tuple": _Tup,
         "Any": _Any,
     }
+    ns["_VIBE_SCOPE_RUNTIME"] = None
+    exec(re.search(r"^_VIBE_SCOPE_ENGINE_STATUSES = .*$", _load_source(), re.M).group(0), ns)
+    for dep in ("verify_scope_invariants", "_vibe_scope_status_of", "_vibe_scope_engine_gate"):
+        exec(compile(_extract_fn(dep), f"<{dep}>", "exec"), ns)
     if ns_extra:
         ns.update(ns_extra)
     exec(compile(src, f"<{name}>", "exec"), ns)

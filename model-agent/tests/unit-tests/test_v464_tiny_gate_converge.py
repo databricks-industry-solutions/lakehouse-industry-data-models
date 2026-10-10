@@ -81,12 +81,14 @@ def test_tiny_by_products_skips_all_four_gates():
     assert set(skipped) == set(ALL_FOUR)
 
 
-def test_tiny_by_domains_only_skips_all_four_gates():
+def test_domains_only_is_not_tiny_without_a_product_bound():
+    """v5.1.6 tiny-gate-explicit-report-only: a domain count (widget roster or vibe) says
+    nothing about model size, so it no longer switches off the production gates."""
     ns = _tier_ns()
     f = ns["_tier_aware_architect_gate_keys"]
-    active, skipped = f({"max_domains": 4})  # <=5 -> tiny even with no product cap
-    assert active == ()
-    assert set(skipped) == set(ALL_FOUR)
+    active, skipped = f({"max_domains": 4})
+    assert set(active) == set(ALL_FOUR)
+    assert skipped == ()
 
 
 def test_full_tier_keeps_all_four_gates():

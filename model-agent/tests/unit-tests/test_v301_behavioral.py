@@ -25,7 +25,7 @@ import textwrap
 
 import pytest
 
-from notebook_source_util import notebook_concat_source
+from notebook_source_util import notebook_concat_source, vov_ledger_globals
 
 SRC = notebook_concat_source()
 
@@ -53,7 +53,9 @@ def _load_cluster():
     m = re.search(r"def _v251_model_root\(.*?(?=\ndef _v260_diagnose_slip)", SRC, re.DOTALL)
     assert m, "v251 cluster not found in agent notebook"
     block = textwrap.dedent(m.group(0))
-    ns = {"re": re, "copy": _copy_mod, "VReqOutcome": _VReqOutcome, "logger": _Log()}
+    ns = {**vov_ledger_globals(), "re": re, "copy": _copy_mod, "VReqOutcome": _VReqOutcome, "logger": _Log(), "_VIBE_SCOPE_RUNTIME": None}
+    from notebook_source_util import slice_function_source
+    exec(compile(slice_function_source("_vibe_scope_note_rename"), "<_vibe_scope_note_rename>", "exec"), ns)
     exec(compile(block, "agent_notebook_v251", "exec"), ns)
     return ns
 

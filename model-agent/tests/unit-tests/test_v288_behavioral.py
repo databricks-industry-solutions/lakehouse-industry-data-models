@@ -41,7 +41,9 @@ LIVE_IMPORT_TRACE = ("sandbox_or_verifier_failed: ok=False ver_ok=False "
 
 
 def _exec_hints_ns():
+    import agent_helpers as ah
     ns = {"__name__": "_v288_hints"}
+    ns.update({k: getattr(ah, k) for k in ("_VOV_RENAME_HINT_NEEDLE", "_VOV_RENAME_RETRY_HINT", "_VOV_SCOPE_RETRY_HINTS")})
     exec(compile(slice_function_source("_v204_ast_class_hints", source=SRC),
                  "<_v204_ast_class_hints>", "exec"), ns)
     return ns
@@ -118,7 +120,7 @@ def test_call_opus_accepts_and_prepends_retry_hint():
 def test_fix_one_req_threads_ast_hints_on_retry():
     cls = _selffixer_class_src()
     # The retry hint must be computed from the prior failure via the shared helper, gated on attempt>0.
-    assert "_v204_ast_class_hints(last_err)" in cls, \
+    assert "_v204_ast_class_hints(last_err" in cls, \
         "_fix_one_req must feed last_err through _v204_ast_class_hints"
     assert "attempt > 0" in cls and "last_err" in cls, \
         "retry hint must be gated on attempt>0 with a non-empty last_err"

@@ -24,6 +24,8 @@ from pathlib import Path
 
 import pytest
 
+from notebook_source_util import vov_ledger_globals
+
 NB_PATH = Path(__file__).resolve().parents[2] / "agent" / "dbx_vibe_modelling_agent.ipynb"
 
 
@@ -68,7 +70,7 @@ def module_ns(src: str) -> dict:
                     break
     new_module = ast.Module(body=keep_nodes, type_ignores=[])
     ast.fix_missing_locations(new_module)
-    ns = {"__name__": "v230_test_ns", "ast": ast, "re": re}
+    ns = {**vov_ledger_globals(), "__name__": "v230_test_ns", "ast": ast, "re": re}
     code = compile(new_module, str(NB_PATH), "exec")
     exec(code, ns)
     return ns

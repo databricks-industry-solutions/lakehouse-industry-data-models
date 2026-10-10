@@ -1,6 +1,8 @@
 import json, re, os, copy
 import pytest
 
+from notebook_source_util import vov_ledger_globals
+
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 NB = os.path.join(REPO, "agent", "dbx_vibe_modelling_agent.ipynb")
 NB_PRE = "/tmp/agent_pre_v337.ipynb"
@@ -25,7 +27,8 @@ def _extract_top_fn(src, name):
 
 def _bind():
     src = _full_src(NB)
-    ns = {"re": re, "copy": copy}
+    ns = {**vov_ledger_globals(), "re": re, "copy": copy, "_VIBE_SCOPE_RUNTIME": None}
+    exec(_extract_top_fn(src, "_vibe_scope_note_rename"), ns)
     try:
         ns2 = {"re": re}
         exec(_extract_top_fn(src, "sanitize_name"), ns2)
@@ -39,6 +42,9 @@ def _bind():
         "_v337_parse_priority_quote",
         "_v337_extract_col_rename",
         "_v337_extract_move_target",
+        "_v337_negated_before",
+        "_v337_extract_domain_rename",
+        "_v337_extract_domain_merge",
         "_v337_rewire_fks",
         "_v337_find_product",
         "_v337_classify_op",
@@ -47,6 +53,16 @@ def _bind():
         "_v337_apply_move_product",
         "_v337_apply_rename_attribute",
         "_v337_deterministic_mutate",
+        "_v337_move_names_product",
+        "_v337_table_pairs",
+        "_v337_rewire_metric_views",
+        "_vov285_san",
+        "_v251_model_root",
+        "_v251_find_domain",
+        "_mv_sql_qualified_ref_pattern",
+        "_mv_sql_apply_rename_map",
+        "_mv_sql_table_qualifiers",
+        "_mv_sql_apply_column_renames",
     ):
         exec(_extract_top_fn(src, fn), ns)
     return ns

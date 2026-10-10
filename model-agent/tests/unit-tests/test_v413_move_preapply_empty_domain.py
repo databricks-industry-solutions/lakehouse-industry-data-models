@@ -172,7 +172,8 @@ def test_slip_move_never_unsupported_action_POST():
 def test_preapply_wired_before_batching_POST(agent_source_text):
     src = agent_source_text
     assert "v413-mech-vreq-preapply FIRED v4.1.3" in src
-    assert "_v413_apply_det_op_inplace(model, _v413_op)" in src
+    assert "_vibe_scope_apply_det_op(model, _v413_op, \"v413-preapply\"" in src
+    assert "return model, _v413_apply_det_op_inplace(model, op), (\"\", \"\")" in src
     # must run BEFORE the LLM batching kwargs are assembled in _apply_batches_for_vreqs
     pre_at = src.find("v413-mech-vreq-preapply FIRED v4.1.3")
     batch_at = src.find('_batch_kwargs = {"llm": llm}')

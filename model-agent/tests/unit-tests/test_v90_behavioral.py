@@ -154,7 +154,7 @@ def test_v90_alias_p73g_inverted_domain_desc():
 def test_v90_alias_p73i_prefix_strip_all_products():
     assert "finalize-prefix-strip-all-products" in ALL_SOURCE
     # Sanity: skips PKs and FKs
-    assert "if _name_lc == _expected_pk:" in ALL_SOURCE
+    assert "if _name_lc == _expected_pk or _v516_is_pk_attr(_a, _p73i_pk_map):" in ALL_SOURCE
     assert "if _a.get('foreign_key_to'):" in ALL_SOURCE
 
 

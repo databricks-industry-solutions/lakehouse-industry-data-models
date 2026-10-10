@@ -261,6 +261,8 @@ When the user supplied a VibeContract (`model_vibes` widget), `evaluate_fidelity
 
 ## 8. Sample Data Generation (Step 14, v0.6.8+)
 
+Agent 4.8.0 and later skip this stage: the standalone model installer (`model-installer/data-model-installer.ipynb`) generates sample data. The gates below describe the agent's engine before 4.8.0.
+
 The pool-based engine (P0.20) replaces the prior CSV row-generator. Its gates:
 
 | Gate | What it asserts | Failure mode |
@@ -307,11 +309,39 @@ Issues that didn't block the run but the architect / gates surfaced are captured
 | **SAFE_IGNORE** | Acknowledged but acceptable. E.g. scope-appropriate over-allocation. |
 | **INFO** | Observation. E.g. value_regex consolidation candidates. |
 
-Emitted as `/tmp/vibe_spill/next_vibes_<run_id>.jsonl` and `.md`. The **next** run's `operation="vibe modeling of version"` feeds these back to the architect prompt as `{previous_run_feedback}`.
+Written to the version's `vibes/next_vibes.txt` on the volume. The **next** run never applies them on its own: an `operation="vibe modeling of version"` run takes its instructions only from widget `08. Model Vibes`, which may hold the path of that `next_vibes.txt`. An empty `08. Model Vibes` fails preflight.
 
 **Questions answered:**
 1. What did this run choose not to fix, and why? → BLOCKING vs SAFE_IGNORE.
 2. Is there a sensible next-version scope? → BLOCKING items define it.
+
+---
+
+## 11. Scope Fence and Rename Gates
+
+Agent 5.1.4 adds six categories to `run_metamodel_static_analysis`. Five belong to the `vibe_scope` fence and run only in scoped runs (widget 06a set to `Some Domains` or `Some Subdomains`). The sixth catches a rename that left its original behind, on every run.
+
+| Category | Severity | Runs on | What it asserts | Repair | Rule |
+|---|---|---|---|---|---|
+| `vibe_scope_out_of_scope_change` | error | Scoped runs | Every out-of-scope domain, product, attribute and metric view, and the model-level metadata, equals the base model, apart from the permitted deltas P1 to P5. Only fields that model.json stores count: working fields such as `is_primary_key`, `nullable` or `classification` are ignored | Checkpoints restore the base record; the serialize gate splices the out-of-scope sections from the base model.json | QGATE-RUL-013 |
+| `vibe_scope_dependency_conflict` | warning | Scoped runs | No in-scope change breaks an out-of-scope artifact in a way P1 to P5 cannot repair, and no referenced in-scope table disappears without an explicit drop | The change is rejected or rolled back; an unrequested drop is restored from the base model | QGATE-RUL-014 |
+| `vibe_scope_dangling_boundary_fk` | info | Scoped runs | No out-of-scope FK still points at an in-scope target that an explicit rename, move or drop removed | The boundary reconciler re-points the FK (P1) or clears it (P2) | QGATE-RUL-015 |
+| `vibe_scope_subdomain_violation` | error | `Some Subdomains` runs | Every new product in a listed domain uses a listed subdomain | The product is removed with its references | QGATE-RUL-016 |
+| `vibe_scope_extra_domain` | error | Scoped runs | The model gains no domain that is neither in the base model nor in the scope list | The domain and its products are dropped | QGATE-RUL-017 |
+| `rename_leftover_original` | error | Every run | No product survives next to a renamed copy of itself in the same domain | A rule-based autofix merges error-level pairs: it keeps the new name, moves the leftover's extra columns and FKs onto it, drops the leftover and records the merge in the change and rename ledgers. In a scoped run it merges only pairs whose both sides are in scope and reports the rest (`rename-leftover-fence-report`). The category is in SelfFixer's `_fixable` list and in the requeue `_ACTIONABLE_CATEGORIES` for any residual | QGATE-RUL-018 |
+| `domain_database_name_mismatch` | warning | Every run | A domain's `database_name` carries the domain's own name under the naming convention (a schema prefix or suffix is allowed), so its tables deploy into its own schema | The finding goes to the SelfFixer (`_fixable`). A deterministic domain rename replaces the old name inside `database_name`, keeping any prefix or suffix | QGATE-RUL-021 |
+| `invalid_table_name` | error | Every run | Every product's `table_name` is a plain SQL identifier, so its DDL can create the table | The finding goes to the SelfFixer (`_fixable`). The LLM fallback mutation gate rejects a `table_name` or `primary_key` value that is not an identifier | QGATE-RUL-022 |
+
+**How `rename_leftover_original` pairs products.** Two products in the same domain form a pair in one of two ways. A ledger pair is one the rename ledger records as renamed, followed through any later domain rename. A name-extension pair is one where one name extends the other at a word boundary (`x` next to `x_y` or `y_x`); the product with fewer business columns is taken as the old one, and a pair whose longer name is just the domain name plus the shorter one is left to `duplicate_product_pair`. The overlap is the Jaccard index of the two products' business columns, so the primary key, history and housekeeping columns do not count. A name-extension pair is flagged as an error when the overlap is at least 70%. A ledger pair is always flagged: as an error at 70% or more, and as a warning below that (for example a stub recreated under the old name). The autofix merges only error-level pairs and never merges a name-extension pair whose old name the user named. So `livestock_procurement` next to `livestock_procurement_allocation` with almost the same columns is flagged and merged, while `purchase_order` next to `purchase_order_line` is not flagged.
+
+**The fence repairs its own findings.** The five `vibe_scope_*` categories are deliberately left out of SelfFixer's `_fixable` list, because an LLM repair could edit frozen tables. This is the documented exception to QGATE-RUL-011 (Gates Wired Into Agentic Repair Loop). Other categories still requeue in a scoped run, with two limits: a finding that touches only out-of-scope entities is dropped (`vibe-scope-requeue`), and a finding that touches both sides is requeued with an instruction to repair only the in-scope part.
+
+**Fail closed.** Before `model.json` is written, the serialize gate re-checks the fence. If a problem remains, `model.json` is not written and the run halts (`vibe-scope-serialize-gate`, `vibe-scope-serialize-halt`).
+
+**Questions answered:**
+1. Did a scoped run change anything outside its scope? → `vibe_scope_out_of_scope_change`, then the fail-closed write.
+2. Did an in-scope change break an out-of-scope table, FK or metric view? → `vibe_scope_dependency_conflict` and `vibe_scope_dangling_boundary_fk`.
+3. Did a rename leave the old product behind? → `rename_leftover_original`.
 
 ---
 
@@ -332,6 +362,7 @@ Emitted as `/tmp/vibe_spill/next_vibes_<run_id>.jsonl` and `.md`. The **next** r
 | Sample Gen | 8 | No (fallback tiers) | No | No |
 | Invariant Drift | 4 invariants | No | No | WARNING if drift |
 | Next Vibes Collection | — | No | Itself is the sink | — |
+| Scope fence + rename gates (§11) | 6 (5 only in scoped runs) | Scoped run: the model.json write fails closed | No | Yes, a failed scoped write halts the run |
 
 ### What a fully passing model looks like
 
@@ -416,7 +447,10 @@ Grep `[Invariant Drift Detected]`. Anything here means a post-artifact step muta
 Grep `[Sample Gen] Progress:` and `[Sample Gen] ✅ LLM SUCCESS for` vs `falling back to stdlib random`. Pool-engine success (v0.6.8+) is the goal; stdlib-random fallback rate > 10% signals LLM pool-spec fragility.
 
 ### 8. What's in next_vibes?
-Grep `NEXT-VIBES FEEDBACK` at the tail. BLOCKING items are the prioritised backlog for the next `operation="vibe modeling of version"`. INFO items are observations. If BLOCKING count > 10, the model needs more iteration budget next run (raise `MAX_ARCHITECT_REVIEW_ITERATIONS`).
+Grep `NEXT-VIBES FEEDBACK` at the tail. BLOCKING items are the prioritised backlog for the next `operation="vibe modeling of version"`; pass the file's path in `08. Model Vibes` to apply them. INFO items are observations. If BLOCKING count > 10, the model needs more iteration budget next run (raise `MAX_ARCHITECT_REVIEW_ITERATIONS`).
+
+### 9. Did the scope fence hold? (scoped runs only)
+Grep `[vibe-scope-sa-gates FIRED` for the count of each scope category, and `[vibe-scope-serialize-gate FIRED` for the write verdict (`passed` or `FAIL-CLOSED`). A clean scoped run has no `[vibe-scope-fence-restore FIRED` line: every restore means a pass tried to change a frozen artifact. `[vibe-scope-unrequested-drop` marks a referenced in-scope table that was restored.
 
 ---
 

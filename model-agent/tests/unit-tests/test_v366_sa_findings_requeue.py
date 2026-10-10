@@ -41,7 +41,7 @@ def _stub_sa(issues):
 def _ns(issues):
     return exec_function_namespace(
         _FN,
-        extra_globals={"run_metamodel_static_analysis": _stub_sa(issues)},
+        extra_globals={"run_metamodel_static_analysis": _stub_sa(issues), "_VIBE_SCOPE_RUNTIME": None},
     )
 
 

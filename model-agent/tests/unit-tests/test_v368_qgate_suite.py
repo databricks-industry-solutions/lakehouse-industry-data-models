@@ -148,7 +148,7 @@ def _requeue_ns(issues):
         return {"issues": issues, "severity_counts": {}, "summary_by_category": {}, "model_stats": {}}
     return exec_function_namespace(
         "_v366_sa_findings_requeue",
-        extra_globals={"run_metamodel_static_analysis": _stub_sa},
+        extra_globals={"run_metamodel_static_analysis": _stub_sa, "_VIBE_SCOPE_RUNTIME": None},
     )
 
 

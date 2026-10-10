@@ -103,28 +103,31 @@ def test_v070_fix1_alias_present():
     )
 
 
-def test_v070_fix1_metrics_removed_from_protected_set():
-    """The new _VOV_PROTECTED_SCHEMAS must NOT include `_metrics`."""
+def test_v070_fix1_metrics_schema_is_never_dropped_after_decision_12a():
+    """v5.1.4 decision 12A: `_metrics` is shared by every business in the catalog, so the
+    teardown never drops the schema; only the base version's own metric views are dropped."""
     txt = _agent_text_for_grep()
     m = re.search(
-        r'_VOV_PROTECTED_SCHEMAS\s*=\s*\{([^}]+)\}',
+        r'_SCHEMA_OWNERSHIP_INTERNAL\s*=\s*frozenset\(\{([^}]+)\}\)',
         txt,
     )
-    assert m is not None, "_VOV_PROTECTED_SCHEMAS set not found — Fix 1 not applied"
+    assert m is not None, "_SCHEMA_OWNERSHIP_INTERNAL set not found"
     members = m.group(1)
-    assert '"_metrics"' not in members and "'_metrics'" not in members, (
-        f"_VOV_PROTECTED_SCHEMAS still includes _metrics — Fix 1 regressed: {members}"
-    )
-    assert '"_metamodel"' in members or "'_metamodel'" in members, (
-        f"_VOV_PROTECTED_SCHEMAS must keep _metamodel: {members}"
-    )
+    for schema in ("_metrics", "_metamodel"):
+        assert f'"{schema}"' in members or f"'{schema}'" in members, (
+            f"_SCHEMA_OWNERSHIP_INTERNAL must keep {schema}: {members}"
+        )
 
 
 def test_v070_fix1_logger_emits_metrics_drop_count():
-    """The new logger.info must report _metrics= and domain= drop counts."""
-    txt = _agent_text_for_grep()
-    assert re.search(r"vov-metrics-teardown FIRED.*_metrics=", txt), (
-        "Fix 1 log line must include _metrics= count for grep auditing"
+    """The new logger.info must report _metrics= and domain= drop counts on the one emitted FIRED line."""
+    import test_v514_schema_ownership_teardown as own
+    own.ah.set_vibe_scope_runtime(None)
+    log = own._Log()
+    own.ah._early_clash_detection(own._spark(own.ALL_SCHEMAS, *own._stale_history()), own._config(), own._vov_wv(), log)
+    fired = [msg for _, msg in log.lines if "[vov-metrics-teardown FIRED]" in msg]
+    assert len(fired) == 1 and "domain=2" in fired[0] and "_metrics=1" in fired[0], (
+        f"Fix 1 log line must include domain= and _metrics= counts for grep auditing: {fired}"
     )
 
 

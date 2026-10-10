@@ -1,0 +1,427 @@
+{
+ "dry": {
+  "artifacts": {
+   "skyline_air_catalogs_v2_mvm.sql": "-- Catalog DDL for Business: skyline_air | Version: v2_mvm\n-- Generated on: <ts>\n\nCREATE CATALOG IF NOT EXISTS `skyline`;\n",
+   "skyline_air_crew_schema_v2_mvm.sql": "-- Schema for Domain: crew | Business: skyline_air | Version: v2_mvm\n-- Generated on: <ts>\n\n-- ========= DATABASE =========\nCREATE DATABASE IF NOT EXISTS `skyline`.`crew` COMMENT 'Crew domain, edited in scope';\n\n-- ========= TABLES =========\nCREATE OR REPLACE TABLE `skyline`.`crew`.`crew_member` (\n    `crew_member_id` BIGINT COMMENT 'Primary key crew_member_id',\n    `full_name` STRING COMMENT 'Column full_name',\n    CONSTRAINT pk_crew_member PRIMARY KEY(`crew_member_id`)\n) COMMENT 'Product crew_member';\n\nCREATE OR REPLACE TABLE `skyline`.`crew`.`roster` (\n    `roster_id` BIGINT COMMENT 'Primary key roster_id',\n    `crew_member_id` BIGINT COMMENT 'Column crew_member_id',\n    `roster_date` DATE COMMENT 'Column roster_date',\n    `duty_hours` DOUBLE COMMENT 'Column duty_hours',\n    CONSTRAINT pk_roster PRIMARY KEY(`roster_id`)\n) COMMENT 'Product roster';\n\nCREATE OR REPLACE TABLE `skyline`.`crew`.`crew_shift` (\n    `crew_shift_id` BIGINT COMMENT 'Primary key crew_shift_id',\n    `shift_label` STRING COMMENT 'Column shift_label',\n    CONSTRAINT pk_crew_shift PRIMARY KEY(`crew_shift_id`)\n) COMMENT 'Product crew_shift';\n\n-- ========= FOREIGN KEYS =========\nALTER TABLE `skyline`.`crew`.`roster` ADD CONSTRAINT `fk_crew_roster_crew_member_id` FOREIGN KEY (`crew_member_id`) REFERENCES `skyline`.`crew`.`crew_member`(`crew_member_id`);\n\n-- ========= TAGS =========\nALTER SCHEMA `skyline`.`crew` SET TAGS ('dbx_division' = 'operations');\nALTER SCHEMA `skyline`.`crew` SET TAGS ('dbx_domain' = 'crew');\nALTER TABLE `skyline`.`crew`.`crew_member` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`crew`.`crew_member` SET TAGS ('dbx_domain' = 'crew');\nALTER TABLE `skyline`.`crew`.`crew_member` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`crew`.`crew_member` SET TAGS ('dbx_subdomain' = 'crew_records');\nALTER TABLE `skyline`.`crew`.`crew_member` ALTER COLUMN `full_name` SET TAGS ('business_glossary_term' = 'Crew Member Name');\nALTER TABLE `skyline`.`crew`.`crew_member` ALTER COLUMN `full_name` SET TAGS ('pii' = 'true');\nALTER TABLE `skyline`.`crew`.`roster` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`crew`.`roster` SET TAGS ('dbx_domain' = 'crew');\nALTER TABLE `skyline`.`crew`.`roster` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`crew`.`roster` SET TAGS ('dbx_subdomain' = 'crew_scheduling');\nALTER TABLE `skyline`.`crew`.`crew_shift` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`crew`.`crew_shift` SET TAGS ('dbx_domain' = 'crew');\nALTER TABLE `skyline`.`crew`.`crew_shift` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`crew`.`crew_shift` SET TAGS ('dbx_subdomain' = 'crew_scheduling');\n",
+   "skyline_air_cross_domain_foreign_keys_v2_mvm.sql": "-- Cross-Domain Foreign Keys for Business: skyline_air | Version: v2_mvm\n-- Generated on: <ts>\n-- Total cross-domain FK constraints: 5\n--\n-- EXECUTION ORDER:\n--   1. Run ALL domain schema files first (any order).\n--   2. Run this file LAST.\n--\n-- PREREQUISITE DOMAINS: crew, fleet, flight\n\n-- ========= fleet --> crew (1 constraint(s)) =========\n-- Requires: fleet schema, crew schema\nALTER TABLE `skyline`.`fleet`.`maintenance` ADD CONSTRAINT `fk_fleet_maintenance_roster_id` FOREIGN KEY (`roster_id`) REFERENCES `skyline`.`crew`.`roster`(`roster_id`);\n\n-- ========= flight --> crew (3 constraint(s)) =========\n-- Requires: flight schema, crew schema\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_crew_member_id` FOREIGN KEY (`crew_member_id`) REFERENCES `skyline`.`crew`.`crew_member`(`crew_member_id`);\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_crew_shift_id` FOREIGN KEY (`crew_shift_id`) REFERENCES `skyline`.`crew`.`crew_shift`(`crew_shift_id`);\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_rostered_roster_id` FOREIGN KEY (`rostered_roster_id`) REFERENCES `skyline`.`crew`.`roster`(`roster_id`);\n\n-- ========= flight --> fleet (1 constraint(s)) =========\n-- Requires: flight schema, fleet schema\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_aircraft_id` FOREIGN KEY (`aircraft_id`) REFERENCES `skyline`.`fleet`.`aircraft`(`aircraft_id`);\n\n",
+   "skyline_air_fleet_schema_v2_mvm.sql": "-- Schema for Domain: fleet | Business: skyline_air | Version: v2_mvm\n-- Generated on: <ts>\n\n-- ========= DATABASE =========\nCREATE DATABASE IF NOT EXISTS `skyline`.`fleet` COMMENT 'Fleet domain';\n\n-- ========= TABLES =========\nCREATE OR REPLACE TABLE `skyline`.`fleet`.`aircraft` (\n    `aircraft_id` BIGINT COMMENT 'Primary key aircraft_id',\n    `home_base_id` BIGINT COMMENT 'Column home_base_id',\n    `tail_number` STRING COMMENT 'Column tail_number',\n    CONSTRAINT pk_aircraft PRIMARY KEY(`aircraft_id`)\n) COMMENT 'Product aircraft';\n\nCREATE OR REPLACE TABLE `skyline`.`fleet`.`maintenance` (\n    `maintenance_id` BIGINT COMMENT 'Primary key maintenance_id',\n    `roster_id` BIGINT COMMENT 'Column roster_id',\n    `work_order` STRING COMMENT 'Column work_order',\n    CONSTRAINT pk_maintenance PRIMARY KEY(`maintenance_id`)\n) COMMENT 'Product maintenance';\n\n-- ========= TAGS =========\nALTER SCHEMA `skyline`.`fleet` SET TAGS ('dbx_division' = 'operations');\nALTER SCHEMA `skyline`.`fleet` SET TAGS ('dbx_domain' = 'fleet');\nALTER TABLE `skyline`.`fleet`.`aircraft` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`fleet`.`aircraft` SET TAGS ('dbx_domain' = 'fleet');\nALTER TABLE `skyline`.`fleet`.`aircraft` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`fleet`.`aircraft` SET TAGS ('dbx_subdomain' = 'fleet_assets');\nALTER TABLE `skyline`.`fleet`.`aircraft` ALTER COLUMN `tail_number` SET TAGS ('business_glossary_term' = 'Tail Number');\nALTER TABLE `skyline`.`fleet`.`maintenance` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`fleet`.`maintenance` SET TAGS ('dbx_domain' = 'fleet');\nALTER TABLE `skyline`.`fleet`.`maintenance` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`fleet`.`maintenance` SET TAGS ('dbx_subdomain' = 'fleet_assets');\nALTER TABLE `skyline`.`fleet`.`maintenance` ALTER COLUMN `work_order` SET TAGS ('classification' = 'internal');\n",
+   "skyline_air_flight_schema_v2_mvm.sql": "-- Schema for Domain: flight | Business: skyline_air | Version: v2_mvm\n-- Generated on: <ts>\n\n-- ========= DATABASE =========\nCREATE DATABASE IF NOT EXISTS `skyline`.`flight` COMMENT 'Flight domain';\n\n-- ========= TABLES =========\nCREATE OR REPLACE TABLE `skyline`.`flight`.`scheduled_flight` (\n    `scheduled_flight_id` BIGINT COMMENT 'Primary key scheduled_flight_id',\n    `crew_member_id` BIGINT COMMENT 'Column duty_member_id',\n    `aircraft_id` BIGINT COMMENT 'Column aircraft_id',\n    `crew_shift_id` BIGINT COMMENT 'Column crew_shift_code',\n    `rostered_roster_id` BIGINT COMMENT 'Column rostered_roster_id',\n    `flight_number` STRING COMMENT 'Column flight_number',\n    CONSTRAINT pk_scheduled_flight PRIMARY KEY(`scheduled_flight_id`)\n) COMMENT 'Product scheduled_flight';\n\n-- ========= TAGS =========\nALTER SCHEMA `skyline`.`flight` SET TAGS ('dbx_division' = 'operations');\nALTER SCHEMA `skyline`.`flight` SET TAGS ('dbx_domain' = 'flight');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` SET TAGS ('dbx_domain' = 'flight');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` SET TAGS ('dbx_subdomain' = 'flight_ops');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ALTER COLUMN `rostered_roster_id` SET TAGS ('classification' = 'internal');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ALTER COLUMN `flight_number` SET TAGS ('business_glossary_term' = 'Flight Number');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ALTER COLUMN `flight_number` SET TAGS ('classification' = 'internal');\n"
+  },
+  "ddl": [],
+  "uploads": {}
+ },
+ "full": {
+  "artifacts": {
+   "skyline_air_catalogs_v2_mvm.sql": "-- Catalog DDL for Business: skyline_air | Version: v2_mvm\n-- Generated on: <ts>\n\nCREATE CATALOG IF NOT EXISTS `skyline`;\n",
+   "skyline_air_crew_metrics_v2_mvm.sql": "-- Metric views for domain: crew | Business: skyline_air | Version: 2 | Generated on: <ts>\n\nCREATE OR REPLACE VIEW `skyline`.`_metrics`.`crew_roster_kpis`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`crew`.`roster`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$;",
+   "skyline_air_crew_schema_v2_mvm.sql": "-- Schema for Domain: crew | Business: skyline_air | Version: v2_mvm\n-- Generated on: <ts>\n\n-- ========= DATABASE =========\nCREATE DATABASE IF NOT EXISTS `skyline`.`crew` COMMENT 'Crew domain, edited in scope';\n\n-- ========= TABLES =========\nCREATE OR REPLACE TABLE `skyline`.`crew`.`crew_member` (\n    `crew_member_id` BIGINT COMMENT 'Primary key crew_member_id',\n    `full_name` STRING COMMENT 'Column full_name',\n    CONSTRAINT pk_crew_member PRIMARY KEY(`crew_member_id`)\n) COMMENT 'Product crew_member';\n\nCREATE OR REPLACE TABLE `skyline`.`crew`.`roster` (\n    `roster_id` BIGINT COMMENT 'Primary key roster_id',\n    `crew_member_id` BIGINT COMMENT 'Column crew_member_id',\n    `roster_date` DATE COMMENT 'Column roster_date',\n    `duty_hours` DOUBLE COMMENT 'Column duty_hours',\n    CONSTRAINT pk_roster PRIMARY KEY(`roster_id`)\n) COMMENT 'Product roster';\n\nCREATE OR REPLACE TABLE `skyline`.`crew`.`crew_shift` (\n    `crew_shift_id` BIGINT COMMENT 'Primary key crew_shift_id',\n    `shift_label` STRING COMMENT 'Column shift_label',\n    CONSTRAINT pk_crew_shift PRIMARY KEY(`crew_shift_id`)\n) COMMENT 'Product crew_shift';\n\n-- ========= FOREIGN KEYS =========\nALTER TABLE `skyline`.`crew`.`roster` ADD CONSTRAINT `fk_crew_roster_crew_member_id` FOREIGN KEY (`crew_member_id`) REFERENCES `skyline`.`crew`.`crew_member`(`crew_member_id`);\n\n-- ========= TAGS =========\nALTER SCHEMA `skyline`.`crew` SET TAGS ('dbx_division' = 'operations');\nALTER SCHEMA `skyline`.`crew` SET TAGS ('dbx_domain' = 'crew');\nALTER TABLE `skyline`.`crew`.`crew_member` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`crew`.`crew_member` SET TAGS ('dbx_domain' = 'crew');\nALTER TABLE `skyline`.`crew`.`crew_member` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`crew`.`crew_member` SET TAGS ('dbx_subdomain' = 'crew_records');\nALTER TABLE `skyline`.`crew`.`crew_member` ALTER COLUMN `full_name` SET TAGS ('business_glossary_term' = 'Crew Member Name');\nALTER TABLE `skyline`.`crew`.`crew_member` ALTER COLUMN `full_name` SET TAGS ('pii' = 'true');\nALTER TABLE `skyline`.`crew`.`roster` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`crew`.`roster` SET TAGS ('dbx_domain' = 'crew');\nALTER TABLE `skyline`.`crew`.`roster` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`crew`.`roster` SET TAGS ('dbx_subdomain' = 'crew_scheduling');\nALTER TABLE `skyline`.`crew`.`crew_shift` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`crew`.`crew_shift` SET TAGS ('dbx_domain' = 'crew');\nALTER TABLE `skyline`.`crew`.`crew_shift` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`crew`.`crew_shift` SET TAGS ('dbx_subdomain' = 'crew_scheduling');\n",
+   "skyline_air_cross_domain_foreign_keys_v2_mvm.sql": "-- Cross-Domain Foreign Keys for Business: skyline_air | Version: v2_mvm\n-- Generated on: <ts>\n-- Total cross-domain FK constraints: 5\n--\n-- EXECUTION ORDER:\n--   1. Run ALL domain schema files first (any order).\n--   2. Run this file LAST.\n--\n-- PREREQUISITE DOMAINS: crew, fleet, flight\n\n-- ========= fleet --> crew (1 constraint(s)) =========\n-- Requires: fleet schema, crew schema\nALTER TABLE `skyline`.`fleet`.`maintenance` ADD CONSTRAINT `fk_fleet_maintenance_roster_id` FOREIGN KEY (`roster_id`) REFERENCES `skyline`.`crew`.`roster`(`roster_id`);\n\n-- ========= flight --> crew (3 constraint(s)) =========\n-- Requires: flight schema, crew schema\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_crew_member_id` FOREIGN KEY (`crew_member_id`) REFERENCES `skyline`.`crew`.`crew_member`(`crew_member_id`);\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_crew_shift_id` FOREIGN KEY (`crew_shift_id`) REFERENCES `skyline`.`crew`.`crew_shift`(`crew_shift_id`);\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_rostered_roster_id` FOREIGN KEY (`rostered_roster_id`) REFERENCES `skyline`.`crew`.`roster`(`roster_id`);\n\n-- ========= flight --> fleet (1 constraint(s)) =========\n-- Requires: flight schema, fleet schema\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_aircraft_id` FOREIGN KEY (`aircraft_id`) REFERENCES `skyline`.`fleet`.`aircraft`(`aircraft_id`);\n\n",
+   "skyline_air_fleet_metrics_v2_mvm.sql": "-- Metric views for domain: fleet | Business: skyline_air | Version: 2 | Generated on: <ts>\n\nCREATE OR REPLACE VIEW `skyline`.`_metrics`.`fleet_utilization`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`fleet`.`aircraft`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$;",
+   "skyline_air_fleet_schema_v2_mvm.sql": "-- Schema for Domain: fleet | Business: skyline_air | Version: v2_mvm\n-- Generated on: <ts>\n\n-- ========= DATABASE =========\nCREATE DATABASE IF NOT EXISTS `skyline`.`fleet` COMMENT 'Fleet domain';\n\n-- ========= TABLES =========\nCREATE OR REPLACE TABLE `skyline`.`fleet`.`aircraft` (\n    `aircraft_id` BIGINT COMMENT 'Primary key aircraft_id',\n    `home_base_id` BIGINT COMMENT 'Column home_base_id',\n    `tail_number` STRING COMMENT 'Column tail_number',\n    CONSTRAINT pk_aircraft PRIMARY KEY(`aircraft_id`)\n) COMMENT 'Product aircraft';\n\nCREATE OR REPLACE TABLE `skyline`.`fleet`.`maintenance` (\n    `maintenance_id` BIGINT COMMENT 'Primary key maintenance_id',\n    `roster_id` BIGINT COMMENT 'Column roster_id',\n    `work_order` STRING COMMENT 'Column work_order',\n    CONSTRAINT pk_maintenance PRIMARY KEY(`maintenance_id`)\n) COMMENT 'Product maintenance';\n\n-- ========= TAGS =========\nALTER SCHEMA `skyline`.`fleet` SET TAGS ('dbx_division' = 'operations');\nALTER SCHEMA `skyline`.`fleet` SET TAGS ('dbx_domain' = 'fleet');\nALTER TABLE `skyline`.`fleet`.`aircraft` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`fleet`.`aircraft` SET TAGS ('dbx_domain' = 'fleet');\nALTER TABLE `skyline`.`fleet`.`aircraft` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`fleet`.`aircraft` SET TAGS ('dbx_subdomain' = 'fleet_assets');\nALTER TABLE `skyline`.`fleet`.`aircraft` ALTER COLUMN `tail_number` SET TAGS ('business_glossary_term' = 'Tail Number');\nALTER TABLE `skyline`.`fleet`.`maintenance` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`fleet`.`maintenance` SET TAGS ('dbx_domain' = 'fleet');\nALTER TABLE `skyline`.`fleet`.`maintenance` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`fleet`.`maintenance` SET TAGS ('dbx_subdomain' = 'fleet_assets');\nALTER TABLE `skyline`.`fleet`.`maintenance` ALTER COLUMN `work_order` SET TAGS ('classification' = 'internal');\n",
+   "skyline_air_flight_metrics_v2_mvm.sql": "-- Metric views for domain: flight | Business: skyline_air | Version: 2 | Generated on: <ts>\n\nCREATE OR REPLACE VIEW `skyline`.`_metrics`.`flight_crew_coverage`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`crew`.`crew_member`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$;",
+   "skyline_air_flight_schema_v2_mvm.sql": "-- Schema for Domain: flight | Business: skyline_air | Version: v2_mvm\n-- Generated on: <ts>\n\n-- ========= DATABASE =========\nCREATE DATABASE IF NOT EXISTS `skyline`.`flight` COMMENT 'Flight domain';\n\n-- ========= TABLES =========\nCREATE OR REPLACE TABLE `skyline`.`flight`.`scheduled_flight` (\n    `scheduled_flight_id` BIGINT COMMENT 'Primary key scheduled_flight_id',\n    `crew_member_id` BIGINT COMMENT 'Column duty_member_id',\n    `aircraft_id` BIGINT COMMENT 'Column aircraft_id',\n    `crew_shift_id` BIGINT COMMENT 'Column crew_shift_code',\n    `rostered_roster_id` BIGINT COMMENT 'Column rostered_roster_id',\n    `flight_number` STRING COMMENT 'Column flight_number',\n    CONSTRAINT pk_scheduled_flight PRIMARY KEY(`scheduled_flight_id`)\n) COMMENT 'Product scheduled_flight';\n\n-- ========= TAGS =========\nALTER SCHEMA `skyline`.`flight` SET TAGS ('dbx_division' = 'operations');\nALTER SCHEMA `skyline`.`flight` SET TAGS ('dbx_domain' = 'flight');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` SET TAGS ('data_type' = 'master_data');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` SET TAGS ('dbx_domain' = 'flight');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` SET TAGS ('dbx_division' = 'operations');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` SET TAGS ('dbx_subdomain' = 'flight_ops');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ALTER COLUMN `rostered_roster_id` SET TAGS ('classification' = 'internal');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ALTER COLUMN `flight_number` SET TAGS ('business_glossary_term' = 'Flight Number');\nALTER TABLE `skyline`.`flight`.`scheduled_flight` ALTER COLUMN `flight_number` SET TAGS ('classification' = 'internal');\n"
+  },
+  "ddl": [
+   "ALTER SCHEMA `skyline`.`crew` SET TAGS ('dbx_division' = 'operations', 'dbx_domain' = 'crew');",
+   "ALTER SCHEMA `skyline`.`fleet` SET TAGS ('dbx_division' = 'operations', 'dbx_domain' = 'fleet');",
+   "ALTER SCHEMA `skyline`.`flight` SET TAGS ('dbx_division' = 'operations', 'dbx_domain' = 'flight');",
+   "ALTER TABLE `skyline`.`crew`.`crew_member` ALTER COLUMN `full_name` SET TAGS ('business_glossary_term' = 'Crew Member Name', 'pii' = 'true');",
+   "ALTER TABLE `skyline`.`crew`.`crew_member` SET TAGS ('data_type' = 'master_data', 'dbx_domain' = 'crew', 'dbx_division' = 'operations', 'dbx_subdomain' = 'crew_records');",
+   "ALTER TABLE `skyline`.`crew`.`crew_shift` SET TAGS ('data_type' = 'master_data', 'dbx_domain' = 'crew', 'dbx_division' = 'operations', 'dbx_subdomain' = 'crew_scheduling');",
+   "ALTER TABLE `skyline`.`crew`.`roster` ADD CONSTRAINT `fk_crew_roster_crew_member_id` FOREIGN KEY (`crew_member_id`) REFERENCES `skyline`.`crew`.`crew_member`(`crew_member_id`);",
+   "ALTER TABLE `skyline`.`crew`.`roster` SET TAGS ('data_type' = 'master_data', 'dbx_domain' = 'crew', 'dbx_division' = 'operations', 'dbx_subdomain' = 'crew_scheduling');",
+   "ALTER TABLE `skyline`.`fleet`.`aircraft` ALTER COLUMN `tail_number` SET TAGS ('business_glossary_term' = 'Tail Number');",
+   "ALTER TABLE `skyline`.`fleet`.`aircraft` SET TAGS ('data_type' = 'master_data', 'dbx_domain' = 'fleet', 'dbx_division' = 'operations', 'dbx_subdomain' = 'fleet_assets');",
+   "ALTER TABLE `skyline`.`fleet`.`maintenance` ADD CONSTRAINT `fk_fleet_maintenance_roster_id` FOREIGN KEY (`roster_id`) REFERENCES `skyline`.`crew`.`roster`(`roster_id`);",
+   "ALTER TABLE `skyline`.`fleet`.`maintenance` ALTER COLUMN `work_order` SET TAGS ('classification' = 'internal');",
+   "ALTER TABLE `skyline`.`fleet`.`maintenance` SET TAGS ('data_type' = 'master_data', 'dbx_domain' = 'fleet', 'dbx_division' = 'operations', 'dbx_subdomain' = 'fleet_assets');",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_aircraft_id` FOREIGN KEY (`aircraft_id`) REFERENCES `skyline`.`fleet`.`aircraft`(`aircraft_id`);",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_crew_member_id` FOREIGN KEY (`crew_member_id`) REFERENCES `skyline`.`crew`.`crew_member`(`crew_member_id`);",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_crew_shift_id` FOREIGN KEY (`crew_shift_id`) REFERENCES `skyline`.`crew`.`crew_shift`(`crew_shift_id`);",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_rostered_roster_id` FOREIGN KEY (`rostered_roster_id`) REFERENCES `skyline`.`crew`.`roster`(`roster_id`);",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ALTER COLUMN `flight_number` SET TAGS ('business_glossary_term' = 'Flight Number', 'classification' = 'internal');",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ALTER COLUMN `rostered_roster_id` SET TAGS ('classification' = 'internal');",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` SET TAGS ('data_type' = 'master_data', 'dbx_domain' = 'flight', 'dbx_division' = 'operations', 'dbx_subdomain' = 'flight_ops');",
+   "CREATE DATABASE IF NOT EXISTS `skyline`.`_metrics`",
+   "CREATE DATABASE IF NOT EXISTS `skyline`.`crew` COMMENT 'Crew domain, edited in scope';",
+   "CREATE DATABASE IF NOT EXISTS `skyline`.`fleet` COMMENT 'Fleet domain';",
+   "CREATE DATABASE IF NOT EXISTS `skyline`.`flight` COMMENT 'Flight domain';",
+   "CREATE OR REPLACE TABLE `skyline`.`crew`.`crew_member` (\n    `crew_member_id` BIGINT COMMENT 'Primary key crew_member_id',\n    `full_name` STRING COMMENT 'Column full_name',\n    CONSTRAINT pk_crew_member PRIMARY KEY(`crew_member_id`)\n) COMMENT 'Product crew_member';",
+   "CREATE OR REPLACE TABLE `skyline`.`crew`.`crew_shift` (\n    `crew_shift_id` BIGINT COMMENT 'Primary key crew_shift_id',\n    `shift_label` STRING COMMENT 'Column shift_label',\n    CONSTRAINT pk_crew_shift PRIMARY KEY(`crew_shift_id`)\n) COMMENT 'Product crew_shift';",
+   "CREATE OR REPLACE TABLE `skyline`.`crew`.`roster` (\n    `roster_id` BIGINT COMMENT 'Primary key roster_id',\n    `crew_member_id` BIGINT COMMENT 'Column crew_member_id',\n    `roster_date` DATE COMMENT 'Column roster_date',\n    `duty_hours` DOUBLE COMMENT 'Column duty_hours',\n    CONSTRAINT pk_roster PRIMARY KEY(`roster_id`)\n) COMMENT 'Product roster';",
+   "CREATE OR REPLACE TABLE `skyline`.`fleet`.`aircraft` (\n    `aircraft_id` BIGINT COMMENT 'Primary key aircraft_id',\n    `home_base_id` BIGINT COMMENT 'Column home_base_id',\n    `tail_number` STRING COMMENT 'Column tail_number',\n    CONSTRAINT pk_aircraft PRIMARY KEY(`aircraft_id`)\n) COMMENT 'Product aircraft';",
+   "CREATE OR REPLACE TABLE `skyline`.`fleet`.`maintenance` (\n    `maintenance_id` BIGINT COMMENT 'Primary key maintenance_id',\n    `roster_id` BIGINT COMMENT 'Column roster_id',\n    `work_order` STRING COMMENT 'Column work_order',\n    CONSTRAINT pk_maintenance PRIMARY KEY(`maintenance_id`)\n) COMMENT 'Product maintenance';",
+   "CREATE OR REPLACE TABLE `skyline`.`flight`.`scheduled_flight` (\n    `scheduled_flight_id` BIGINT COMMENT 'Primary key scheduled_flight_id',\n    `crew_member_id` BIGINT COMMENT 'Column duty_member_id',\n    `aircraft_id` BIGINT COMMENT 'Column aircraft_id',\n    `crew_shift_id` BIGINT COMMENT 'Column crew_shift_code',\n    `rostered_roster_id` BIGINT COMMENT 'Column rostered_roster_id',\n    `flight_number` STRING COMMENT 'Column flight_number',\n    CONSTRAINT pk_scheduled_flight PRIMARY KEY(`scheduled_flight_id`)\n) COMMENT 'Product scheduled_flight';",
+   "CREATE OR REPLACE VIEW `skyline`.`_metrics`.`crew_roster_kpis`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`crew`.`roster`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$;",
+   "CREATE OR REPLACE VIEW `skyline`.`_metrics`.`fleet_utilization`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`fleet`.`aircraft`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$;",
+   "CREATE OR REPLACE VIEW `skyline`.`_metrics`.`flight_crew_coverage`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`crew`.`crew_member`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$;",
+   "DROP TABLE IF EXISTS `crew`.`base`",
+   "DROP TABLE IF EXISTS `crew`.`member`",
+   "DROP TABLE IF EXISTS `crew`.`team_notes`",
+   "DROP TABLE IF EXISTS `flight`.`ops_scratch`"
+  ],
+  "uploads": {
+   "model.json": {
+    "model": {
+     "domains": [
+      {
+       "database_name": "crew",
+       "description": "Crew domain, edited in scope",
+       "division": "operations",
+       "name": "crew",
+       "products": [
+        {
+         "attributes": [
+          {
+           "column_name": "crew_member_id",
+           "description": "Primary key crew_member_id",
+           "foreign_key_to": "",
+           "is_primary_key": true,
+           "name": "crew_member_id",
+           "tags": "primary_key",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "Crew Member Name",
+           "column_name": "full_name",
+           "description": "Column full_name",
+           "foreign_key_to": "",
+           "name": "full_name",
+           "tags": "pii=true",
+           "type": "STRING"
+          }
+         ],
+         "data_type": "master_data",
+         "description": "Product crew_member",
+         "name": "crew_member",
+         "primary_key": "crew_member_id",
+         "subdomain": "crew_records",
+         "table_name": "crew_member",
+         "tags": "",
+         "type": "entity"
+        },
+        {
+         "attributes": [
+          {
+           "column_name": "roster_id",
+           "description": "Primary key roster_id",
+           "foreign_key_to": "",
+           "is_primary_key": true,
+           "name": "roster_id",
+           "tags": "primary_key",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "",
+           "column_name": "crew_member_id",
+           "description": "Column crew_member_id",
+           "foreign_key_to": "crew.crew_member.crew_member_id",
+           "name": "crew_member_id",
+           "tags": "",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "",
+           "column_name": "roster_date",
+           "description": "Column roster_date",
+           "foreign_key_to": "",
+           "name": "roster_date",
+           "tags": "",
+           "type": "DATE"
+          },
+          {
+           "business_glossary_term": "",
+           "column_name": "duty_hours",
+           "description": "Column duty_hours",
+           "foreign_key_to": "",
+           "name": "duty_hours",
+           "tags": "",
+           "type": "DOUBLE"
+          }
+         ],
+         "data_type": "master_data",
+         "description": "Product roster",
+         "name": "roster",
+         "primary_key": "roster_id",
+         "subdomain": "crew_scheduling",
+         "table_name": "roster",
+         "tags": "",
+         "type": "entity"
+        },
+        {
+         "attributes": [
+          {
+           "column_name": "crew_shift_id",
+           "description": "Primary key crew_shift_id",
+           "foreign_key_to": "",
+           "is_primary_key": true,
+           "name": "crew_shift_id",
+           "tags": "primary_key",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "",
+           "column_name": "shift_label",
+           "description": "Column shift_label",
+           "foreign_key_to": "",
+           "name": "shift_label",
+           "tags": "",
+           "type": "STRING"
+          }
+         ],
+         "data_type": "master_data",
+         "description": "Product crew_shift",
+         "name": "crew_shift",
+         "primary_key": "crew_shift_id",
+         "subdomain": "crew_scheduling",
+         "table_name": "crew_shift",
+         "tags": "",
+         "type": "entity"
+        }
+       ]
+      },
+      {
+       "database_name": "flight",
+       "description": "Flight domain",
+       "division": "operations",
+       "name": "flight",
+       "products": [
+        {
+         "attributes": [
+          {
+           "column_name": "scheduled_flight_id",
+           "description": "Primary key scheduled_flight_id",
+           "foreign_key_to": "",
+           "is_primary_key": true,
+           "name": "scheduled_flight_id",
+           "tags": "primary_key",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "",
+           "column_name": "duty_member_id",
+           "description": "Column duty_member_id",
+           "foreign_key_to": "crew.crew_member.crew_member_id",
+           "name": "duty_member_id",
+           "tags": "",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "",
+           "column_name": "aircraft_id",
+           "description": "Column aircraft_id",
+           "foreign_key_to": "fleet.aircraft.aircraft_id",
+           "name": "aircraft_id",
+           "tags": "",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "",
+           "column_name": "crew_shift_code",
+           "description": "Column crew_shift_code",
+           "foreign_key_to": "crew.crew_shift.crew_shift_id",
+           "name": "crew_shift_code",
+           "tags": "",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "Flight Number",
+           "column_name": "flight_number",
+           "description": "Column flight_number",
+           "foreign_key_to": "",
+           "name": "flight_number",
+           "tags": "classification=internal",
+           "type": "STRING"
+          },
+          {
+           "business_glossary_term": "",
+           "column_name": "rostered_roster_id",
+           "description": "Column rostered_roster_id",
+           "foreign_key_to": "crew.roster.roster_id",
+           "name": "rostered_roster_id",
+           "tags": "classification=internal",
+           "type": "BIGINT"
+          }
+         ],
+         "data_type": "master_data",
+         "description": "Product scheduled_flight",
+         "name": "scheduled_flight",
+         "primary_key": "scheduled_flight_id",
+         "subdomain": "flight_ops",
+         "table_name": "scheduled_flight",
+         "tags": "",
+         "type": "entity"
+        }
+       ]
+      },
+      {
+       "database_name": "fleet",
+       "description": "Fleet domain",
+       "division": "operations",
+       "name": "fleet",
+       "products": [
+        {
+         "attributes": [
+          {
+           "column_name": "aircraft_id",
+           "description": "Primary key aircraft_id",
+           "foreign_key_to": "",
+           "is_primary_key": true,
+           "name": "aircraft_id",
+           "tags": "primary_key",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "",
+           "column_name": "home_base_id",
+           "description": "Column home_base_id",
+           "foreign_key_to": "",
+           "name": "home_base_id",
+           "tags": "",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "Tail Number",
+           "column_name": "tail_number",
+           "description": "Column tail_number",
+           "foreign_key_to": "",
+           "name": "tail_number",
+           "tags": "",
+           "type": "STRING"
+          }
+         ],
+         "data_type": "master_data",
+         "description": "Product aircraft",
+         "name": "aircraft",
+         "primary_key": "aircraft_id",
+         "subdomain": "fleet_assets",
+         "table_name": "aircraft",
+         "tags": "",
+         "type": "entity"
+        },
+        {
+         "attributes": [
+          {
+           "column_name": "maintenance_id",
+           "description": "Primary key maintenance_id",
+           "foreign_key_to": "",
+           "is_primary_key": true,
+           "name": "maintenance_id",
+           "tags": "primary_key",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "",
+           "column_name": "roster_id",
+           "description": "Column roster_id",
+           "foreign_key_to": "crew.roster.roster_id",
+           "name": "roster_id",
+           "tags": "",
+           "type": "BIGINT"
+          },
+          {
+           "business_glossary_term": "",
+           "column_name": "work_order",
+           "description": "Column work_order",
+           "foreign_key_to": "",
+           "name": "work_order",
+           "tags": "classification=internal",
+           "type": "STRING"
+          }
+         ],
+         "data_type": "master_data",
+         "description": "Product maintenance",
+         "name": "maintenance",
+         "primary_key": "maintenance_id",
+         "subdomain": "fleet_assets",
+         "table_name": "maintenance",
+         "tags": "",
+         "type": "entity"
+        }
+       ]
+      }
+     ],
+     "metric_views": [
+      {
+       "description": "crew_roster_kpis metrics",
+       "dimensions_count": 1,
+       "measures_count": 1,
+       "owner_domain": "crew",
+       "owner_product": "roster",
+       "sql": "CREATE OR REPLACE VIEW `skyline`.`_metrics`.`crew_roster_kpis`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`crew`.`roster`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$",
+       "view_name": "crew_roster_kpis"
+      },
+      {
+       "description": "fleet_utilization metrics",
+       "dimensions_count": 1,
+       "measures_count": 1,
+       "owner_domain": "fleet",
+       "owner_product": "aircraft",
+       "sql": "CREATE OR REPLACE VIEW `skyline`.`_metrics`.`fleet_utilization`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`fleet`.`aircraft`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$",
+       "view_name": "fleet_utilization"
+      },
+      {
+       "description": "flight_crew_coverage metrics",
+       "dimensions_count": 1,
+       "measures_count": 1,
+       "owner_domain": "flight",
+       "owner_product": "scheduled_flight",
+       "sql": "CREATE OR REPLACE VIEW `skyline`.`_metrics`.`flight_crew_coverage`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`crew`.`crew_member`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$",
+       "view_name": "flight_crew_coverage"
+      }
+     ],
+     "model_conventions": {
+      "data_asset_naming_convention": "snake_case",
+      "primary_key_suffix": "_id"
+     },
+     "name": "Skyline Air",
+     "version": "1"
+    }
+   }
+  }
+ },
+ "install": {
+  "json:databases": [
+   "CREATE DATABASE IF NOT EXISTS `skyline`.`crew` COMMENT 'Crew domain, edited in scope'",
+   "CREATE DATABASE IF NOT EXISTS `skyline`.`flight` COMMENT 'Flight domain'",
+   "CREATE DATABASE IF NOT EXISTS `skyline`.`fleet` COMMENT 'Fleet domain'"
+  ],
+  "json:foreign_keys": [
+   "ALTER TABLE `skyline`.`crew`.`roster` ADD CONSTRAINT `fk_crew_roster_crew_member_id` FOREIGN KEY (`crew_member_id`) REFERENCES `skyline`.`crew`.`crew_member`(`crew_member_id`);",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_duty_member_id` FOREIGN KEY (`duty_member_id`) REFERENCES `skyline`.`crew`.`crew_member`(`crew_member_id`);",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_aircraft_id` FOREIGN KEY (`aircraft_id`) REFERENCES `skyline`.`fleet`.`aircraft`(`aircraft_id`);",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_crew_shift_code` FOREIGN KEY (`crew_shift_code`) REFERENCES `skyline`.`crew`.`crew_shift`(`crew_shift_id`);",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ADD CONSTRAINT `fk_flight_scheduled_flight_rostered_roster_id` FOREIGN KEY (`rostered_roster_id`) REFERENCES `skyline`.`crew`.`roster`(`roster_id`);",
+   "ALTER TABLE `skyline`.`fleet`.`maintenance` ADD CONSTRAINT `fk_fleet_maintenance_roster_id` FOREIGN KEY (`roster_id`) REFERENCES `skyline`.`crew`.`roster`(`roster_id`);"
+  ],
+  "json:tables": [
+   "CREATE OR REPLACE TABLE `skyline`.`crew`.`crew_member` (\n    `crew_member_id` BIGINT COMMENT 'Primary key crew_member_id',\n    `full_name` STRING COMMENT 'Column full_name',\n    CONSTRAINT pk_crew_member PRIMARY KEY(`crew_member_id`)\n) COMMENT 'Product crew_member'",
+   "CREATE OR REPLACE TABLE `skyline`.`crew`.`roster` (\n    `roster_id` BIGINT COMMENT 'Primary key roster_id',\n    `crew_member_id` BIGINT COMMENT 'Column crew_member_id',\n    `roster_date` DATE COMMENT 'Column roster_date',\n    `duty_hours` DOUBLE COMMENT 'Column duty_hours',\n    CONSTRAINT pk_roster PRIMARY KEY(`roster_id`)\n) COMMENT 'Product roster'",
+   "CREATE OR REPLACE TABLE `skyline`.`crew`.`crew_shift` (\n    `crew_shift_id` BIGINT COMMENT 'Primary key crew_shift_id',\n    `shift_label` STRING COMMENT 'Column shift_label',\n    CONSTRAINT pk_crew_shift PRIMARY KEY(`crew_shift_id`)\n) COMMENT 'Product crew_shift'",
+   "CREATE OR REPLACE TABLE `skyline`.`flight`.`scheduled_flight` (\n    `scheduled_flight_id` BIGINT COMMENT 'Primary key scheduled_flight_id',\n    `duty_member_id` BIGINT COMMENT 'Column duty_member_id',\n    `aircraft_id` BIGINT COMMENT 'Column aircraft_id',\n    `crew_shift_code` BIGINT COMMENT 'Column crew_shift_code',\n    `rostered_roster_id` BIGINT COMMENT 'Column rostered_roster_id',\n    `flight_number` STRING COMMENT 'Column flight_number',\n    CONSTRAINT pk_scheduled_flight PRIMARY KEY(`scheduled_flight_id`)\n) COMMENT 'Product scheduled_flight'",
+   "CREATE OR REPLACE TABLE `skyline`.`fleet`.`aircraft` (\n    `aircraft_id` BIGINT COMMENT 'Primary key aircraft_id',\n    `home_base_id` BIGINT COMMENT 'Column home_base_id',\n    `tail_number` STRING COMMENT 'Column tail_number',\n    CONSTRAINT pk_aircraft PRIMARY KEY(`aircraft_id`)\n) COMMENT 'Product aircraft'",
+   "CREATE OR REPLACE TABLE `skyline`.`fleet`.`maintenance` (\n    `maintenance_id` BIGINT COMMENT 'Primary key maintenance_id',\n    `roster_id` BIGINT COMMENT 'Column roster_id',\n    `work_order` STRING COMMENT 'Column work_order',\n    CONSTRAINT pk_maintenance PRIMARY KEY(`maintenance_id`)\n) COMMENT 'Product maintenance'"
+  ],
+  "json:tags": [
+   "ALTER SCHEMA `skyline`.`crew` SET TAGS ('division' = 'operations', 'domain' = 'crew');",
+   "ALTER SCHEMA `skyline`.`flight` SET TAGS ('division' = 'operations', 'domain' = 'flight');",
+   "ALTER SCHEMA `skyline`.`fleet` SET TAGS ('division' = 'operations', 'domain' = 'fleet');",
+   "ALTER TABLE `skyline`.`crew`.`crew_member` SET TAGS ('data_type' = 'master_data', 'domain' = 'crew', 'division' = 'operations', 'subdomain' = 'crew_records');",
+   "ALTER TABLE `skyline`.`crew`.`crew_member` ALTER COLUMN `full_name` SET TAGS ('business_glossary_term' = 'Crew Member Name', 'pii' = 'true');",
+   "ALTER TABLE `skyline`.`crew`.`roster` SET TAGS ('data_type' = 'master_data', 'domain' = 'crew', 'division' = 'operations', 'subdomain' = 'crew_scheduling');",
+   "ALTER TABLE `skyline`.`crew`.`crew_shift` SET TAGS ('data_type' = 'master_data', 'domain' = 'crew', 'division' = 'operations', 'subdomain' = 'crew_scheduling');",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` SET TAGS ('data_type' = 'master_data', 'domain' = 'flight', 'division' = 'operations', 'subdomain' = 'flight_ops');",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ALTER COLUMN `flight_number` SET TAGS ('business_glossary_term' = 'Flight Number', 'classification' = 'internal');",
+   "ALTER TABLE `skyline`.`flight`.`scheduled_flight` ALTER COLUMN `rostered_roster_id` SET TAGS ('classification' = 'internal');",
+   "ALTER TABLE `skyline`.`fleet`.`aircraft` SET TAGS ('data_type' = 'master_data', 'domain' = 'fleet', 'division' = 'operations', 'subdomain' = 'fleet_assets');",
+   "ALTER TABLE `skyline`.`fleet`.`aircraft` ALTER COLUMN `tail_number` SET TAGS ('business_glossary_term' = 'Tail Number');",
+   "ALTER TABLE `skyline`.`fleet`.`maintenance` SET TAGS ('data_type' = 'master_data', 'domain' = 'fleet', 'division' = 'operations', 'subdomain' = 'fleet_assets');",
+   "ALTER TABLE `skyline`.`fleet`.`maintenance` ALTER COLUMN `work_order` SET TAGS ('classification' = 'internal');"
+  ],
+  "metric_views": [
+   "CREATE OR REPLACE VIEW `skyline`.`_metrics`.`crew_roster_kpis`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`crew`.`roster`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$",
+   "CREATE OR REPLACE VIEW `skyline`.`_metrics`.`flight_crew_coverage`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`crew`.`crew_member`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$",
+   "CREATE OR REPLACE VIEW `skyline`.`_metrics`.`fleet_utilization`\nWITH METRICS\nLANGUAGE YAML\nAS $$\nversion: 1.1\nsource: \"`skyline`.`fleet`.`aircraft`\"\ndimensions:\n  - name: \"All Records\"\n    expr: \"1\"\nmeasures:\n  - name: \"Row Count\"\n    expr: COUNT(1)\n$$"
+  ]
+ }
+}

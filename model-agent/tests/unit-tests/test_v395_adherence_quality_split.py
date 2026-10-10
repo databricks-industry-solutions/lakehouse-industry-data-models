@@ -53,6 +53,7 @@ def _run(lines, vov_res, conf):
         "widgets_values": {"_vov_2_pipeline_result": vov_res} if vov_res is not None else {},
         "next_vibe_response": {"confidence_score": conf},
         "logger": _Logger(),
+        "_VIBE_SCOPE_RUNTIME": None,
     }
     exec(block, ns)
     return ns["lines"], ns["logger"]

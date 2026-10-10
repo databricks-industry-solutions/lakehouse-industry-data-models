@@ -20,6 +20,8 @@ import types
 
 import pytest
 
+from notebook_source_util import vov_ledger_globals
+
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 NB_PATH = ROOT / "agent" / "dbx_vibe_modelling_agent.ipynb"
 FIX = pathlib.Path(__file__).resolve().parent / "fixtures"
@@ -43,7 +45,8 @@ def _extract(start_marker: str, end_marker: str) -> str:
 
 def _build_ns():
     """Exec the real v337 mutator block + the v337 rename-target helper + the v357 functions."""
-    ns = {"re": re, "copy": copy}
+    ns = {**vov_ledger_globals(), "re": re, "copy": copy, "_VIBE_SCOPE_RUNTIME": None}
+    exec(compile(_extract("def _vibe_scope_note_rename", "\n\ndef "), "<vibe-scope>", "exec"), ns)
     ns["sanitize_name"] = lambda n, strip_stop_words=True: re.sub(r"[^a-z0-9]+", "_", str(n).lower()).strip("_")
     # contiguous block: all _v337 mutator helpers + the v357 functions, ending right before retry
     block = _extract("def _v337_parse_fk_fqn", "def _apply_handler_with_retry(")

@@ -14,7 +14,7 @@ fk_target optional) with generic name-suffix SQL-type inference. FK columns
 still apply as BIGINT + foreign_key_to.
 """
 
-from notebook_source_util import notebook_concat_source
+from notebook_source_util import notebook_concat_source, pk_suffix_globals
 from test_v251_vov_priority_landing import _exec_v251_namespace, _ListLogger
 from version_test_util import assert_version_at_least
 
@@ -69,6 +69,7 @@ def test_rcf_plain_no_fk_column_applies_deterministically():
     """The discriminating case: a no-FK add-column directive must now APPLY
     (pre-patch: parse-failed)."""
     ns = _exec_v251_namespace()
+    ns.update(pk_suffix_globals())
     parse = ns["_v251_parse_priority_details"]
     apply_det = ns["_v251_apply_priority_deterministic"]
     model = _model()
@@ -89,6 +90,7 @@ def test_rcf_plain_no_fk_column_applies_deterministically():
 
 def test_rcf_type_inference_by_suffix():
     ns = _exec_v251_namespace()
+    ns.update(pk_suffix_globals())
     infer = ns["_v327_infer_coltype"]
     assert infer("issuance_type_code") == "STRING"
     assert infer("relationship_type_code") == "STRING"
@@ -106,6 +108,7 @@ def test_rcf_type_inference_by_suffix():
 def test_rcf_fk_column_still_applies_as_bigint_fk():
     """Negative/regression: an FK add-column must STILL apply with foreign_key_to."""
     ns = _exec_v251_namespace()
+    ns.update(pk_suffix_globals())
     parse = ns["_v251_parse_priority_details"]
     apply_det = ns["_v251_apply_priority_deterministic"]
     model = _model()
@@ -124,6 +127,7 @@ def test_rcf_fk_column_still_applies_as_bigint_fk():
 
 def test_rcf_explicit_type_token_wins():
     ns = _exec_v251_namespace()
+    ns.update(pk_suffix_globals())
     parse = ns["_v251_parse_priority_details"]
     apply_det = ns["_v251_apply_priority_deterministic"]
     model = _model()

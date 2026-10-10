@@ -33,11 +33,18 @@ def _bind(path):
     ns = {"re": re}
     exec(_extract_fn(src, "_verify_structural_target"), ns)
     exec(_extract_fn(src, "_verify_requirement"), ns)
+    if "def _verify_domain_structural_op(self" in src:
+        for name in ("_v337_negated_before", "_v337_extract_domain_rename", "_v337_extract_domain_merge",
+                     "_v337_extract_bulk_move", "_v407_resolve_dp"):
+            exec(re.search(rf"(?ms)^def {name}\(.*?(?=^\S)", src).group(0), ns)
+        exec(_extract_fn(src, "_verify_domain_structural_op"), ns)
 
     class Dummy:
         logger = _Logger()
         _llm_verify_enabled = False   # LLM disabled -> only deterministic-first can resolve
         ai_agent = None
+        _step_snapshots = {}
+        widgets_values = {}
 
         def _verify_deterministic(self, *a, **k):
             raise AssertionError("deterministic path should not run for llm_verify req")
@@ -50,6 +57,8 @@ def _bind(path):
 
     Dummy._verify_structural_target = ns["_verify_structural_target"]
     Dummy._verify_requirement = ns["_verify_requirement"]
+    if "_verify_domain_structural_op" in ns:
+        Dummy._verify_domain_structural_op = ns["_verify_domain_structural_op"]
     return Dummy()
 
 

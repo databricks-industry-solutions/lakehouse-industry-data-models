@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from notebook_source_util import source_def_index
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOK_PATH = REPO_ROOT / "agent" / "dbx_vibe_modelling_agent.ipynb"
 
@@ -49,19 +51,15 @@ SOURCE = _concat_source()
 
 
 def _slice_named(name, kinds):
-    lines = SOURCE.splitlines(keepends=True)
-    tree = ast.parse(SOURCE)
-    target = None
-    for node in tree.body:
-        if isinstance(node, kinds) and getattr(node, "name", None) == name:
-            target = node
-    if target is None:
+    index = source_def_index(SOURCE)
+    span = index["funcs"].get(name)
+    if span is None:
         raise LookupError(f"{name!r} not found at module level")
-    return "".join(lines[target.lineno - 1: target.end_lineno])
+    return "".join(index["lines"][span[0] - 1: span[1]])
 
 
 def _load_helper():
-    blob = _slice_named("_resolve_existing_physical_table", (ast.FunctionDef,))
+    blob = _slice_named("_sql_string_escape", (ast.FunctionDef,)) + "\n\n" + _slice_named("_resolve_existing_physical_table", (ast.FunctionDef,))
     ns = {"__name__": "_test_gensamples_gt", "re": _re}
     exec(compile(blob, str(NOTEBOOK_PATH), "exec"), ns)
     return ns["_resolve_existing_physical_table"]

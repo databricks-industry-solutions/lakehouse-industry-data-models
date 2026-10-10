@@ -33,6 +33,14 @@ def _helper_body() -> str:
     return src[idx:end]
 
 
+def _rewrite_helper_src() -> str:
+    src = _agent_src()
+    idx = src.find("def _mv_sql_apply_rename_map(")
+    assert idx >= 0, "shared rewrite helper missing"
+    end = src.find("\ndef ", idx + 1)
+    return src[idx:end]
+
+
 # =============================================================================
 # NEW-11 — surgical-mv-rewrite SENTINEL + LOGGING
 # =============================================================================
@@ -113,26 +121,26 @@ def test_v067_new11_uses_stem_heuristics():
 
 def test_v067_new11_rewrite_helper_defined():
     body = _helper_body()
-    assert "def _rewrite_sql_via_rename_map(" in body, (
-        "_rewrite_sql_via_rename_map helper missing"
+    assert "_mv_sql_apply_rename_map(_sql, _rename_map)" in body, (
+        "surgical preserve must call the shared _mv_sql_apply_rename_map helper"
     )
 
 
 def test_v067_new11_rewrite_returns_hits_count():
-    body = _helper_body()
+    helper = _rewrite_helper_src()
     # Helper must return both rewritten SQL AND hit count for tracking.
-    assert "return sql_txt, 0" in body
-    assert "return \"\".join(_parts), _hits" in body or "return ''.join(_parts), _hits" in body, (
+    assert "return sql_txt, 0" in helper
+    assert "return \"\".join(parts), hits" in helper, (
         "rewrite helper must return (rewritten_sql, hit_count)"
     )
 
 
 def test_v067_new11_rewrite_skips_string_literals():
-    body = _helper_body()
+    helper = _rewrite_helper_src()
     # Rewriter must split on string literals so it doesn't substitute
     # inside quoted strings.
-    assert "_mvp_re.split" in body, "rewriter must split on string literals"
-    assert "'[^'" in body and '"[^"' in body, "must skip both single+double quoted literals"
+    assert "re.split" in helper, "rewriter must split on string literals"
+    assert "'[^'" in helper and '"[^' in helper, "must skip both single+double quoted literals"
 
 
 def test_v067_new11_rewrite_handles_backticks():
@@ -142,8 +150,9 @@ def test_v067_new11_rewrite_handles_backticks():
 
 
 def test_v067_new11_rewrite_case_insensitive():
-    body = _helper_body()
-    assert "(?i)" in body, "rewriter must be case-insensitive"
+    src = _agent_src()
+    idx = src.find("def _mv_sql_qualified_ref_pattern(")
+    assert idx >= 0 and "(?i)" in src[idx:src.find("\ndef ", idx + 1)], "rewriter must be case-insensitive"
 
 
 # =============================================================================
@@ -162,7 +171,7 @@ def test_v067_new11_sql_rewritten_before_validation():
     body = _helper_body()
     # SQL rewrite must happen BEFORE _all_refs_valid so renamed products
     # resolve in v2.
-    rewrite_pos = body.find("_rewrite_sql_via_rename_map(_sql, _rename_map)")
+    rewrite_pos = body.find("_mv_sql_apply_rename_map(_sql, _rename_map)")
     validate_pos = body.find("_ok, _reason = _all_refs_valid(_sql)")
     assert rewrite_pos > 0 and validate_pos > 0
     assert rewrite_pos < validate_pos, (

@@ -1,0 +1,31 @@
+{
+  "agent_version": "5.1.4",
+  "digests": {
+    "architect_review": "c634b2616de303eabc553b3158e34fb9f2efd3d2ec754e523c70eee6558855de",
+    "autofix_monotonic": "f14cc58491456ffc2048426556798cf4bb62f8522cd0d2e588a7a5260c4c414b",
+    "cycles_bidirectional_detect": "aacd05d8e2df3a9126b433e5fe47b19b6435caa2f95f2d87e9e13118439d46ee",
+    "cycles_break_internal": "067acb06baa270e58a8c4ae3bdedb78add81ee6b4e6bfc8652151b862c860526",
+    "cycles_heuristic": "aa45065979fab959e8279543d673467c62ec90e3f90361ca0ee62c304cdade2e",
+    "cycles_post_vov": "36c1b9dbabee0762dfad138cde41a11ef87c04c829981ce2d84e9b860010d50f",
+    "cycles_serialized": "0e1a1b8f840a02be3c4d464ed3171ba669f86246ce42a10800268321c31533e4",
+    "empty_domain_cleanup": "1c9190bee768088977b7426d69f46e8cace21bbbe834907ec9aadb364d2400b6",
+    "fk_align_to_parent_pk": "211c38f2d4cabd071d8e29f2ed2346f843689b90e2a66016b3d7bd777cc522dc",
+    "fk_demote_unlinked": "6751680e5544a88f088116f24f28b2af03cd8c49cab2f86f58ed49132729e475",
+    "fk_deterministic_linker": "dad4b0c713e43b35556874accf7c466ec6702f39adf1d23f4361532169731d83",
+    "fk_missing_parents": "6f78d3e3a299513e5ec67cee3dd299a5fadf3af24147f2cb527be6e415519870",
+    "flat_projection": "07aa6e3a5c03400d0963e312ace9ed40ace605a2380f1f812e9b3d2828b7aa48",
+    "junk_domain_serialized": "84ee0bd6f7f6c5b284d4df38d716a2b25e1563b2e77183d61f6e566565608edd",
+    "model_json_export": "13303a7a6e5f9c3422da340dcdbad051d0a8d377ccbf389fbc9fc3abc35953b7",
+    "mv_generation_fallback": "7d2477a6e676210cac615f28a6dec019301875a3490a43bef11ee20e22268099",
+    "mv_kpi_first": "92b42eee2860c74392997e284ece37806919f85e8e2df386a8871eb6f5bd5988",
+    "naming_apply_case": "ee685150d776ac70daff549113a6e7db56fcc3360547167d3b8ea43f137efcb2",
+    "naming_bare_attribute_fix": "89b5552cf3dc46ea9996d3ef4a1a6c0d138cf63fca599ec8d5a82992b64bcc77",
+    "naming_enforce": "c702d25362ddcf33c35c0524278bfff25c21af0a6850504211ca69333893949d",
+    "naming_step_prefix_suffix": "810b4ef607ba933711f70ba2681c44001c998f8282bdf4bd3819f440ed3bfd1e",
+    "queued_vibe_operations": "ad09253a3b8673c4c8fe4801b4995bba6b18612e606330154a2ceb647929c2ca",
+    "tags_vibe_custom": "a6364ba1736ed819f7d77ef9b577e4ebdb8347241025a2b062a8627d5db25d01",
+    "tags_write_time_enrichment": "422320d1fbf31801f596640e1d7dbdd3fadc237fd618b79f8d6b138e2c6d89c5"
+  },
+  "python_hash_seed": "0",
+  "source_commit": "5d386ed"
+}

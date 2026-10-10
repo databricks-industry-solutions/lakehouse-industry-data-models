@@ -97,6 +97,7 @@ def _load_verify_invariants():
     full = _load_src()
     src = _slice_module_def(full, "verify_invariants")
     ns = {"logger": _dummy_logger()}
+    exec(_slice_module_def(full, "verify_scope_invariants"), ns)
     exec(src, ns)
     return ns["verify_invariants"]
 

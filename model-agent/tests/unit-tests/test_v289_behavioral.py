@@ -26,7 +26,7 @@ import re
 import sys
 import types
 
-from notebook_source_util import notebook_concat_source, exec_function_namespace
+from notebook_source_util import notebook_concat_source, exec_function_namespace, pk_suffix_globals, vov_ledger_globals
 
 SRC = notebook_concat_source()
 
@@ -101,9 +101,10 @@ def test_enforce_naming_restores_user_literal_end_to_end():
     'project_material', the strip that produced 'material' is REVERSED back to 'project_material'.
     Pre-patch (no config / name not in vibe) the strip stands — proving non-tautology."""
     import re as _re, copy as _copy
-    deps = {"re": _re, "copy": _copy}
+    deps = {**vov_ledger_globals(), "re": _re, "copy": _copy, "_VIBE_SCOPE_RUNTIME": None, **pk_suffix_globals()}
     for dep in ("strip_domain_prefix", "apply_convention", "get_pk_suffix", "strip_product_prefix",
-                "_vov_user_product_tokens", "_vov_levenshtein", "_vov_match_user_token"):
+                "_vov_user_product_tokens", "_vov_levenshtein", "_vov_match_user_token",
+                "_vibe_scope_product_test", "_vibe_scope_note_rename"):
         try:
             deps.update({k: v for k, v in exec_function_namespace(dep, extra_globals=dict(deps)).items() if k == dep})
         except LookupError:

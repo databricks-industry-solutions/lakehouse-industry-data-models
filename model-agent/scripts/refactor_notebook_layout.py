@@ -4,94 +4,14 @@ from __future__ import annotations
 
 import json
 import re
-import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC_NB = ROOT / "agent" / "dbx_vibe_modelling_agent.ipynb.bak-layout"
 DST_NB = ROOT / "agent" / "dbx_vibe_modelling_agent.ipynb"
 
-AGENT_VERSION = "4.2.8"
-RELEASE_VERSION = "0.8.0"
 MIN_CHUNK = 500
 MAX_CHUNK = 700
-
-WIDGET_DOCS_MD = textwrap.dedent(
-    """
-    # Vibe Modelling Agent
-
-    **Production notebook for [Vibe Data Modeling](https://www.databricks.com/blog/reimagining-data-modeling-lakehouse-introducing-vibe-data-modeling)** on Databricks.
-
-    Describe your business in plain English (or point at a `vibes.txt` file), run the pipeline, and get a versioned, rule-validated Silver-layer data model deployed to Unity Catalog. Iterate with natural-language **vibes** until the model fits. No version is overwritten.
-
-    This is the same agent that produced the **[40 Lakehouse Industry Data Models](https://www.databricks.com/blog/jumpstart-your-data-modeling-databricks-industry-data-models)** published by Databricks: pre-built MVM and ECM scopes for the world's biggest industries, each validated against 200+ structural rules before release. Use this notebook to build new models, customize an industry baseline, or evolve an existing version.
-
-    | Read first | What you learn |
-    |------------|----------------|
-    | [Reimagining Data Modeling on the Lakehouse: Introducing Vibe Data Modeling](https://www.databricks.com/blog/reimagining-data-modeling-lakehouse-introducing-vibe-data-modeling) | What Vibe Data Modeling is, how a vibe becomes a model, iteration, and physical catalog layouts |
-    | [Jumpstart your Data Modeling with Databricks Industry Data Models](https://www.databricks.com/blog/jumpstart-your-data-modeling-databricks-industry-data-models) | The 40 industry models this agent generated, tier sizing, governance, and the public repo |
-
-    **Industry models repo:** [databricks-industry-data-models](https://github.com/databricks-industry-solutions/databricks-industry-data-models)
-
-    ---
-
-    ## How to run
-
-    1. Execute cells **top to bottom** on **Databricks Serverless**.
-    2. **Cell 1 (code)** prints the agent banner and sets `__AGENT_VERSION__`.
-    3. Scroll to **Widget registration** (near the end), set widgets, then run **`main()`**.
-
-    ---
-
-    ## What this notebook does
-
-    | Phase | Operation widget | Outcome |
-    |-------|------------------|---------|
-    | Build | `new base model` | Generate MVM or ECM from business name, description, and vibes |
-    | Iterate | `vibe modeling of version` | Apply `next_vibes.txt` priorities to produce vN+1 |
-    | Resize | `shrink ecm` / `enlarge mvm` | Move between ECM and MVM scope |
-    | Deploy | `install model` | DDL, FKs, tags, metric views into Unity Catalog |
-    | Remove | `uninstall model version` | Drop a installed version from catalog |
-    | Demo | `generate sample data` | Synthetic rows for demos and QA |
-
-    Every generation pass runs architect review, static analysis, FK/cycle guards, and optional agentic repair before writeback.
-
-    ---
-
-    ## Widget reference
-
-    | # | Widget | Required? | When | Notes |
-    |---|--------|-----------|------|-------|
-    | 01 | `business_name` | **Yes** | Almost all ops | Short key, e.g. `airlines`, `healthcare`, `telecom` |
-    | 02 | `business_description` | No | `new base model` | Industry narrative; complements vibes |
-    | 03 | `operation` | **Yes** | Always | See table above |
-    | 04 | `model_version` | Conditional | Non-base ops | Required for VOV, shrink, enlarge, install, uninstall, samples; blank for first base model only |
-    | 05 | `data_model_scopes` | **Yes** | `new base model` | `Minimum Viable Model - MVM` or `Expanded Coverage Model - ECM` |
-    | 06 | `business_domains` | No | Base model | Comma-separated; when set, names are **immutable** in output |
-    | 07 | `org_divisions` | No | Base model | `Operations`, `Operations and Business`, or full three-division set |
-    | 08 | `model_vibes` | No | Build / VOV | Inline text or `/path/to/vibes.txt`; **supreme authority** over heuristics |
-    | 09 | `deployment_catalog` | Conditional | `install model` | **Required** for install; target Unity Catalog |
-    | 09a | `cataloging_style` | No | Install | One catalog · per division · per domain |
-    | 09b | `catalog_prefix` | No | Install | Prefix when multi-catalog |
-    | 09c | `catalog_suffix` | No | Install | Suffix when multi-catalog |
-    | 10 | `generate_samples` | No | Base / samples | `0` = off; `5`–`100` rows per table |
-    | 11 | `context_file` | No | Bootstrap | External `model.json` path |
-    | 12 | `naming_convention` | No | Base | Default `snake_case` |
-    | 13 | `primary_key_suffix` | No | Base | Default `_id` |
-    | 15–15a | `schema_prefix` / `schema_suffix` | No | Install | Physical schema naming |
-    | 16–16a | `tag_prefix` / `tag_suffix` | No | Install | UC tag naming (default prefix `dbx_`) |
-    | 17 | `table_id_type` | No | Base | `BIGINT` default |
-    | 18–20 | boolean / date / timestamp format | No | Samples | Display formats for generated data |
-    | 21 | `classification_levels` | No | Governance | `key=label` pairs for sensitivity tags |
-    | 22–23 | housekeeping / history columns | No | Base | Audit and SCD-style columns |
-    | 24 | `vibe_session_id` | No | Tracing | Correlate logs across runs |
-
-    **Tips**
-    - Leave `business_domains` empty to let the agent infer domains from industry context and vibes.
-    - For `vibe modeling of version`, leave `model_vibes` blank to consume auto-generated `next_vibes.txt` from the prior version.
-    - `runtime_budget_seconds` is a job base parameter (not a widget); the entrypoint reads it when present.
-    """
-).strip()
 
 VOV_SYMBOL_BLURBS: dict[str, str] = {
     "VibeSection": "One parsed section of a vibe document with offsets and constraints.",
@@ -764,13 +684,30 @@ def _parse_sections(all_lines: list[str]) -> list[tuple[str, list[str]]]:
     return sections
 
 
+def _leading_markdown_cell(nb: dict) -> dict:
+    cells = nb.get("cells") or []
+    if not cells or cells[0].get("cell_type") != "markdown":
+        raise SystemExit("source notebook has no leading markdown cell to carry over as cell 0")
+    return {"cell_type": "markdown", "metadata": cells[0].get("metadata", {}), "source": list(cells[0].get("source", []))}
+
+
+def _source_version(raw: list[str], name: str) -> str:
+    pat = re.compile(rf'^{name}\s*=\s*"([^"]+)"')
+    for ln in raw:
+        m = pat.match(ln.strip())
+        if m:
+            return m.group(1)
+    raise SystemExit(f"source notebook does not define {name}")
+
+
 def refactor(nb: dict) -> dict:
     raw: list[str] = []
     for cell in nb["cells"]:
         if cell["cell_type"] == "code":
             raw.extend("".join(cell.get("source", [])).splitlines())
 
-    agent_ver, release_ver = AGENT_VERSION, RELEASE_VERSION
+    agent_ver = _source_version(raw, "__AGENT_VERSION__")
+    release_ver = _source_version(raw, "__RELEASE_VERSION__")
 
     banner, raw = _extract_banner_block(raw)
     raw = _strip_version_banner(raw)
@@ -788,7 +725,7 @@ def refactor(nb: dict) -> dict:
         fixed_sections.append((name, lines))
     sections = fixed_sections
 
-    cells: list[dict] = [_md_cell(WIDGET_DOCS_MD)]
+    cells: list[dict] = [_leading_markdown_cell(nb)]
     cells.append(
         _code_cell(
             [

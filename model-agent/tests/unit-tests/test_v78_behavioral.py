@@ -77,10 +77,16 @@ def _load_cell3_helpers():
         "_p091_is_valid_identifier": lambda s: (True, ""),
         "_p091_reject_name_mutation": lambda *a, **k: False,
         "_preseed_rename_maps": lambda mutations: ({}, {}, {}),
+        "_VIBE_SCOPE_RUNTIME": None,
+        "_disk_cached_call": lambda prefix, key_parts, compute_fn: compute_fn(),
     }
     ns = dict(stubs)
     ns["__name__"] = "_v78test"
     for fn in (
+        "get_vibe_scope_runtime",
+        "_build_fk_adjacency",
+        "_would_create_cycle",
+        "_sync_fk_type_with_pk",
         "_llm_fallback_apply_mutations",
         "_llm_fallback_validate",
         "_cleanup_empty_domains",

@@ -42,6 +42,8 @@ def run_block(statements, failed=(), fallback=None, domains=("retail",)):
         "metric_exec_result": {"failed": list(failed), "total": len(statements)},
         "_mv_failed_ct": len(failed),
         "_mv_fallback_statements": dict(fallback or {}),
+        "_vs_plan": None,
+        "_vs_mv_kept": [],
         "widgets_values": {
             "current_version": "1",
             "model_scope": "mvm",
@@ -60,6 +62,8 @@ def run_block(statements, failed=(), fallback=None, domains=("retail",)):
             re.search(r"VIEW\s+`?[\w.`]*?`?\.?`?(\w+)`?\s", s + " ").group(1)
         ),
     }
+    from notebook_source_util import slice_function_source
+    exec(compile(slice_function_source("_write_metric_sql_artifacts"), "<_write_metric_sql_artifacts>", "exec"), ns)
     exec(compile(rewrite_block(), "<rewrite_block>", "exec"), ns)
     return written, ns["widgets_values"]
 

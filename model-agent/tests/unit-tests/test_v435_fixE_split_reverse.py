@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from v435_helpers import concat_source, slice_functions
+from notebook_source_util import pk_suffix_globals
 
 _FNS = [
     "_v337_iter_products", "_v337_find_product", "_v337_parse_fk_fqn", "_v327_infer_coltype",
@@ -28,7 +29,7 @@ _FNS = [
 
 def _ns():
     src = concat_source()
-    return slice_functions(_FNS, src, extra_globals={"re": _re, "copy": _copy})
+    return slice_functions(_FNS, src, extra_globals={"re": _re, "copy": _copy, **pk_suffix_globals()})
 
 
 def test_fixE_classify_split_and_reverse_route_deterministically():

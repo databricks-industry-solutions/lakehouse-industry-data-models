@@ -41,7 +41,7 @@ def test_version_285_and_aliases_present():
 # ---------- FIX 1A: deterministic target resolver ----------
 
 def _exec_resolver_ns():
-    ns = {"__name__": "_v285_ns"}
+    ns = {"__name__": "_v285_ns", "_VIBE_SCOPE_RUNTIME": None}
     for name in ["_vov285_san", "_vov285_build_model_index", "_vov285_resolve_target_entities"]:
         exec(compile(slice_function_source(name, source=SRC), f"<{name}>", "exec"), ns)
     return ns

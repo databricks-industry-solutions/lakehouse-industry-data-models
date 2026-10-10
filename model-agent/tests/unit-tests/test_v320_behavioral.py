@@ -57,7 +57,7 @@ def _load_call_cap_block():
     i = full.index("import threading as _v320_threading")
     j = full.index("def run_vov_pipeline(")
     block = full[i:j]
-    ns = {}
+    ns = {"re": re}
     exec(block, ns)  # single namespace so `global` + closures resolve module-level names
     return ns
 

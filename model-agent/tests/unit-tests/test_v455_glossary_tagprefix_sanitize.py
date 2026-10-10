@@ -46,7 +46,9 @@ def _build_namespace():
     """Exec the helper cell (66) then the enrich cell (68) into a shared namespace."""
     import re as _re
     import json as _json
-    ns = {"re": _re, "json": _json}
+    from notebook_source_util import slice_function_source
+    ns = {"re": _re, "json": _json, "_VIBE_SCOPE_RUNTIME": None}
+    exec(compile(slice_function_source("get_vibe_scope_runtime"), "<vibe-scope>", "exec"), ns)
     helpers = _cell_src(lambda s: "def _tagset_add" in s and "def _v381_filter_tagset" in s)
     enrich = _cell_src(lambda s: "def _v455_sanitize_reserved_tag_prefix" in s and "def _enrich_model_authoritative_tags" in s)
     assert helpers, "helper cell (tagset helpers) not found"

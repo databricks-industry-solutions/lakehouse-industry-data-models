@@ -68,6 +68,9 @@ def _build_lineage_namespace():
             logger.info(f'STUB wrote {len(content)} bytes to {destination_path}')
 
     ns['write_to_dbfs'] = _write_to_dbfs
+    import agent_helpers
+    for dep in ('_vibe_lineage_requirement_links', '_vibe_lineage_scope_status', '_VIBE_INPUT_SCOPE_STATUSES'):
+        ns[dep] = getattr(agent_helpers, dep)
     exec(glued, ns)
     _NAMESPACE_CACHE = ns
     return ns

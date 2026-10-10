@@ -3,11 +3,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from notebook_source_util import exec_function_namespace
+from notebook_source_util import exec_function_namespace, vov_ledger_globals
 
 
 def _load():
-    ns = exec_function_namespace("_shrink_relink_or_drop_orphan_fks")
+    ns = exec_function_namespace("_shrink_relink_or_drop_orphan_fks", extra_globals=vov_ledger_globals())
     return ns["_shrink_relink_or_drop_orphan_fks"]
 
 

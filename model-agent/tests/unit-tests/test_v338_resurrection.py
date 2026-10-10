@@ -74,7 +74,10 @@ def _bind_fn(path):
         "safe_add_product": lambda *a, **k: False,
         "ensure_product_has_pk_attribute": lambda *a, **k: None,
         "build_pk_name_from_config": lambda name, config: f"{name}_id",
+        "_VIBE_SCOPE_RUNTIME": None,
     }
+    for dep in ("_vibe_scope_product_test", "_vibe_scope_inherit_subdomain"):
+        exec(_extract_module_fn(_full_src(NB), dep), ns)
     exec(_extract_module_fn(src, FN), ns)
     return ns[FN]
 
