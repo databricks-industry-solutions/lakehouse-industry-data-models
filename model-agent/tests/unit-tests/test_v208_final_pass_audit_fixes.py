@@ -31,7 +31,6 @@ def src():
 
 
 FINAL_PASS_ALIASES = [
-    "vov-remediate-before-modeljson",
     "vov-tools-honest-prompt",
     "vov-linking-respects-applied",
     "vov-review-finalize-skip-autofix",
@@ -76,9 +75,9 @@ def test_no_text_overlap_fold_marks_a_requirement_fulfilled(src):
 
 
 def test_remediate_before_modeljson_re_exports(src):
-    """After SelfFixer writeback, step_generate_data_model_json should be re-invoked."""
-    pattern = r"vov-remediate-before-modeljson FIRED v2\.0\.8.*?\n.*?step_generate_data_model_json\(widgets_values\)"
-    assert re.search(pattern, src, re.DOTALL), "Re-export of model.json after SelfFixer not found"
+    """After SelfFixer writeback, model.json is re-exported (v5.3.3: by the mandatory final export before Step 9a)."""
+    writeback = src.index("vov-selffixer-flat-roundtrip WRITEBACK FIRED")
+    assert writeback < src.index("_export_final_model_json(widgets_values, logger)", writeback), "Re-export of model.json after SelfFixer not found"
 
 
 def test_tools_honest_prompt_inlines_sections(src):
