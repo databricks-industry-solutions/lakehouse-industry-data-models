@@ -9,13 +9,21 @@ import {
 import type { FeedbackContext } from "@/lib/api";
 import type { ColumnDisplayMode } from "@/components/diagram/types";
 import { selector } from "@/lib/selector";
+import { liveDomainOptions } from "@/lib/domain-options";
 import { Badge } from "@/components/ui/badge";
 import { VersionSyncStateBanner } from "@/components/versions/version-sync-state-banner";
 import { ModelView, type ModelViewTab, type ModelViewFocusAnchor } from "@/components/vibe-inputs/model-view";
 import { AddFeedbackButton } from "@/components/feedback/add-feedback-button";
+import {
+  ARTIFACTS_FEEDBACK_DISABLED_REASON,
+  buildFeedbackContext,
+  type FeedbackSubject,
+} from "@/components/feedback/feedback-context";
 import { StatisticsTab } from "@/components/statistics/statistics-tab";
 import { makeDefaultTargetPath } from "@/lib/source-selection";
 import { ModelOverview } from "@/components/model/model-overview";
+import { useToolbarNoteSlot } from "@/components/model/toolbar-note-slot";
+import { VersionLifecycleBadges } from "@/components/versions/version-lifecycle-badges";
 
 // Per-user default column-display mode preference keys (item 4, 0.6.6). The
 // all-domains view (index route, no focusAnchor) and the focal single-domain
@@ -54,9 +62,12 @@ export function ModelTabsShell({
   tab,
   onTabChange,
   focusAnchor,
+  feedbackSubject,
+  pickedDomain: requestedPickedDomain,
+  onOntologyDomainPick,
+  onOpenDomain,
   versionActions,
   searchTrigger,
-  domainSelectorSlot,
   onDomainNavigate,
   showDomainSelect,
   tabs,
@@ -71,21 +82,32 @@ export function ModelTabsShell({
   onTabChange: (tab: ModelViewTab) => void;
   /** Input route: single-domain focus. Index route: undefined (all-domains). */
   focusAnchor?: ModelViewFocusAnchor;
+  /** Input route: the reviewed input's element, what Add-feedback captures on
+   *  tabs without their own domain control. Index route: undefined. */
+  feedbackSubject?: FeedbackSubject;
+  /** Index route: the domain picked in the Diagram or Ontology tab's
+   *  dropdown (one `?domain=` for both), drawn in place by both tabs: the
+   *  diagram's single-domain layout, the ontology scoped to that domain.
+   *  Undefined = all domains. */
+  pickedDomain?: string;
+  /** Index route: the Ontology dropdown is owned by the route; a pick calls
+   *  this (it writes `?domain=`). Omit it and the Ontology filters locally. */
+  onOntologyDomainPick?: (domain: string | null) => void;
+  /** Index route: forwarded to `ModelView`; the Overview tab carries a
+   *  domain dropdown that opens the picked domain's page. */
+  onOpenDomain?: (domain: string) => void;
   /** Index route injects `DeleteVersionButton`; the input route omits it (a
    *  review surface offers no version deletion). Rendered in `tabBarTrailing`
    *  next to Add-feedback. */
   versionActions?: ReactNode;
   /** Item 2: the model-wide search trigger, mounted in the header region. */
   searchTrigger?: ReactNode;
-  /** URL-driven domain-title dropdown (item 3B), rendered in the header next
-   *  to the model title. Only the two model routes (all-domains index,
-   *  domain page) pass this - the input-review route stays without it. */
-  domainSelectorSlot?: ReactNode;
   /** Forwarded to `ModelView` -> `DiagramViewer` (item 3B): domain selection
    *  navigates via this callback instead of internal state. */
   onDomainNavigate?: (domain: string | null) => void;
-  /** Forwarded to `ModelView` -> `DiagramViewer` (item 3B): hides the
-   *  diagram toolbar's own domain dropdown once the title owns it. */
+  /** Forwarded to `ModelView` -> `DiagramViewer`: hides the diagram
+   *  toolbar's own domain dropdown on surfaces that only follow a focused
+   *  input. Domain selection lives inside each tab, never in this header. */
   showDomainSelect?: boolean;
   /** Which tabs to render. Defaults to the full set. */
   tabs?: readonly ModelViewTab[];
@@ -99,22 +121,17 @@ export function ModelTabsShell({
     nodeId: string | null;
     edgeId: string | null;
   }>({ nodeId: null, edgeId: null });
+  // The line under the tab bar where a tab-bar action's note (the Delete
+  // reason) wraps at the page width instead of widening the tab bar.
+  const toolbarNote = useToolbarNoteSlot();
   const handleDiagramSelection = useCallback(
     (sel: { nodeId: string | null; edgeId: string | null }) => setDiagramSelection(sel),
     [],
   );
 
-  const getContext = useCallback((): FeedbackContext => {
-    return {
-      context_version: 1,
-      view_mode: tab,
-      // The diagram tab is the only one with a live node/edge selection.
-      // Leave both fields unset on other tabs so the scope doesn't falsely
-      // narrow to a stale selection.
-      selected_node_id: tab === "diagram" ? diagramSelection.nodeId : null,
-      selected_edge_id: tab === "diagram" ? diagramSelection.edgeId : null,
-    };
-  }, [tab, diagramSelection.nodeId, diagramSelection.edgeId]);
+  // The domain each tab with its own domain control shows (null = all).
+  const [statisticsDomain, setStatisticsDomain] = useState<string | null>(null);
+  const [ontologyDomain, setOntologyDomain] = useState<string | null>(null);
 
   const { data: business } = useGetBusinessSuspense({
     params: { business_id: businessId },
@@ -129,11 +146,40 @@ export function ModelTabsShell({
     ...selector(),
   });
 
+  const domainList = liveDomainOptions(model.domains);
+  // A `?domain=` that names no domain of this model is "All domains": no
+  // single-domain layout request, no warm-up, the dropdowns show All domains.
+  const pickedDomain =
+    requestedPickedDomain && domainList.some((d) => d.name === requestedPickedDomain)
+      ? requestedPickedDomain
+      : undefined;
+
+  // Feedback is about the lowest model element in view: the diagram's live
+  // selection (diagram tab only, elsewhere it is stale); on Review Progress,
+  // Ontology and a Diagram drawn for one picked domain, the domain their own
+  // control shows (none = the whole model); elsewhere the page's subject (the
+  // reviewed input's element), else the whole model.
+  const getContext = useCallback((): FeedbackContext => {
+    const tabDomain =
+      tab === "statistics"
+        ? statisticsDomain
+        : tab === "ontology"
+          ? ontologyDomain
+          : tab === "diagram" && pickedDomain
+            ? pickedDomain
+            : undefined;
+    return buildFeedbackContext({
+      selection: tab === "diagram" ? diagramSelection : null,
+      subject: tabDomain === undefined ? feedbackSubject : { domain: tabDomain },
+    });
+  }, [tab, diagramSelection, statisticsDomain, ontologyDomain, pickedDomain, feedbackSubject]);
+
   // Non-suspense preference lookup gates the DiagramViewer mount (ModelView
   // defers the diagram tab while `columnModePending`), so its useState-once
   // column-mode seed reads the resolved preference instead of the fallback.
   // The focal single-domain view and the all-domains view use different keys.
-  const focal = Boolean(focusAnchor?.domain);
+  const diagramFocusDomain = focusAnchor?.domain ?? pickedDomain;
+  const focal = Boolean(diagramFocusDomain);
   const { data: userPrefs, isLoading: columnModePending } = useGetUserPreferences();
   const columnModePref = userPrefs?.data.find(
     (p) => p.key === (focal ? DIAGRAM_FOCAL_MODE_KEY : DIAGRAM_ALL_DOMAINS_MODE_KEY),
@@ -149,20 +195,17 @@ export function ModelTabsShell({
   const currentVersionId = (currentVersion as any)?.id as string | undefined;
   const scopeLabel = scope ? scope.toUpperCase() : "";
 
-  const domainList = (model.domains ?? [])
-    .filter((d) => d.change_status !== "deleted")
-    .map((d) => ({ name: d.name, division: d.division ?? "" }));
-
   // Warm the diagram cache so the first Diagram tab open is fast. Gate the
-  // scope: when a focusAnchor is set (input review), warm ONLY that domain's
+  // scope: when the diagram is scoped to one domain (an input review's
+  // focusAnchor, or the Diagram tab's picked domain), warm ONLY that domain's
   // single-domain layout - never the all-domains layout, or a large model
-  // (TerraNova) would trigger an all-domains ELK compute from a single-input
-  // review. When unset (all-domains scope page), warm the all-domains layout.
+  // (TerraNova) would trigger an all-domains ELK compute for a one-domain
+  // view. Otherwise (all-domains diagram), warm the all-domains layout.
   // The all-domains warm always primes the "hide" variant (not the resolved
   // preference): warming a single fixed variant avoids a per-column-mode ELK
   // fan-out that starves the single-threaded worker, and every variant
   // computes cheaply on first request off a warm base.
-  const warmDomain = focusAnchor?.domain;
+  const warmDomain = diagramFocusDomain;
   const warmColumnMode = focal ? (columnModePref ?? "keys") : "hide";
   useEffect(() => {
     getDiagramLayout({
@@ -180,10 +223,11 @@ export function ModelTabsShell({
       businessId={businessId}
       versionId={currentVersionId}
       getContext={getContext}
+      disabledReason={tab === "artifacts" ? ARTIFACTS_FEEDBACK_DISABLED_REASON : undefined}
     />
   );
 
-  return (
+  return toolbarNote.provide(
     <ModelView
       businessId={businessId}
       version={version}
@@ -192,48 +236,62 @@ export function ModelTabsShell({
       tabs={tabs}
       value={tab}
       onTabChange={onTabChange}
-      focusAnchor={focusAnchor}
+      diagramDomain={diagramFocusDomain}
+      onOpenDomain={onOpenDomain}
       initialColumnMode={columnModePref}
       columnModePending={columnModePending}
       onDomainNavigate={onDomainNavigate}
       showDomainSelect={showDomainSelect}
       onSelectionChange={handleDiagramSelection}
+      onOntologyDomainChange={setOntologyDomain}
+      ontologyDomain={pickedDomain}
+      onOntologyDomainPick={onOntologyDomainPick}
       modelVersionId={currentVersionId ?? ""}
       feedbackSlot={addFeedback}
       headerSlot={
-        <div className="flex items-center gap-2 min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2 whitespace-nowrap">
-            {model.name} v{model.version}
-            {scopeLabel && (
-              <Badge
-                className={scope === "ecm" ? "bg-muted text-foreground border-border" : "bg-info/10 text-info border-info/30"}
-                variant="outline"
-              >
-                {scopeLabel}
-              </Badge>
-            )}
-          </h1>
-          {searchTrigger}
-          {domainSelectorSlot}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 min-w-0">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+              <span className="min-w-0 break-words">
+                {model.name} v{model.version}
+              </span>
+              {scopeLabel && (
+                <Badge
+                  className={scope === "ecm" ? "bg-muted text-foreground border-border" : "bg-info/10 text-info border-info/30"}
+                  variant="outline"
+                >
+                  {scopeLabel}
+                </Badge>
+              )}
+            </h1>
+            {currentVersion && <VersionLifecycleBadges version={currentVersion} versions={versions} withDate />}
+          </div>
+          {searchTrigger && (
+            <div className="ml-auto flex flex-wrap items-center gap-2" data-testid="model-toolbar-filters">
+              {searchTrigger}
+            </div>
+          )}
         </div>
       }
       tabBarTrailing={
-        <div className="flex items-center gap-2">
+        <>
           {addFeedback}
           {versionActions}
-        </div>
+        </>
       }
       betweenSlot={
-        currentVersion ? <VersionSyncStateBanner version={currentVersion} /> : null
+        <>
+          {toolbarNote.slot}
+          {currentVersion ? <VersionSyncStateBanner version={currentVersion} /> : null}
+        </>
       }
       overviewSlot={
         <ModelOverview
           businessId={businessId}
-          businessName={business.name}
           version={version}
           scope={scope}
-          versionId={currentVersionId}
-          deploymentStatus={(currentVersion as any)?.deployment_status || "draft"}
+          currentVersion={currentVersion}
+          versions={versions}
           model={model}
           modelVersionId={currentVersionId ?? ""}
           defaultTargetPath={makeDefaultTargetPath(
@@ -250,8 +308,9 @@ export function ModelTabsShell({
           scope={scope}
           businessId={businessId}
           versionInt={Number(version)}
+          onDomainChange={setStatisticsDomain}
         />
       }
-    />
+    />,
   );
 }

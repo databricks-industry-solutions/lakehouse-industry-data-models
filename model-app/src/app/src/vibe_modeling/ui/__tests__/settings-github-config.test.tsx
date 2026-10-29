@@ -18,7 +18,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense } from "react";
 
 import { GithubConfigSection } from "@/routes/_sidebar/settings";
-import { firstRunFetcher } from "./helpers/first-run";
+import { firstRunFetcher, jsonResponse } from "./helpers/first-run";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -115,16 +115,9 @@ describe("GithubConfigSection", () => {
         "/api/config/github": (url: string, init?: RequestInit) => {
           if (init && init.method === "PUT") {
             putSpy(url, init);
-            return Promise.resolve({
-              ok: true,
-              status: 200,
-              json: async () => ({}),
-            });
+            return Promise.resolve(jsonResponse(200, {}));
           }
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({
+          return Promise.resolve(jsonResponse(200, {
               repo_owner: "acme",
               repo_name: "models",
               auth_mode: "oauth_u2m",
@@ -133,8 +126,7 @@ describe("GithubConfigSection", () => {
               // in this OAuth-first UI. They MUST survive a save.
               secret_scope: "vibe_secrets",
               secret_key: "gh_token",
-            }),
-          });
+            }));
         },
       }),
     );

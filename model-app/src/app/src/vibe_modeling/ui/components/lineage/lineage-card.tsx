@@ -12,6 +12,7 @@ import {
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { isForeignUninstall } from "@/lib/operations";
 import { isTerminalRunStatus } from "@/lib/run-status";
 import { versionScopeLabel } from "@/lib/version-label";
 
@@ -88,7 +89,10 @@ export function LineageCard({
   // output) — those are pipeline plumbing, not "the parent the user picked".
   // For new-base-model runs phase 1 has no parent, so Source legitimately
   // resolves to null (rendered as "—" below).
-  const sourceVersionId = sortedOps[0]?.parent_version_id ?? null;
+  // Skipped: an uninstall of another business's version, the source
+  // industry's version a kickstarted business's run removes first.
+  const sourceVersionId =
+    sortedOps.find((op) => !isForeignUninstall(op, versionById))?.parent_version_id ?? null;
   const sourceVersion = sourceVersionId ? versionById.get(sourceVersionId) : undefined;
 
   // Generated = the latest (highest step_index) op's output_version_id that

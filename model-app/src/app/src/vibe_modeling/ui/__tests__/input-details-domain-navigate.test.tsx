@@ -2,9 +2,7 @@
  * Vibe-Input review route ($inputId) domain-navigate wiring (item 3B,
  * 0.6.6).
  *
- * This review surface has no title-level domain picker (the shell's
- * `domainSelectorSlot` is only passed by the two model routes), but its
- * focal diagram can still show a RELATED domain group with a clickable
+ * This review surface has no domain picker, but its focal diagram can still show a RELATED domain group with a clickable
  * header. Item 3B deleted `DiagramViewer`'s internal domain-state fallback,
  * so this route must supply `onDomainNavigate` (routing to the clicked
  * domain's own page) and `showDomainSelect={false}` (no free-floating
@@ -73,11 +71,10 @@ function renderDetails() {
 }
 
 describe("Input-review route - domain-navigate wiring (item 3B)", () => {
-  it("passes showDomainSelect=false and no domainSelectorSlot to the shell", () => {
+  it("passes showDomainSelect=false to the shell", () => {
     lastShellProps = {};
     renderDetails();
     expect(lastShellProps.showDomainSelect).toBe(false);
-    expect(lastShellProps.domainSelectorSlot).toBeUndefined();
   });
 
   it("wires onDomainNavigate to route to the clicked domain's own page", () => {

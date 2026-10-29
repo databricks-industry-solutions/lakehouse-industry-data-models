@@ -2,7 +2,7 @@
  * Unit tests for the shared `industryDisplayName` resolver (lib/industry.ts).
  *
  * Behavior under test:
- *  - slug-match against catalog (case- and hyphen/space-insensitive) → catalog name
+ *  - slug-match against catalog (the shared industry slug rule) → catalog name
  *  - name-match against catalog → catalog name
  *  - no catalog match → title-cased hyphenated slug
  *  - falsy/blank passthrough
@@ -10,10 +10,19 @@
 import { describe, it, expect } from "vitest";
 import { industryDisplayName, type IndustryLike } from "@/lib/industry";
 
+const row = (name: string, short_name: string, extra: Partial<IndustryLike> = {}): IndustryLike => ({
+  name,
+  short_name,
+  is_active: true,
+  is_auto_created: false,
+  ...extra,
+});
+
 const catalog: IndustryLike[] = [
-  { name: "Food and Beverage", short_name: "food-and-beverage" },
-  { name: "Retail & E-Commerce", short_name: "retail" },
-  { name: "Energy - Utilities", short_name: "energy-utilities" },
+  row("Food and Beverage", "food-and-beverage"),
+  row("Retail & E-Commerce", "retail"),
+  row("Energy - Utilities", "energy-utilities"),
+  row("Mining & Metals", "mining", { is_active: false }),
 ];
 
 describe("industryDisplayName", () => {
@@ -58,7 +67,7 @@ describe("industryDisplayName", () => {
 
     it("humanizes a catalog entry whose name is itself a raw slug (F2)", () => {
       const slugCatalog: IndustryLike[] = [
-        { name: "digital-fashion-commerce", short_name: "digital-fashion-commerce" },
+        row("digital-fashion-commerce", "digital-fashion-commerce", { is_auto_created: true }),
       ];
       expect(
         industryDisplayName("digital-fashion-commerce", slugCatalog),
@@ -66,7 +75,25 @@ describe("industryDisplayName", () => {
     });
   });
 
-  describe("title-case fallback (no catalog match)", () => {
+  describe("shared slug rule", () => {
+    it("treats punctuation as a separator, so a slug matches a curated name", () => {
+      expect(industryDisplayName("retail-e-commerce", catalog)).toBe("Retail & E-Commerce");
+    });
+
+    it("skips an inactive industry", () => {
+      expect(industryDisplayName("mining", catalog)).toBe("Mining");
+    });
+
+    it("prefers a curated industry over an auto-created duplicate", () => {
+      const withDuplicate = [
+        row("apparel-fashion", "apparel-fashion", { is_auto_created: true }),
+        row("Apparel & Fashion", "apparel"),
+      ];
+      expect(industryDisplayName("apparel-fashion", withDuplicate)).toBe("Apparel & Fashion");
+    });
+  });
+
+    describe("title-case fallback (no catalog match)", () => {
     it("title-cases a hyphenated slug with connector words", () => {
       expect(industryDisplayName("staffing-and-recruitment", catalog)).toBe(
         "Staffing and Recruitment",

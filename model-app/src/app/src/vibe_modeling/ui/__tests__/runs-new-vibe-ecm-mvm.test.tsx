@@ -28,6 +28,7 @@
  * with text Vibe ECM + MVM" signal.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -39,6 +40,7 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import { Suspense } from "react";
+import { makeModelVersion } from "./helpers/model-version";
 
 const NEW_INTENT = "vibe-new-ecm-mvm";
 const NEW_INTENT_LABEL = "Vibe ECM + MVM";
@@ -100,6 +102,8 @@ vi.mock("@/lib/api", async () => {
     // CommandStrip subscribes to the version's runs for its status summary;
     // an empty array keeps the launcher-visibility assertions deterministic.
     useListRunsForVersion: () => ({ data: [] }),
+    // No base-model pre-fill: the form keeps its own values.
+    useGetRunDefaults: () => ({ data: undefined, isLoading: false, isError: false }),
     useListVibeInputs: (opts: any) => ({
       data: opts?.query?.select ? opts.query.select({ data: vibeInputsData }) : vibeInputsData,
     }),
@@ -228,6 +232,8 @@ function readOperationTypeOptions(): string[] {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.runs.new"));
 
 describe("intent map — vibe-new-ecm-mvm", () => {
   it("intentLabel('vibe-new-ecm-mvm') === 'Vibe ECM + MVM'", async () => {
@@ -520,7 +526,6 @@ describe("runs.new — validate blocker for MVM parent renders inline", () => {
           screen.queryByText(/Parent version must be an ECM scope/i),
         ).not.toBeNull();
       },
-      { timeout: 2000 },
     );
   });
 });
@@ -555,10 +560,8 @@ describe("CommandStrip — Prepare new Vibe entry", () => {
     const { container } = renderWithRouter(
       <CommandStrip
         businessId="biz-1"
-        versionId="v-1-ecm"
-        versionNum={1}
-        scope="ecm"
-        deploymentStatus="draft"
+        version={makeModelVersion({ id: "v-1-ecm", version: 1, scope: "ecm", deployment_status: "draft" })}
+        versions={[]}
       />,
     );
 
@@ -588,10 +591,8 @@ describe("CommandStrip — Prepare new Vibe entry", () => {
     const { container } = renderWithRouter(
       <CommandStrip
         businessId="biz-1"
-        versionId="v-1-mvm"
-        versionNum={1}
-        scope="mvm"
-        deploymentStatus="deployed"
+        version={makeModelVersion({ id: "v-1-mvm", version: 1, scope: "mvm", deployment_status: "deployed", uc_catalog: "cat_a" })}
+        versions={[]}
       />,
     );
 

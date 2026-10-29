@@ -19,6 +19,8 @@ from sqlmodel import Session, SQLModel, create_engine
 from vibe_modeling.backend.core._config import AppConfig
 from vibe_modeling.backend.progress_tracker import ProgressTracker, SessionStatus, ProgressEvent
 
+from _sql_fakes import response
+
 
 @pytest.fixture
 def engine():
@@ -62,11 +64,7 @@ class TestPollSessionStatus:
 
     def test_returns_none_when_empty(self, tracker, mock_ws):
         """Empty result set returns None."""
-        result_mock = MagicMock()
-        result_mock.status = MagicMock()
-        result_mock.status.error = None
-        result_mock.result.data_array = []
-        mock_ws.statement_execution.execute_statement.return_value = result_mock
+        mock_ws.statement_execution.execute_statement.return_value = response([])
 
         result = tracker._poll_session_status("cat", "test_biz", "v1", "MVM")
         assert result is None
@@ -74,11 +72,7 @@ class TestPollSessionStatus:
     def test_parses_row(self, tracker, mock_ws):
         """Successful result returns a SessionStatus."""
         row = ["12345", "running", "50.0", "2024-01-01T00:00:00", None, None, "test_biz", "v1", "MVM"]
-        result_mock = MagicMock()
-        result_mock.status = MagicMock()
-        result_mock.status.error = None
-        result_mock.result.data_array = [row]
-        mock_ws.statement_execution.execute_statement.return_value = result_mock
+        mock_ws.statement_execution.execute_statement.return_value = response([row])
 
         status = tracker._poll_session_status("cat", "test_biz", "v1", "MVM")
         assert status is not None
@@ -91,11 +85,7 @@ class TestPollSessionStatus:
     def test_parses_results_json(self, tracker, mock_ws):
         """Results JSON is parsed when present."""
         row = ["1", "done", "100.0", None, '{"model_path": "/path/to/model"}', "2024-01-01", "biz", "v1", "MVM"]
-        result_mock = MagicMock()
-        result_mock.status = MagicMock()
-        result_mock.status.error = None
-        result_mock.result.data_array = [row]
-        mock_ws.statement_execution.execute_statement.return_value = result_mock
+        mock_ws.statement_execution.execute_statement.return_value = response([row])
 
         status = tracker._poll_session_status("cat", "biz", "v1", "MVM")
         assert status.results_json == {"model_path": "/path/to/model"}
@@ -104,11 +94,7 @@ class TestPollSessionStatus:
 class TestPollProgressEvents:
     def test_empty_result(self, tracker, mock_ws):
         """Empty result returns empty list."""
-        result_mock = MagicMock()
-        result_mock.status = MagicMock()
-        result_mock.status.error = None
-        result_mock.result.data_array = []
-        mock_ws.statement_execution.execute_statement.return_value = result_mock
+        mock_ws.statement_execution.execute_statement.return_value = response([])
 
         events = tracker._poll_progress_events("cat", 12345, 0)
         assert events == []
@@ -119,11 +105,7 @@ class TestPollProgressEvents:
             ["1", "0", "Phase 1", "Generate Schema", "completed", "Schema generated", "25.0", None],
             ["2", "1", "Phase 1", "Validate Schema", "running", "Validating...", "10.0", '{"valid": true}'],
         ]
-        result_mock = MagicMock()
-        result_mock.status = MagicMock()
-        result_mock.status.error = None
-        result_mock.result.data_array = rows
-        mock_ws.statement_execution.execute_statement.return_value = result_mock
+        mock_ws.statement_execution.execute_statement.return_value = response(rows)
 
         events = tracker._poll_progress_events("cat", 12345, 0)
         assert len(events) == 2
@@ -149,10 +131,7 @@ class TestPollProgressEvents:
 class TestAcknowledgeBatch:
     def test_sends_update_sql(self, tracker, mock_ws):
         """acknowledge_batch executes an UPDATE SQL statement."""
-        result_mock = MagicMock()
-        result_mock.status = MagicMock()
-        result_mock.status.error = None
-        mock_ws.statement_execution.execute_statement.return_value = result_mock
+        mock_ws.statement_execution.execute_statement.return_value = response()
 
         tracker._acknowledge_batch("my_catalog", 12345)
 
@@ -165,10 +144,7 @@ class TestAcknowledgeBatch:
 
     def test_includes_identity_columns(self, tracker, mock_ws):
         """When business_name, version, model_scope are provided, WHERE includes all."""
-        result_mock = MagicMock()
-        result_mock.status = MagicMock()
-        result_mock.status.error = None
-        mock_ws.statement_execution.execute_statement.return_value = result_mock
+        mock_ws.statement_execution.execute_statement.return_value = response()
 
         tracker._acknowledge_batch(
             "my_catalog", 12345,
@@ -186,10 +162,7 @@ class TestAcknowledgeBatch:
 
     def test_session_id_only_without_identity(self, tracker, mock_ws):
         """When identity columns are not provided, WHERE only has session_id."""
-        result_mock = MagicMock()
-        result_mock.status = MagicMock()
-        result_mock.status.error = None
-        mock_ws.statement_execution.execute_statement.return_value = result_mock
+        mock_ws.statement_execution.execute_statement.return_value = response()
 
         tracker._acknowledge_batch("my_catalog", 99999)
 

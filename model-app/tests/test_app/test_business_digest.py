@@ -38,7 +38,7 @@ class TestExtractBusinessDigest:
         assert digest.common_business_jargons == "MAU, DAU"
         assert digest.operational_systems_of_records == "Steam, PlayFab"
         assert digest.industry_governing_body == "ESRB"
-        assert digest.industry_will_be_created is False
+        assert digest.industry_id is None
 
     def test_flat_payload_falls_back_to_model_name(self):
         """Hand-edited model.json files without the agent wrapper still
@@ -204,6 +204,45 @@ class TestDiffBusinessDigest:
             current_industry_alignment="Gaming",
         )
         assert mismatches == []
+
+    def test_industry_slug_match_is_not_a_mismatch(self):
+        """The import dialog stores the catalog name of the agent's slug."""
+        digest = self._digest(industry_alignment="energy-utilities")
+        assert diff_business_digest(
+            digest, current_name="Gaming", current_industry_alignment="Energy - Utilities",
+        ) == []
+
+    def test_same_resolved_industry_is_not_a_mismatch(self):
+        digest = self._digest(industry_alignment="utilities")
+        assert diff_business_digest(
+            digest,
+            current_name="Gaming",
+            current_industry_alignment="Energy - Utilities",
+            digest_industry_id="ind-1",
+            current_industry_id="ind-1",
+        ) == []
+
+    def test_different_resolved_industries_still_mismatch(self):
+        digest = self._digest(industry_alignment="utilities")
+        mismatches = diff_business_digest(
+            digest,
+            current_name="Gaming",
+            current_industry_alignment="Energy - Utilities",
+            digest_industry_id="ind-1",
+            current_industry_id="ind-2",
+        )
+        assert [m.field for m in mismatches] == ["industry_alignment"]
+
+    def test_unresolved_ids_do_not_count_as_equal(self):
+        digest = self._digest(industry_alignment="Retail")
+        mismatches = diff_business_digest(
+            digest,
+            current_name="Gaming",
+            current_industry_alignment="Energy",
+            digest_industry_id=None,
+            current_industry_id=None,
+        )
+        assert [m.field for m in mismatches] == ["industry_alignment"]
 
     def test_both_fields_mismatch(self):
         digest = self._digest(business_name="A", industry_alignment="B")

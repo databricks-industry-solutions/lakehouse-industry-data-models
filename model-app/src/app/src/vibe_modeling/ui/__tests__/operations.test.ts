@@ -13,6 +13,8 @@ describe("OPERATION_METADATA", () => {
     const required = [
       "new base model",
       "vibe modeling of version",
+      "vibe new ecm + mvm",
+      "vibe-new-ecm-mvm",
       "shrink ecm",
       "enlarge mvm",
       "install model",

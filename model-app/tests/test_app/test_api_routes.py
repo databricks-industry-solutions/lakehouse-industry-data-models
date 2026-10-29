@@ -5,7 +5,10 @@ with in-memory SQLite replacing Lakebase and a mock WorkspaceClient replacing th
 """
 
 import json
+from types import SimpleNamespace
+
 import pytest
+from databricks.sdk.errors import NotFound
 
 
 # --- Business CRUD ---
@@ -187,7 +190,7 @@ class TestBusinessCRUD:
         stored alignment, and must leave the derived ``industry_id`` FK intact.
         ``industry_alignment`` defaults to ``""`` on ``BusinessIn``, so an
         unconditional ``business.industry_alignment = data.industry_alignment``
-        wiped it (and cascade-nulled ``industry_id`` via ``_resolve_industry_id``)
+        wiped it (and cascade-nulled ``industry_id`` via ``resolve_industry_id``)
         on every edit form that dropped the field."""
         from sqlmodel import Session
         from vibe_modeling.backend.db_models import Business, Industry
@@ -733,14 +736,17 @@ class TestVersions:
 
 class TestRunCRUD:
     def test_create_run_no_agent_config(self, client, seed_business):
-        """When no AgentConfig is set, run creation returns 400."""
+        """With no agent configured, run creation answers the pre-flight's
+        level-1 structured 422 ``config_missing``."""
         response = client.post(f"/api/businesses/{seed_business}/runs", json={
             "intent": "new-base-model",
             "catalog": "test_catalog",
             "business_context_path": "/Volumes/test/ctx/vibes/ctx.json",
         })
-        assert response.status_code == 400
-        assert "Agent not configured" in response.json()["detail"]
+        assert response.status_code == 422, response.text
+        detail = response.json()["detail"]
+        assert detail["error"] == "config_missing"
+        assert "agent_job" in {m["key"] for m in detail["missing"]}
 
     def test_create_run_with_agent(self, client_with_agent, mock_ws, seed_business):
         """With AgentConfig seeded, run triggers and becomes running."""
@@ -774,15 +780,22 @@ class TestRunCRUD:
 
         Covers the failure mode where the notebook gets moved/re-permissioned
         after save — without this guard the job runs and fails with a cryptic
-        Databricks error, leaving the app run stuck.
+        Databricks error, leaving the app run stuck. Validate reports the same
+        refusal as a blocker (the pre-flight's level 1).
         """
-        mock_ws.workspace.get_status.side_effect = Exception("RESOURCE_DOES_NOT_EXIST")
-        response = client_with_agent.post(f"/api/businesses/{seed_business}/runs", json={
+        mock_ws.workspace.get_status.side_effect = NotFound("RESOURCE_DOES_NOT_EXIST")
+        body = {
             "intent": "new-base-model",
             "catalog": "test_catalog",
             "business_context_path": "/Volumes/test/ctx.json",
-        })
+        }
+        validated = client_with_agent.post(f"/api/businesses/{seed_business}/runs/validate", json=body)
+        assert validated.status_code == 200, validated.text
+        first = validated.json()["blockers"][0]
+        assert first["field_path"] == "(agent_config.notebook_path)"
+        response = client_with_agent.post(f"/api/businesses/{seed_business}/runs", json=body)
         assert response.status_code == 400
+        assert response.json()["detail"] == first["message"]
         assert "cannot access" in response.json()["detail"].lower()
         mock_ws.jobs.run_now.assert_not_called()
 
@@ -911,7 +924,8 @@ class TestRunCRUD:
         assert params["catalog"] == "my_catalog"
         assert params["vibe_instructions"] == "Add HR tables"
         assert params["model_size"] == "large model"
-        assert params["generate_samples"] is True
+        # Accepted but never sent to the agent, so not part of the audit.
+        assert "generate_samples" not in params
 
 
     def test_vibe_iterate_compiles_input_ids_into_instructions(
@@ -1191,6 +1205,27 @@ class TestAgentConfigEndpoints:
         )
         assert client.get("/api/config/agent").json()["metamodel_catalog"] == "mm_chosen"
 
+    @pytest.mark.parametrize("path,key", [
+        ("/api/config/metamodel-catalog", "metamodel_catalog"),
+        ("/api/config/deployment-catalog", "deployment_catalog"),
+    ])
+    @pytest.mark.parametrize("name", ["my-catalog", "My_Catalog", "1cat", "c", "x" * 256])
+    def test_set_metamodel_catalog_refuses_a_name_the_agent_cant_take(self, client, path, key, name):
+        """The server applies the Settings form's rule (``CATALOG_NAME_PATTERN``):
+        400 ``setting_refused`` and the stored catalog is unchanged."""
+        before = client.get("/api/config/metamodel-catalog").json()["metamodel_catalog"]
+        response = client.put(path, json={key: name})
+        assert response.status_code == 400, response.text
+        detail = response.json()["detail"]
+        assert detail["error"] == "setting_refused" and detail["key"] == "metamodel_catalog"
+        assert "letters, digits and underscores" in detail["message"]
+        assert client.get("/api/config/metamodel-catalog").json()["metamodel_catalog"] == before
+
+    def test_set_metamodel_catalog_can_clear_it(self, client):
+        response = client.put("/api/config/metamodel-catalog", json={"metamodel_catalog": ""})
+        assert response.status_code == 200
+        assert response.json()["is_configured"] is False
+
     def test_legacy_deployment_catalog_still_answers(self, client):
         """Old endpoint keeps answering (delegate kept one release); a PUT there
         is visible through the new metamodel-catalog reader too."""
@@ -1242,48 +1277,32 @@ class TestAgentConfigEndpoints:
         assert data["max_concurrent_runs"] == 3
 
     def test_set_agent_config_persists_collect_vibe_run_statistics(self, client, mock_ws):
-        """The toggle from the Settings UI must round-trip into the DB.
-
-        Regression for an earlier miss where `set_agent_config` hand-copied
-        notebook_path + max_concurrent_runs but silently dropped the new
-        `collect_vibe_run_statistics` field, so the UI Save appeared to
-        succeed but the persisted row stayed at the default (False).
-        """
+        """The run-tags setting ("Annotate jobs with run tags") round-trips, starts
+        on for a fresh row, and a PUT that leaves the field out keeps the stored
+        value (a PUT may send the notebook path alone)."""
         from unittest.mock import MagicMock
         mock_job = MagicMock()
         mock_job.job_id = 42
         mock_ws.jobs.create.return_value = mock_job
+        base = {"notebook_path": "/Workspace/my/notebook", "max_concurrent_runs": 3}
 
-        # Default OFF round-trips.
-        response = client.put("/api/config/agent", json={
-            "notebook_path": "/Workspace/my/notebook",
-            "max_concurrent_runs": 3,
-        })
-        assert response.status_code == 200
-        assert response.json()["collect_vibe_run_statistics"] is False
+        def put(**extra):
+            response = client.put("/api/config/agent", json={**base, **extra})
+            assert response.status_code == 200
+            return response.json()["collect_vibe_run_statistics"]
 
-        # Opt-in round-trips.
-        response = client.put("/api/config/agent", json={
-            "notebook_path": "/Workspace/my/notebook",
-            "max_concurrent_runs": 3,
-            "collect_vibe_run_statistics": True,
-        })
-        assert response.status_code == 200
-        assert response.json()["collect_vibe_run_statistics"] is True
-
-        # Subsequent GET reflects the persisted value.
         response = client.get("/api/config/agent")
         assert response.status_code == 200
         assert response.json()["collect_vibe_run_statistics"] is True
 
-        # Toggle back OFF — round-trips.
-        response = client.put("/api/config/agent", json={
-            "notebook_path": "/Workspace/my/notebook",
-            "max_concurrent_runs": 3,
-            "collect_vibe_run_statistics": False,
-        })
+        assert put() is True
+        assert put(collect_vibe_run_statistics=False) is False
+        assert put() is False
+        response = client.get("/api/config/agent")
         assert response.status_code == 200
         assert response.json()["collect_vibe_run_statistics"] is False
+        assert put(collect_vibe_run_statistics=None) is False
+        assert put(collect_vibe_run_statistics=True) is True
 
     def test_set_agent_config_max_concurrent_runs_below_min_rejected(self, client, mock_ws):
         """Sub-3 values for max_concurrent_runs return 422 with a clear
@@ -1364,7 +1383,11 @@ class TestAgentConfigEndpoints:
         max_concurrent_runs — so an operator changing the value sees the
         cap update inside the same PUT request, not on the next
         deploy/restart."""
-        # client_with_agent seeds an AgentConfig with job_id=99.
+        # client_with_agent seeds an AgentConfig with job_id=99. The save
+        # re-reads the job afterwards; like the Jobs API, return what was reset.
+        mock_ws.jobs.get.side_effect = lambda job_id: SimpleNamespace(
+            settings=mock_ws.jobs.reset.call_args.kwargs["new_settings"]
+        )
         response = client_with_agent.put("/api/config/agent", json={
             "notebook_path": "/Workspace/test/notebook",
             "max_concurrent_runs": 5,
@@ -1381,7 +1404,7 @@ class TestAgentConfigEndpoints:
 
     def test_set_agent_config_preflight_fails(self, client, mock_ws):
         """PUT /config/agent returns 400 when the SP can't reach the notebook."""
-        mock_ws.workspace.get_status.side_effect = Exception("RESOURCE_DOES_NOT_EXIST")
+        mock_ws.workspace.get_status.side_effect = NotFound("RESOURCE_DOES_NOT_EXIST")
         response = client.put("/api/config/agent", json={
             "notebook_path": "/Workspace/Users/someone/private/notebook",
         })
@@ -1410,7 +1433,7 @@ class TestAgentConfigEndpoints:
 
     def test_check_agent_notebook_not_found(self, client, mock_ws):
         """GET check-notebook returns ok=false with a reason."""
-        mock_ws.workspace.get_status.side_effect = Exception("RESOURCE_DOES_NOT_EXIST")
+        mock_ws.workspace.get_status.side_effect = NotFound("RESOURCE_DOES_NOT_EXIST")
         response = client.get("/api/config/agent/check-notebook?path=/nope")
         assert response.status_code == 200
         body = response.json()
@@ -1542,69 +1565,11 @@ class TestAgentConfigEndpoints:
 
     def test_agent_ready_notebook_inaccessible(self, client_with_agent, mock_ws):
         """Agent configured but notebook no longer visible → not ready."""
-        mock_ws.workspace.get_status.side_effect = Exception("RESOURCE_DOES_NOT_EXIST")
+        mock_ws.workspace.get_status.side_effect = NotFound("RESOURCE_DOES_NOT_EXIST")
         response = client_with_agent.get("/api/config/agent/ready")
         body = response.json()
         assert body["ready"] is False
         assert "can no longer access" in body["reason"]
-
-
-class TestBundledAgentEndpoints:
-    def test_bundled_agent_info_exposes_manifest(self, client):
-        """GET /admin/bundled-agent echoes the VERSIONS.json manifest.
-
-        Pinned to the v0.8.0 release — see core/_defaults.py for context.
-        The whole v0.7.x line stays in `supported_tags` (all vetted
-        compatible) alongside v0.8.0 so a re-pin within the range doesn't
-        need a notebook roundtrip. v0.6.0 was dropped entirely."""
-        response = client.get("/api/admin/bundled-agent")
-        assert response.status_code == 200
-        body = response.json()
-        assert body["available"] is True
-        assert body["pinned_tag"] == "v0.8.0"
-        assert "v0.8.0" in body["supported_tags"]
-        assert "v0.7.0" in body["supported_tags"]
-        assert "v0.6.0" not in body["supported_tags"]
-        assert body["file_name"].startswith("vibe_modelling_agent_v4.9.9")
-
-    def test_install_bundled_agent_uploads_to_user_folder(self, client, mock_ws):
-        """POST /admin/install-bundled-agent uploads to /Users/<sp>/vibe-modelling-agent/."""
-        from unittest.mock import MagicMock
-
-        sp = MagicMock()
-        sp.user_name = "app-sp@example.com"
-        mock_ws.current_user.me.return_value = sp
-        # First get_status (probing if target already exists) raises → not overwrite.
-        mock_ws.workspace.get_status.side_effect = Exception("RESOURCE_DOES_NOT_EXIST")
-
-        response = client.post("/api/admin/install-bundled-agent")
-        assert response.status_code == 200, response.text
-        body = response.json()
-        expected_prefix = "/Users/app-sp@example.com/vibe-modelling-agent/"
-        assert body["path"].startswith(expected_prefix)
-        assert body["path"].endswith(".ipynb") or body["path"].endswith(".py")
-        assert body["version"] == "v0.8.0"
-        assert body["overwritten"] is False
-        # The SDK upload call must have been invoked with the right target.
-        mock_ws.workspace.mkdirs.assert_called_once_with(
-            "/Users/app-sp@example.com/vibe-modelling-agent"
-        )
-        assert mock_ws.workspace.upload.called
-        kwargs = mock_ws.workspace.upload.call_args.kwargs
-        assert kwargs["path"] == body["path"]
-        assert kwargs.get("overwrite") is True
-
-    def test_install_bundled_agent_flags_overwrite_on_existing(self, client, mock_ws):
-        """overwritten=True when get_status succeeds on the target path."""
-        from unittest.mock import MagicMock
-
-        sp = MagicMock()
-        sp.user_name = "app-sp@example.com"
-        mock_ws.current_user.me.return_value = sp
-        mock_ws.workspace.get_status.return_value = object()
-        response = client.post("/api/admin/install-bundled-agent")
-        assert response.status_code == 200
-        assert response.json()["overwritten"] is True
 
 
 # --- Progress Events ---
@@ -1627,7 +1592,7 @@ class TestProgressEvents:
         wall-clock order, NOT step_id order, so the run-detail UI renders
         them coherently.
         """
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         from sqlmodel import Session
         from vibe_modeling.backend.db_models import RunProgressEvent
 
@@ -1635,7 +1600,7 @@ class TestProgressEvents:
         parent_step = 1778438483801
         iter1_step = 1778438548343
         iter2_step = 1778438659076
-        t0 = datetime(2026, 5, 10, 18, 41, 30)
+        t0 = datetime(2026, 5, 10, 18, 41, 30, tzinfo=timezone.utc)
         with Session(engine) as s:
             s.add_all(
                 [

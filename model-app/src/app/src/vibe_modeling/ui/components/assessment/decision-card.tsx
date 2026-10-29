@@ -14,6 +14,7 @@ import {
 import { decisionAnchor, decisionLabel } from "@/lib/assessment";
 import { formatDateTime } from "@/lib/date";
 import { notifyError } from "@/lib/notify";
+import { AgentText, plainAgentText } from "./agent-text";
 
 const KIND_LABEL: Record<string, string> = { structure: "Structure", source: "Source", scope: "Scope" };
 
@@ -154,7 +155,7 @@ export function DecisionCard({
       type="radio"
       name={`decision-${decision.id}`}
       value={o.id}
-      aria-label={o.label}
+      aria-label={plainAgentText(o.label)}
       checked={optionId === o.id}
       onChange={() => setOptionId(o.id)}
     />
@@ -184,24 +185,24 @@ export function DecisionCard({
           {decision.entity && <span>· {decision.entity}</span>}
         </div>
         <CardTitle className="text-base leading-snug">
-          <h3>{decision.question}</h3>
+          <h3><AgentText text={decision.question} /></h3>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
         {decision.context && (
           <div>
             <h4 className="text-xs font-semibold uppercase text-muted-foreground">Context</h4>
-            <p>{decision.context}</p>
+            <p><AgentText text={decision.context} /></p>
           </div>
         )}
         {decision.why_it_matters && (
           <div>
             <h4 className="text-xs font-semibold uppercase text-muted-foreground">Why it matters</h4>
-            <p>{decision.why_it_matters}</p>
+            <p><AgentText text={decision.why_it_matters} /></p>
           </div>
         )}
         {rich ? (
-          <div className="grid gap-3 md:grid-cols-[repeat(auto-fit,minmax(14rem,1fr))]" role="radiogroup" aria-label={decision.question}>
+          <div className="grid gap-3 md:grid-cols-[repeat(auto-fit,minmax(14rem,1fr))]" role="radiogroup" aria-label={plainAgentText(decision.question)}>
             {decision.options.map((o) => (
               <div
                 key={o.id}
@@ -210,7 +211,7 @@ export function DecisionCard({
               >
                 <label className="flex items-center gap-2 font-medium">
                   {radio(o)}
-                  <span>{o.label}</span>
+                  <span><AgentText text={o.label} /></span>
                   {o.recommended && <Badge variant="secondary">Recommended</Badge>}
                 </label>
                 {(o.pros?.length ?? 0) > 0 && (
@@ -218,7 +219,7 @@ export function DecisionCard({
                     {(o.pros ?? []).map((p, i) => (
                       <li key={i} className="flex gap-1.5">
                         <span aria-hidden className="text-green-600">✓</span>
-                        <span>{p}</span>
+                        <span><AgentText text={p} /></span>
                       </li>
                     ))}
                   </ul>
@@ -228,35 +229,41 @@ export function DecisionCard({
                     {(o.cons ?? []).map((c, i) => (
                       <li key={i} className="flex gap-1.5">
                         <span aria-hidden className="text-red-600">✗</span>
-                        <span>{c}</span>
+                        <span><AgentText text={c} /></span>
                       </li>
                     ))}
                   </ul>
                 )}
-                {o.impact && <p className="text-xs text-muted-foreground">{o.impact}</p>}
+                {o.impact && <p className="text-xs text-muted-foreground"><AgentText text={o.impact} /></p>}
               </div>
             ))}
           </div>
         ) : (
-          <div className="space-y-1" role="radiogroup" aria-label={decision.question}>
+          <div className="space-y-1" role="radiogroup" aria-label={plainAgentText(decision.question)}>
             {decision.options.map((o) => (
               <label key={o.id} className="flex items-center gap-2">
                 {radio(o)}
-                {o.label}
+                <AgentText text={o.label} />
               </label>
             ))}
           </div>
         )}
         {recommended && (
           <p className="font-medium">
-            {`Recommended: ${recommended.label}${decision.recommendation_rationale ? ` — ${decision.recommendation_rationale}` : ""}`}
+            Recommended: <AgentText text={recommended.label} />
+            {decision.recommendation_rationale && (
+              <>
+                {" — "}
+                <AgentText text={decision.recommendation_rationale} />
+              </>
+            )}
           </p>
         )}
         {decision.default_taken && (
-          <p className="text-muted-foreground">Default the run took: {decision.default_taken}</p>
+          <p className="text-muted-foreground">Default the run took: <AgentText text={decision.default_taken} /></p>
         )}
         {decision.evidence && (
-          <p className="rounded-md bg-muted p-2 text-xs text-muted-foreground">Evidence: {decision.evidence}</p>
+          <p className="rounded-md bg-muted p-2 text-xs text-muted-foreground">Evidence: <AgentText text={decision.evidence} /></p>
         )}
         {(decision.affected?.length ?? 0) > 0 && (
           <div className="flex flex-wrap gap-1">

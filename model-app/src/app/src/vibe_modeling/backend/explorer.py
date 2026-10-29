@@ -4,7 +4,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 from databricks.sdk.errors.platform import NotFound
 from fastapi import HTTPException, Path as PathParam
@@ -28,6 +28,8 @@ from . import next_vibe_metrics as _nv_metrics
 from . import report_export as _report_export
 from . import review as _review
 from .model_diff import compute_model_diff
+from .services.operations.enlarge_to_ecm import EnlargeToEcm
+from .services.operations.shrink_to_mvm import ShrinkToMvm
 from .db_models import (
     Attribute as DbAttribute,
     Business,
@@ -36,6 +38,7 @@ from .db_models import (
     Product as DbProduct,
     Run,
     RunArtifact,
+    RunOperation,
     Subdomain as DbSubdomain,
 )
 from .models import (
@@ -51,6 +54,7 @@ from .models import (
     EvolutionProvenanceOut,
     EvolutionQualityOut,
     EvolutionSizeOut,
+    Intent,
     ModelSearchHitOut,
     ModelSummaryOut,
     NextVibeCategoryCountsOut,
@@ -226,11 +230,9 @@ def _find_model_json_path(
     mv = resolve_model_version(session, business_id, version_int, scope)
     business = session.get(Business, business_id)
     if mv and business:
-        # Per-version Volume catalog: mv.uc_catalog when known, else the
-        # installation metamodel catalog (session-only read, no seed). A
-        # draft's uc_catalog is "" but its model.json still lives under the
-        # metamodel catalog's vol_root - the prior bare `mv.uc_catalog or ""`
-        # skipped that path and silently returned no docs.
+        # Where the version's files are (resolve_version_volume_catalog:
+        # files_catalog, else uc_catalog, else the installation metamodel
+        # catalog by a session-only read, no seed).
         catalog = resolve_version_volume_catalog(mv, session)
         if catalog:
             try:
@@ -375,7 +377,7 @@ def _read_volume_json(ws, file_path: str) -> dict | None:
     except Exception as e:
         raise HTTPException(
             status_code=404,
-            detail=f"Could not read model file at {file_path}: {e}",
+            detail=f"Could not read this version's model file: {e}",
         )
 
 
@@ -415,21 +417,46 @@ def _find_product(domain: dict, product_name: str) -> dict | None:
 def _load_prev_model(session, ws, business_id: str, version_int: int, scope: str = "") -> dict | None:
     """Try to load the model for the previous version of the same scope.
 
-    Queries for max(version) WHERE business_id=X AND scope=Y AND version < N
-    so ECM and MVM diffs don't bleed across scopes.
+    The previous version is the row's lineage base (``base_version_id``) when
+    that base has the same scope and is not a Dry Run ``draft``, so a Full Run
+    made after a Dry Run diffs against the version it was built on. Otherwise
+    (no base, a draft base, or the cross-scope base that shrink/enlarge stamp,
+    an MVM built from an ECM) it is max(version) WHERE business_id=X AND
+    scope=Y AND version < N AND status != "draft", so ECM and MVM diffs don't
+    bleed across scopes and drafts are never the comparison point.
     """
     if version_int <= 1:
         return None
     try:
-        prev_mv = session.exec(
-            select(ModelVersion)
-            .where(
+        current_mv = session.exec(
+            select(ModelVersion).where(
                 ModelVersion.business_id == business_id,
                 ModelVersion.scope == scope,
-                ModelVersion.version < version_int,
+                ModelVersion.version == version_int,
             )
-            .order_by(ModelVersion.version.desc())
         ).first()
+        prev_mv = None
+        if current_mv is not None and current_mv.base_version_id:
+            base_mv = session.get(ModelVersion, current_mv.base_version_id)
+            if (
+                base_mv is not None
+                and base_mv.business_id == business_id
+                and (base_mv.scope or "") == (scope or "")
+                and base_mv.status != "draft"
+                and base_mv.version < version_int
+            ):
+                prev_mv = base_mv
+        if prev_mv is None:
+            prev_mv = session.exec(
+                select(ModelVersion)
+                .where(
+                    ModelVersion.business_id == business_id,
+                    ModelVersion.scope == scope,
+                    ModelVersion.version < version_int,
+                    ModelVersion.status != "draft",
+                )
+                .order_by(ModelVersion.version.desc())
+            ).first()
         if not prev_mv:
             return None
         return _load_model(session, ws, business_id, prev_mv.version, scope)
@@ -440,6 +467,76 @@ def _load_prev_model(session, ws, business_id: str, version_int: int, scope: str
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+# Operations whose output copies its parent's brand instead of being a vibe
+# iteration of it: New Base Model's shrink step gets the just-generated base
+# ECM as parent and must read Base, not Vibed.
+_BRAND_INHERITING_OPS = (ShrinkToMvm.name, EnlargeToEcm.name)
+
+
+def _version_brands(
+    session, versions: list[ModelVersion]
+) -> dict[str, tuple[bool, bool]]:
+    """Map version id -> ``(is_base, parent_deleted)`` for one business.
+
+    Base: no lineage parent, or a shrink/enlarge output whose parent is Base.
+    Vibed: everything else. ``base_version_id`` has no FK, so a deleted parent
+    leaves the pointer behind. A shrink/enlarge output in that state is
+    ``(False, True)``, except the shrink step of a New Base Model run, which
+    is Base whatever happened to the ECM it was shrunk from. Any other output
+    with a deleted parent is plain Vibed.
+    """
+    by_id = {v.id: v for v in versions}
+    # version id -> intent of the run that produced it, for shrink/enlarge outputs.
+    inheriting: dict[str, str] = {}
+    if by_id:
+        rows = session.exec(
+            select(RunOperation.output_version_id, Run.intent)
+            .join(Run, Run.id == RunOperation.run_id)
+            .where(
+                RunOperation.output_version_id.in_(list(by_id)),
+                RunOperation.operation_name.in_(_BRAND_INHERITING_OPS),
+            )
+        ).all()
+        for version_id, intent in rows:
+            inheriting.setdefault(version_id, intent)
+
+    brands: dict[str, tuple[bool, bool]] = {}
+
+    def own_brand(v: ModelVersion) -> Optional[tuple[bool, bool]]:
+        """The brand when it does not depend on the parent's, else None."""
+        if v.base_version_id is None:
+            return (True, False)
+        if v.id not in inheriting:
+            return (False, False)
+        if v.base_version_id not in by_id:
+            if inheriting[v.id] == Intent.NEW_BASE_MODEL.value:
+                return (True, False)
+            return (False, True)
+        return None
+
+    # Iterative so a long lineage chain cannot hit the recursion limit.
+    for v in versions:
+        path: list[ModelVersion] = []
+        on_path: set[str] = set()
+        cur = v
+        while cur.id not in brands:
+            result = own_brand(cur)
+            if result is not None:
+                brands[cur.id] = result
+                break
+            path.append(cur)
+            on_path.add(cur.id)
+            parent = by_id[cur.base_version_id]
+            if parent.id in on_path:
+                brands[cur.id] = (False, False)
+                path.pop()
+                break
+            cur = parent
+        for node in reversed(path):
+            brands[node.id] = (brands[node.base_version_id][0], False)
+    return brands
 
 
 @router.get(
@@ -454,6 +551,7 @@ def get_explorer_versions(business_id: str, session: Dependencies.Session):
         .where(ModelVersion.business_id == business_id)
         .order_by(ModelVersion.version.asc())
     ).all()
+    brands = _version_brands(session, versions)
 
     return [
         VersionTreeOut(
@@ -466,7 +564,8 @@ def get_explorer_versions(business_id: str, session: Dependencies.Session):
             confidence_score=v.confidence_score,
             scope=v.scope or "",
             created_at=v.created_at,
-            is_base=v.base_version_id is None,
+            is_base=brands[v.id][0],
+            parent_deleted=brands[v.id][1],
         )
         for v in versions
     ]

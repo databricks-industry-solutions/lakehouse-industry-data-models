@@ -38,6 +38,7 @@ def _fake_agent(tmp_path: Path) -> BundledAgent:
         file_name=nb.name,
         pinned_tag="v0.7.1",
         supported_tags=["v0.7.0", "v0.7.1"],
+        agent_version="0.7.1",
     )
 
 
@@ -125,6 +126,7 @@ def app_config():
     cfg.deployment_catalog = "test_catalog"
     cfg.warehouse_id = "test_warehouse"
     cfg.taxonomy_install_default_model_service = ""
+    cfg.run_tags_default = True
     return cfg
 
 

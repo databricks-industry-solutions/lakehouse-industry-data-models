@@ -1,13 +1,19 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Suspense, useEffect, useRef } from "react";
 import { ErrorBoundary } from "react-error-boundary";
+import { usePrefetchQuery } from "@tanstack/react-query";
 import {
   useGetBusinessSuspense,
+  getModelSummary,
+  getModelSummaryKey,
   useGetExplorerVersionsSuspense,
+  useGetModelSummarySuspense,
   useGetProductDetailSuspense,
 } from "@/lib/api";
 import { isNotFoundError } from "@/lib/api-error";
 import { selector } from "@/lib/selector";
+import { liveDomainOptions } from "@/lib/domain-options";
+import { TabDomainSelect } from "@/components/diagram/domain-select";
 import { versionScopeLabel } from "@/lib/version-label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +38,7 @@ import { Table2, Key } from "lucide-react";
 import { ChangeBadge, changeRowClassName } from "@/components/explorer/change-badge";
 import { FkLink } from "@/components/explorer/fk-link";
 import { AddFeedbackButton } from "@/components/feedback/add-feedback-button";
+import { buildFeedbackContext } from "@/components/feedback/feedback-context";
 import { splitCommaList } from "@/lib/comma-list";
 
 export const Route = createFileRoute(
@@ -125,7 +132,7 @@ function ProductMissing({
   );
 }
 
-function ProductDetail({
+export function ProductDetail({
   businessId,
   version,
   scope,
@@ -140,6 +147,14 @@ function ProductDetail({
   productName: string;
   highlightColumn?: string;
 }) {
+  const navigate = useNavigate();
+  // The domain dropdown's model summary starts loading now, alongside the
+  // page's own queries, instead of after them.
+  const summaryParams = { business_id: businessId, version_int: Number(version), scope };
+  usePrefetchQuery({
+    queryKey: getModelSummaryKey(summaryParams),
+    queryFn: () => getModelSummary(summaryParams),
+  });
   const { data: business } = useGetBusinessSuspense({
     params: { business_id: businessId },
     ...selector(),
@@ -164,6 +179,22 @@ function ProductDetail({
     _allVersions.find(
       (v) => v.version === Number(version) && ((v as any).scope || "") === scope,
     )?.id ?? _allVersions.find((v) => v.version === Number(version))?.id;
+
+  // Jump to another domain: a pick opens that domain's page on its Products
+  // tab (push, so Back returns to this product).
+  const { data: model } = useGetModelSummarySuspense({
+    params: summaryParams,
+    ...selector(),
+  });
+  const domainList = liveDomainOptions(model.domains);
+  const openDomain = (next: string | null) => {
+    if (!next || next === domainName) return;
+    navigate({
+      to: "/businesses/$businessId/model/$version/$scope/$domainName",
+      params: { businessId, version, scope, domainName: next },
+      search: { tab: "products" },
+    });
+  };
 
   // Scroll the search-highlighted column into view once the product loads.
   const highlightRef = useRef<HTMLTableRowElement>(null);
@@ -214,12 +245,9 @@ function ProductDetail({
           <AddFeedbackButton
             businessId={businessId}
             versionId={currentVersionId}
-            getContext={() => ({
-              context_version: 1,
-              view_mode: "domain_tables",
-              domain_filter: domainName,
-              selected_node_id: `${domainName}.${product.name}`,
-            })}
+            getContext={() =>
+              buildFeedbackContext({ subject: { domain: domainName, product: product.name } })
+            }
             className="ml-auto"
           />
         </div>
@@ -238,6 +266,13 @@ function ProductDetail({
           {product.reference && <span>Ref: {product.reference}</span>}
         </div>
       </div>
+
+      <TabDomainSelect
+        domains={domainList}
+        value={domainName}
+        onChange={openDomain}
+        allowAll={false}
+      />
 
       <Card>
         <CardHeader>

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const api = vi.hoisted(() => ({ useGetAssessmentDocContent: vi.fn() }));
@@ -86,11 +86,28 @@ describe("Scorecard executive summary", () => {
     });
   });
 
-  it("renders no summary card when summary is null and the doc 404s", () => {
-    api.useGetAssessmentDocContent.mockReturnValue({ data: undefined, isError: true, isLoading: false });
+  it("renders no summary card when summary is null and the doc 404s", async () => {
+    const { ApiError } = await import("@/lib/api");
+    api.useGetAssessmentDocContent.mockReturnValue({
+      data: undefined, isError: true, isLoading: false, error: new ApiError(404, "Not Found", { detail: "Document not found." }),
+    });
     mount(results({ summary: null }));
+    expect(screen.queryByTestId("summary-admin-help")).toBeNull();
     expect(screen.queryByText("Do this next")).toBeNull();
     expect(screen.getByText("Scorecard")).toBeTruthy();
+  });
+});
+
+describe("Scorecard summary fallback errors", () => {
+  beforeEach(() => api.useGetAssessmentDocContent.mockReset());
+  it("shows the admin-help block when the readiness-summary doc cannot be read", async () => {
+    const { ApiError } = await import("@/lib/api");
+    api.useGetAssessmentDocContent.mockReturnValue({
+      data: undefined, isLoading: false, isError: true,
+      error: new ApiError(409, "Conflict", { detail: { error: "admin_help", message: "Could not read doc: denied" } }),
+    });
+    mount(results({ summary: null }));
+    expect(within(screen.getByTestId("summary-admin-help")).getByText("Could not read doc: denied")).toBeTruthy();
   });
 });
 

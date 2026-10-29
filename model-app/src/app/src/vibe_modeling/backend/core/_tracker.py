@@ -33,9 +33,8 @@ class _TrackerDependency(LifespanDependency):
 
         yield
 
-        # Cancel all active tracking tasks on shutdown
-        for run_id in tracker.get_active_runs():
-            tracker.stop_tracking(run_id)
+        # Cancel all active tracking tasks and stop the tick executor.
+        await tracker.shutdown()
         logger.info("ProgressTracker shut down")
 
     @staticmethod

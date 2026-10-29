@@ -739,11 +739,9 @@ class TestValidateDagRequestUnwiredIntentFallback:
         "wire_value",
         [
             "vibe-iterate",
-            "revert",
             "import-from-volume",
             "install",
             "uninstall",
-            "generate-samples",
         ],
     )
     def test_known_unwired_intent_yields_zero_blockers_and_one_warning(

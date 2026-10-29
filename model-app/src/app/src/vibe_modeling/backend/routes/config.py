@@ -10,6 +10,7 @@ in one module.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from typing import Annotated
@@ -24,7 +25,25 @@ from ..agent_compat import (
     is_newer_tag,
     latest_known_upstream_tag,
 )
+from ..bundled_agent import resolve_bundled_agent
 from ..core import Dependencies, resolve_metamodel_catalog
+from ..core._agent_identity import (
+    agent_owner,
+    cached_identity_for_current_path,
+    compare_to_bundled,
+    record_read_identity,
+    supports_scope,
+)
+from ..core._app_identity import app_sp_home_for_display
+from ..core._bundled_agent_init import converge_agent_job_to_row
+from ..core._errors import (
+    CONFIG_REQUIREMENTS,
+    model_service_refused_error,
+    registry_scan_failed_error,
+    setting_refused_error,
+)
+from ..core._identity import actor_label
+from ..core._sql import SqlStatementError
 from ..core._time import as_utc
 from ..db_models import AgentConfig
 from ..models import (
@@ -42,7 +61,7 @@ from ..models import (
 )
 from ..job_launcher import setup_agent_job
 from ..taxonomy.access import MODEL_SERVICE_ACCESS, REFUSED_CHECKS
-from ..taxonomy.llm import error_text, make_taxonomy_llm
+from ..taxonomy.llm import error_text, llm_workspace_client, make_taxonomy_llm
 from ..taxonomy.models import (
     TaxonomyCheckOut,
     TaxonomyConfigIn,
@@ -51,14 +70,15 @@ from ..taxonomy.models import (
 )
 from ..taxonomy.service_name import split_model_service_name, strip_resource_prefix
 from ..taxonomy.slots import DEFAULT_CAPACITY, TAXONOMY_SLOTS
+from . import _helpers as _helpers_module
 from ._helpers import (
+    CATALOG_NAME_RULE,
     _build_dbx_job_url,
-    _CONFIG_REQUIREMENTS,
-    _detect_notebook_identity,
     _get_or_create_agent_config,
     _preflight_notebook_access,
-    _preflight_notebook_version,
+    _check_notebook_release,
     fetch_upstream_agent_identity,
+    is_catalog_name,
     require_config,
 )
 from .taxonomy import (
@@ -318,6 +338,16 @@ def get_agent_compat(
 
     The legacy ``latest_known_upstream`` / ``has_breaking_change`` /
     ``known_breaking_changes`` fields stay populated for back-compat consumers.
+
+    The ``installed_*`` fields describe the configured notebook itself, as
+    stored by the last identity read (boot, the Settings save, the switch
+    route): this GET never exports the notebook or writes the identity,
+    because the New Run form polls it. They are empty when the stored values
+    were read from another path. ``installed_vs_bundled`` compares them with
+    the bundled agent, ``scope_supported`` says whether scoped and Dry runs
+    are available, and ``agent_owner`` says whether the app upgrades the
+    notebook on boot (``app``) or the admin owns it (``admin``, Settings
+    offers "Switch to bundled").
     """
     from ..core._defaults import SUPPORTED_AGENT_MARKER, SUPPORTED_AGENT_VERSION
 
@@ -398,6 +428,10 @@ def get_agent_compat(
     if verdict == "release_incompatible" and up_release:
         compare_url = f"{_UPSTREAM_REPO_URL}/compare/{pinned_release}...{up_release}"
 
+    bundled = resolve_bundled_agent()
+    identity = cached_identity_for_current_path(cfg)
+    configured = bool(cfg.notebook_path)
+
     return AgentCompatOut(
         pinned_version=pinned_release,
         latest_known_upstream=latest_up,
@@ -414,6 +448,17 @@ def get_agent_compat(
         install_offered=False,
         checked_at=cfg.upstream_checked_at,
         check_error=cfg.upstream_check_error,
+        installed_release_version=identity.release,
+        installed_agent_version=identity.marker,
+        installed_checked_at=identity.checked_at,
+        installed_checked_path=identity.path,
+        installed_check_error=identity.error,
+        bundled_agent_marker=bundled.agent_version if bundled else None,
+        installed_vs_bundled=(
+            compare_to_bundled(identity.release, identity.marker, bundled) if configured else None
+        ),
+        agent_owner=agent_owner(cfg.notebook_path, app_sp_home_for_display(ws)),
+        scope_supported=supports_scope(identity.marker),
     )
 
 
@@ -489,7 +534,7 @@ def check_agent_notebook(path: str, ws: Dependencies.Client):
         return {"ok": False, "reason": str(e)[:200]}
 
     try:
-        release, marker = _detect_notebook_identity(ws, path)
+        release, marker = _helpers_module._detect_notebook_identity(ws, path)
     except Exception as e:
         # Surface the read-side error verbatim so the user knows what
         # actually failed (e.g. SDK API misuse, transient export error,
@@ -548,14 +593,23 @@ def set_agent_config(
     config: Dependencies.Config,
     _role: Dependencies.AdminOnly,
 ):
-    """Configure the agent notebook path and create the persistent Databricks job."""
+    """Configure the agent notebook path and create the persistent Databricks job.
+
+    The notebook is exported once: its identity both gates the release and is
+    stored in the identity cache with the save. After the commit the job is
+    re-read and pointed at the saved path if it names another notebook.
+    """
     _preflight_notebook_access(ws, data.notebook_path)
-    _preflight_notebook_version(ws, data.notebook_path)
+    release, marker = _helpers_module._detect_notebook_identity(ws, data.notebook_path)
+    _check_notebook_release(release)
 
     cfg = _get_or_create_agent_config(session, config)
     cfg.notebook_path = data.notebook_path
     cfg.max_concurrent_runs = data.max_concurrent_runs
-    cfg.collect_vibe_run_statistics = data.collect_vibe_run_statistics
+    if data.collect_vibe_run_statistics is not None:
+        cfg.collect_vibe_run_statistics = data.collect_vibe_run_statistics
+    if data.runtime_budget_hours is not None:
+        cfg.runtime_budget_hours = data.runtime_budget_hours
     cfg.updated_at = datetime.now(timezone.utc)
     session.add(cfg)
 
@@ -568,8 +622,12 @@ def set_agent_config(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create Databricks job: {e}")
 
+    record_read_identity(cfg, path=data.notebook_path, release=release, marker=marker)
     session.add(cfg)
     session.commit()
+    # A Settings save racing another save, or the boot upgrade, could leave
+    # the job on another notebook; re-read it and point it at the saved path.
+    converge_agent_job_to_row(session, ws, cfg.id)
     session.refresh(cfg)
     return AgentConfigOut(
         **cfg.model_dump(),
@@ -630,9 +688,18 @@ def set_deployment_catalog(
     _role: Dependencies.AdminOnly,
 ):
     """DEPRECATED alias of setMetamodelCatalog. Set the metamodel catalog via
-    the legacy `deployment_catalog` key. Prefer PUT /config/metamodel-catalog."""
+    the legacy `deployment_catalog` key. Prefer PUT /config/metamodel-catalog.
+    A name the agent can't take (``CATALOG_NAME_PATTERN``, the rule the
+    Settings form and every run check) is refused with 400 ``setting_refused``
+    and nothing is saved; an empty value clears the setting."""
+    catalog = data.deployment_catalog
+    if catalog and not is_catalog_name(catalog):
+        raise setting_refused_error(
+            "metamodel_catalog",
+            f"The catalog name '{catalog[:255]}' isn't a Unity Catalog name the app can use: {CATALOG_NAME_RULE}.",
+        )
     cfg = _get_or_create_agent_config(session, config)
-    cfg.deployment_catalog = data.deployment_catalog
+    cfg.deployment_catalog = catalog
     cfg.updated_at = datetime.now(timezone.utc)
     session.add(cfg)
     session.commit()
@@ -758,53 +825,11 @@ def trigger_initial_sync(
     cfg = _get_or_create_agent_config(session, config)
 
     svc = InitialSyncService(session, ws, cfg.warehouse_id)
-    summary = svc.discover_and_sync(cfg.deployment_catalog)
-    session.commit()
-    return summary
-
-
-# --- Out-of-band detection ---
-
-
-@router.get("/config/oob-check", response_model=dict, operation_id="checkOobVersions")
-def check_oob_versions(
-    session: Dependencies.Session,
-    ws: Dependencies.Client,
-    config: Dependencies.Config,
-):
-    """Detect completed model versions in Delta that are missing from Lakebase."""
-    from ..oob_detector import OobDetector
-
-    require_config(session, config, ["metamodel_catalog", "warehouse"], mode="raise")
-    cfg = _get_or_create_agent_config(session, config)
-
-    detector = OobDetector(session, ws, cfg.warehouse_id)
-    return detector.detect(cfg.deployment_catalog)
-
-
-@router.post(
-    "/config/oob-import",
-    response_model=dict,
-    operation_id="importOobVersions",
-)
-def import_oob_versions(
-    session: Dependencies.Session,
-    ws: Dependencies.Client,
-    config: Dependencies.Config,
-    _role: Dependencies.AdminOnly,
-):
-    """Import all detected out-of-band versions via InitialSyncService.
-
-    This is equivalent to re-running initial sync — it discovers any new
-    businesses/versions and imports them.
-    """
-    from ..initial_sync import InitialSyncService
-
-    require_config(session, config, ["metamodel_catalog", "warehouse"], mode="raise")
-    cfg = _get_or_create_agent_config(session, config)
-
-    svc = InitialSyncService(session, ws, cfg.warehouse_id)
-    summary = svc.discover_and_sync(cfg.deployment_catalog)
+    try:
+        summary = svc.discover_and_sync(resolve_metamodel_catalog(session, config))
+    except SqlStatementError as exc:
+        session.rollback()
+        raise registry_scan_failed_error(exc.message) from exc
     session.commit()
     return summary
 
@@ -824,10 +849,17 @@ StoredTaxonomySettings = Annotated[TaxonomyLLMSettings, Depends(read_taxonomy_ll
 # (test workspace, 2026-10-19). It counts services scanned, not returned, so pages come
 # back with only the services the caller can see and the list must follow
 # ``next_page_token``. Unfiltered on purpose: ``catalog_name``/``schema_name``
-# are ignored too, and the SP may see services in any schema.
+# are ignored too, and the SP may see services in any schema. Each page goes
+# through the LLM's bounded client (``taxonomy/llm.llm_workspace_client``: 90 s
+# per call, 1 s retry budget), the same one the probe's service lookup uses,
+# so a slow page cannot hold the request for the SDK's 300 s retry budget.
 MODEL_SERVICES_LIST_PATH = "/api/2.1/unity-catalog/model-services"
 MODEL_SERVICES_PAGE_SIZE = 200
 MODEL_SERVICES_MAX_PAGES = 50
+# The deadline is checked between pages: once it has passed, no further page
+# is requested and the list returns what it has with the partial-list
+# message. The worst case is about this long plus one page (90 s).
+MODEL_SERVICES_DEADLINE_SECONDS = 120
 # The wizard calls chat completions; services that declare other API types
 # only (embeddings) are left out of the picker. A service that declares none
 # is kept.
@@ -853,14 +885,19 @@ def _taxonomy_config_out(session, config) -> TaxonomyConfigOut:
         max_concurrency=cfg.taxonomy_llm_max_concurrency,
         ready=installed and bool(service) and not refused,
         last_check=last_check,
+        updated_by=cfg.taxonomy_updated_by,
+        updated_at=as_utc(cfg.taxonomy_updated_at),
     )
 
 
-def _save_taxonomy_config(session, config, model_service: str, max_concurrency: int) -> TaxonomyConfigOut:
+def _save_taxonomy_config(session, config, model_service: str, max_concurrency: int, user: str) -> TaxonomyConfigOut:
+    """Write the taxonomy settings and their audit pair (``taxonomy_updated_by`` /
+    ``taxonomy_updated_at``, as ``assess_config`` records ``updated_by`` / ``updated_at``)."""
     cfg = _get_or_create_agent_config(session, config)
     cfg.taxonomy_model_service = model_service
     cfg.taxonomy_llm_max_concurrency = max_concurrency
-    cfg.updated_at = datetime.now(timezone.utc)
+    cfg.taxonomy_updated_by = user
+    cfg.taxonomy_updated_at = datetime.now(timezone.utc)
     session.add(cfg)
     session.commit()
     session.refresh(cfg)
@@ -897,14 +934,16 @@ async def update_taxonomy_config(
     data: TaxonomyConfigIn,
     session: Dependencies.Session,
     config: Dependencies.Config,
+    headers: Dependencies.Headers,
     _installed: TaxonomyInstalled,
     _role: Dependencies.AdminOnly,
 ):
     """Save the model service and concurrency limit. A non-empty service must
     be ``catalog.schema.service`` (422) and pass the test call: ``denied``,
-    ``not_found`` and ``error`` refuse with 400 and save nothing; ``busy``
-    saves, and ``last_check`` carries the warning. Clearing is allowed only
-    when there is no install default (Reset writes the default instead)."""
+    ``not_found`` and ``error`` refuse with 400 ``model_service_refused`` and
+    save nothing; ``busy`` saves, and ``last_check`` carries the warning.
+    Clearing is allowed only when there is no install default (Reset writes
+    the default instead). Records who saved and when."""
     service = data.model_service.strip()
     if service:
         try:
@@ -922,11 +961,10 @@ async def update_taxonomy_config(
     if service:
         check = await MODEL_SERVICE_ACCESS.probe(make_taxonomy_llm(service), TAXONOMY_SLOTS)
         if check.status in REFUSED_CHECKS:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "model_service_refused", "status": check.status, "message": check.message},
-            )
-    return await run_in_threadpool(_save_taxonomy_config, session, config, service, data.max_concurrency)
+            raise model_service_refused_error("taxonomy_llm", check.status, check.message)
+    return await run_in_threadpool(
+        _save_taxonomy_config, session, config, service, data.max_concurrency, actor_label(headers),
+    )
 
 
 @router.post("/config/taxonomy/test", response_model=TaxonomyCheckOut, operation_id="testTaxonomyModelService")
@@ -941,7 +979,7 @@ async def run_taxonomy_model_service_test(
     if not settings.model_service:
         return TaxonomyCheckOut(
             status="error",
-            message=_CONFIG_REQUIREMENTS["taxonomy_llm"]["message"],
+            message=CONFIG_REQUIREMENTS["taxonomy_llm"]["message"],
             checked_at=MODEL_SERVICE_ACCESS.now(),
         )
     return await MODEL_SERVICE_ACCESS.probe(make_taxonomy_llm(settings.model_service), TAXONOMY_SLOTS)
@@ -957,7 +995,6 @@ def _model_service_sort_key(name: str) -> tuple[bool, str]:
     operation_id="listTaxonomyModelServices",
 )
 def list_taxonomy_model_services(
-    ws: Dependencies.Client,
     _installed: TaxonomyInstalled,
     _role: Dependencies.AdminOnly,
 ):
@@ -966,8 +1003,12 @@ def list_taxonomy_model_services(
     falls back to free text."""
     names: set[str] = set()
     token: str | None = None
+    deadline = time.monotonic() + MODEL_SERVICES_DEADLINE_SECONDS
     try:
-        for _ in range(MODEL_SERVICES_MAX_PAGES):
+        ws = llm_workspace_client()
+        for page in range(MODEL_SERVICES_MAX_PAGES):
+            if page and time.monotonic() >= deadline:
+                break
             query: dict[str, object] = {"page_size": MODEL_SERVICES_PAGE_SIZE}
             if token:
                 query["page_token"] = token

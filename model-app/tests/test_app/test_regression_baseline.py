@@ -20,6 +20,7 @@ import json
 import pytest
 from sqlmodel import Session, select
 
+from _test_app import make_test_app
 from vibe_modeling.backend.db_models import (
     AgentConfig,
     Attribute,
@@ -245,6 +246,212 @@ class TestModelVersionOutProvenanceShape:
         assert out.release_version is None
 
 
+class TestVersionLifecycleShape:
+    """v_0_9_0: the versions list carries the lifecycle fields, the derived
+    ``is_head`` / ``draft_state`` filled by the list route, and IssueOut
+    gains ``subject``."""
+
+    VERSION_KEYS = {
+        "id", "business_id", "version", "status", "deployment_status", "base_version_id",
+        "vibe_instructions", "context_id", "confidence_score", "scope", "uc_catalog",
+        "completion_date", "sync_state", "sync_error_text", "import_source_path", "imported_at",
+        "agent_version", "release_version", "dry_run", "promoted_at", "promoted_by_run_id",
+        "replaced_by_version_id", "replaced_at", "files_catalog", "scope_fence_mode", "is_head",
+        "draft_state", "linked_run_id", "is_imported", "created_at",
+    }
+
+    def test_list_versions_shape(self, client, seeded_app):
+        resp = client.get(f"/api/businesses/{seeded_app['business_id']}/versions")
+        assert resp.status_code == 200
+        (item,) = resp.json()
+        _assert_keys(item, self.VERSION_KEYS, "ModelVersionOut")
+        assert item["dry_run"] is False
+        assert item["is_head"] is True and item["draft_state"] is None
+        assert item["linked_run_id"] is None
+        assert item["is_imported"] is False
+
+    def test_issue_out_fields(self):
+        from vibe_modeling.backend.models import IssueOut
+
+        assert set(IssueOut.model_fields) == {"field_path", "step_index", "message", "severity", "subject", "versions"}
+
+
+class TestAddendumWireShapes:
+    """v_0_9_0_1 addendum: the delete responses carry the cleanup summary and the
+    reopened-feedback count; the delete starts no run, so ``run_id`` and
+    ``reinstall_dispatched`` are gone. ``BusinessDeleteOut`` is the response of
+    ``DELETE /businesses/{id}``; its shape is locked on the model here and on the
+    route in ``test_drift_delete_business.py``."""
+
+    def test_delete_version_out_fields(self):
+        from vibe_modeling.backend.models import DeleteVersionOut
+
+        assert set(DeleteVersionOut.model_fields) == {
+            "deleted_version", "previous_version",
+            "metamodel_rows_cleaned", "metamodel_cleanup", "reopened_input_count", "message",
+        }
+
+    def test_business_delete_out_fields(self):
+        from vibe_modeling.backend.models import BusinessDeleteOut, MetamodelCleanupSummaryOut
+
+        assert set(BusinessDeleteOut.model_fields) == {"ok", "cascaded", "metamodel_cleanup"}
+        assert set(MetamodelCleanupSummaryOut.model_fields) == {"done", "pending", "failed"}
+
+    def test_metamodel_cleanup_out_fields(self):
+        from vibe_modeling.backend.models import MetamodelCleanupOut
+
+        assert set(MetamodelCleanupOut.model_fields) == {
+            "id", "business_segment", "version", "scope", "catalog", "reason", "status",
+            "attempts", "last_error", "updated_at",
+        }
+
+
+class TestImportScopeShapes:
+    """The import dialogs' analyze reports the scope and the prefixes; both
+    execute bodies take the user's ECM / MVM choice."""
+
+    def test_analyze_out_fields(self):
+        from vibe_modeling.backend.models import ImportAnalyzeOut
+
+        fields = ImportAnalyzeOut.model_fields
+        assert {"inferred_scope", "agent_output", "file_schema_prefix", "import_schema_prefix"} <= set(fields)
+        out = ImportAnalyzeOut(valid=True, inferred_version="modern", action="import_as_is", message="ok")
+        assert (out.inferred_scope, out.agent_output, out.file_schema_prefix, out.import_schema_prefix) == (
+            None, False, None, None,
+        )
+
+    def test_execute_bodies_take_a_scope(self):
+        from pydantic import ValidationError
+
+        from vibe_modeling.backend.models import ImportCreateBusinessAndExecuteIn, ImportExecuteIn
+
+        for model in (ImportExecuteIn, ImportCreateBusinessAndExecuteIn):
+            assert model(volume_path="/Volumes/c/s/v/model.json").scope is None
+            assert model(volume_path="/Volumes/c/s/v/model.json", scope="mvm").scope == "mvm"
+            with pytest.raises(ValidationError):
+                model(volume_path="/Volumes/c/s/v/model.json", scope="both")
+
+
+class TestIndustryScopePrefixesShape:
+    """``applyIndustryScopePrefixes`` answers the industry and one row per
+    version; ``install/fix_industry_prefixes.py`` reads these keys."""
+
+    def test_out_fields(self):
+        from vibe_modeling.backend.models import IndustryScopePrefixesOut, IndustryScopePrefixRowOut
+
+        assert set(IndustryScopePrefixesOut.model_fields) == {"business_id", "business_name", "applied", "rows"}
+        assert set(IndustryScopePrefixRowOut.model_fields) == {
+            "version_id", "version", "scope", "action", "reason", "warnings",
+        }
+
+    def test_in_fields(self):
+        from vibe_modeling.backend.models import IndustryScopePrefixesIn
+
+        assert set(IndustryScopePrefixesIn.model_fields) == {"apply"}
+
+
+class TestUninstallImpactShape:
+    """``getUninstallImpact``: the version's schemas found in the catalog with
+    their tables, views and volumes. ``mvm_core_db`` exists with one empty
+    table; the version's other name forms do not."""
+
+    IMPACT_KEYS = {
+        "version_id", "catalog", "schemas", "has_data", "truncated", "reasons", "installed_catalogs",
+    }
+    SCHEMA_KEYS = {
+        "name", "owner", "shared", "objects_listed", "tables", "views", "volumes", "other_versions",
+    }
+    TABLE_KEYS = {"name", "kind", "has_data"}
+
+    def test_uninstall_impact_shape(self, client, seeded_app, mock_ws, engine):
+        from types import SimpleNamespace
+
+        from _sql_fakes import response
+        from vibe_modeling.backend.services.uninstall_impact import IMPACT_CACHE
+
+        IMPACT_CACHE.clear()
+        with Session(engine) as session:
+            cfg = session.exec(select(AgentConfig)).one()
+            cfg.warehouse_id = "wh-regression"
+            session.add(cfg)
+            session.commit()
+        mock_ws.schemas.list.side_effect = lambda **_kw: iter(
+            [SimpleNamespace(name="mvm_core_db", owner="app-sp")]
+        )
+        mock_ws.statement_execution.execute_statement.side_effect = [
+            response([["mvm_core_db", "widget", "MANAGED"]], columns=["s", "n", "k"]),
+            response([["0", "0"]], columns=["i", "n"]),
+        ]
+        bid, vid = seeded_app["business_id"], seeded_app["version_id"]
+        resp = client.get(
+            f"/api/businesses/{bid}/versions/{vid}/uninstall-impact?catalog=regression_cat"
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        _assert_keys(body, self.IMPACT_KEYS, "UninstallImpactOut")
+        assert body["has_data"] == "no" and body["truncated"] is False
+        (schema,) = body["schemas"]
+        _assert_keys(schema, self.SCHEMA_KEYS, "UninstallImpactSchemaOut")
+        (table,) = schema["tables"]
+        _assert_keys(table, self.TABLE_KEYS, "UninstallImpactTableOut")
+        IMPACT_CACHE.clear()
+
+
+class TestRunDefaultsShape:
+    """``getRunDefaults``: every pre-filled field with its value, source and
+    locks. The seeded version's file cannot be read here, so the locked
+    fields are unknown."""
+
+    FIELD_KEYS = {"value", "source", "locked", "locked_scoped"}
+
+    def test_run_defaults_shape(self, client, seeded_app, mock_ws):
+        mock_ws.files.download.side_effect = FileNotFoundError("no file")
+        bid, vid = seeded_app["business_id"], seeded_app["version_id"]
+        resp = client.get(f"/api/businesses/{bid}/model-versions/{vid}/run-defaults")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        _assert_keys(body, {"base_version_id", "file_read", "fields"}, "RunDefaultsOut")
+        assert body["file_read"] is False
+        assert set(body["fields"]) == {
+            "naming_convention", "primary_key_suffix", "schema_prefix", "schema_suffix",
+            "tag_prefix", "tag_suffix", "table_id_type", "boolean_format", "date_format",
+            "timestamp_format", "classification_levels", "catalog_prefix", "catalog_suffix",
+            "org_divisions", "housekeeping_columns", "history_tracking_columns",
+        }
+        for name, field in body["fields"].items():
+            _assert_keys(field, self.FIELD_KEYS, f"RunDefaultFieldOut {name}")
+
+
+class TestOobResponseShapes:
+    """``getOobSummary`` / ``checkOobNow`` and the two out-of-band imports."""
+
+    def test_summary_fields(self):
+        from vibe_modeling.backend.models import OobBusinessOut, OobSummaryOut, OobVersionOut
+
+        assert set(OobSummaryOut.model_fields) == {
+            "checked_at", "catalog", "skipped_reason", "businesses", "checking",
+        }
+        assert set(OobBusinessOut.model_fields) == {
+            "business_segment", "status", "business_id", "candidate_business_ids", "versions",
+        }
+        assert set(OobVersionOut.model_fields) == {"version", "scope", "refused_reason"}
+
+    def test_import_fields(self):
+        from vibe_modeling.backend.models import OobImportOut
+
+        assert set(OobImportOut.model_fields) == {"imported_versions", "created_business_ids", "warnings"}
+
+    def test_summary_route_shape(self, client, engine):
+        from vibe_modeling.backend.db_models import AgentConfig
+
+        with Session(engine) as s:
+            s.add(AgentConfig(notebook_path="/nb", job_id=1, deployment_catalog="", warehouse_id=""))
+            s.commit()
+        resp = client.get("/api/oob/summary")
+        assert resp.status_code == 200
+        assert set(resp.json()) == {"checked_at", "catalog", "skipped_reason", "businesses", "checking"}
+
+
 class TestPublishResponseShape:
     """The publish endpoint response gains ``target_path`` (the resolved bundle
     root used) alongside the branch/PR fields (ADR D-049)."""
@@ -288,6 +495,9 @@ class TestRunResponseShape:
         # run (auto-collision-resolved). Empty list on the happy path;
         # derived from the run's RunProgressEvent rows.
         "version_resolutions",
+        # v_0_9_0_1: set only on runs recorded by linking an imported
+        # version to its Databricks run; null on app-launched runs.
+        "linked_at", "link_evidence",
     }
 
     def test_run_detail_shape(self, client, seeded_app):
@@ -295,6 +505,99 @@ class TestRunResponseShape:
         resp = client.get(f"/api/businesses/{bid}/runs/{seeded_app['run_id']}")
         assert resp.status_code == 200
         _assert_keys(resp.json(), self.EXPECTED_KEYS, "RunOut")
+        assert resp.json()["linked_at"] is None and resp.json()["link_evidence"] is None
+
+
+class TestRunReportShape:
+    """getRunReport / getVersionReport (v0.9.0 per-feedback run report)."""
+
+    EXPECTED_KEYS = {
+        "run_id", "business_id", "intent", "run_status", "output_version_id",
+        "dry_run", "consume_note", "has_agent_report", "has_input_outcomes",
+        "version_mismatch", "expected_version", "fetched_version",
+        "lineage_base_version", "lineage_head_at_write", "lineage_stale",
+        "unmatched_outcome_count", "items",
+    }
+    ITEM_KEYS = {
+        "input_id", "outcome_status", "outcome_reason", "outcome_target",
+        "created_at", "text", "origin", "priority", "status", "consumed",
+        "consumed_by_run_id", "selected_for_run",
+    }
+
+    def test_run_report_shape(self, client, seeded_app, engine):
+        from vibe_modeling.backend.db_models import RunInputLink, VibeInput
+
+        bid, run_id = seeded_app["business_id"], seeded_app["run_id"]
+        with Session(engine) as s:
+            vi = VibeInput(business_id=bid, text="one")
+            s.add(vi)
+            s.flush()
+            s.add(RunInputLink(run_id=run_id, input_id=vi.id))
+            s.commit()
+        resp = client.get(f"/api/businesses/{bid}/runs/{run_id}/report")
+        assert resp.status_code == 200
+        data = resp.json()
+        _assert_keys(data, self.EXPECTED_KEYS, "RunReportOut")
+        _assert_keys(data["items"][0], self.ITEM_KEYS, "RunReportItemOut")
+
+    def test_version_report_shape(self, client, seeded_app):
+        bid, vid = seeded_app["business_id"], seeded_app["version_id"]
+        resp = client.get(f"/api/businesses/{bid}/versions/{vid}/report")
+        assert resp.status_code == 200
+        _assert_keys(resp.json(), {"version_id", "report"}, "VersionReportOut")
+
+
+class TestRunChangesShape:
+    """getRunChanges / setRunChangeDecisions (v0.9.0 run change review)."""
+
+    EXPECTED_KEYS = {"run_id", "version_id", "base_version_id", "decisions_open", "changes"}
+    CHANGE_KEYS = {
+        "element_kind", "element_path", "change_kind", "change_class",
+        "decision", "decided_by", "decided_at", "feedback_input_id",
+    }
+
+    def _seed_vibe(self, engine, bid):
+        from vibe_modeling.backend.db_models import Domain, ModelVersion, Run, RunOperation
+
+        with Session(engine) as s:
+            base = ModelVersion(business_id=bid, version=7, scope="ecm", status="completed")
+            s.add(base)
+            s.flush()
+            out = ModelVersion(business_id=bid, version=8, scope="ecm", status="completed",
+                               base_version_id=base.id)
+            s.add(out)
+            s.flush()
+            s.add(Domain(version_id=base.id, name="Sales"))
+            s.add(Domain(version_id=out.id, name="Sales"))
+            s.add(Domain(version_id=out.id, name="Billing"))
+            run = Run(business_id=bid, intent="vibe-iterate", status="completed")
+            s.add(run)
+            s.flush()
+            s.add(RunOperation(run_id=run.id, step_index=0, operation_name="vibe_iterate",
+                               status="succeeded", parent_version_id=base.id,
+                               output_version_id=out.id))
+            s.commit()
+            return run.id
+
+    def test_run_changes_shape(self, client, seeded_app, engine):
+        bid = seeded_app["business_id"]
+        run_id = self._seed_vibe(engine, bid)
+        resp = client.get(f"/api/businesses/{bid}/runs/{run_id}/changes")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        _assert_keys(data, self.EXPECTED_KEYS, "RunChangesOut")
+        _assert_keys(data["changes"][0], self.CHANGE_KEYS, "RunChangeOut")
+
+    def test_set_decisions_shape(self, client, seeded_app, engine):
+        bid = seeded_app["business_id"]
+        run_id = self._seed_vibe(engine, bid)
+        resp = client.put(
+            f"/api/businesses/{bid}/runs/{run_id}/changes/decisions",
+            json={"decisions": [{"element_kind": "domain", "element_path": "Billing", "decision": "rejected"}]},
+        )
+        assert resp.status_code == 200, resp.text
+        _assert_keys(resp.json(), self.EXPECTED_KEYS, "RunChangesOut")
+        assert resp.json()["changes"][0]["decision"] == "rejected"
 
 
 class TestProgressEventShape:
@@ -322,6 +625,8 @@ class TestAgentConfigShape:
         "deployment_catalog", "metamodel_catalog", "warehouse_id",
         "max_concurrent_runs",
         "collect_vibe_run_statistics",
+        # The Settings run time budget and the bounds the UI reads.
+        "runtime_budget_hours", "runtime_budget_min_hours", "runtime_budget_max_hours",
         "created_at", "updated_at",
     }
 
@@ -329,6 +634,21 @@ class TestAgentConfigShape:
         resp = client.get("/api/config/agent")
         assert resp.status_code == 200
         _assert_keys(resp.json(), self.EXPECTED_KEYS, "AgentConfigOut")
+
+    def test_switch_to_bundled_shape(self, client, monkeypatch):
+        """switchToBundledAgent answers the same AgentConfigOut shape."""
+        from vibe_modeling.backend import bundled_agent_install, job_launcher
+
+        result = bundled_agent_install.InstallResult(
+            path="/Users/sp/vibe-modelling-agent/nb.ipynb", version="v0.8.0",
+            overwritten=False, agent_version="5.3.3",
+        )
+        monkeypatch.setattr(bundled_agent_install, "install_bundled_agent_into_workspace", lambda _ws: result)
+        monkeypatch.setattr(job_launcher, "setup_agent_job", lambda _ws, _cfg: 4242)
+        resp = client.post("/api/admin/agent/switch-to-bundled")
+        assert resp.status_code == 200, resp.text
+        _assert_keys(resp.json(), self.EXPECTED_KEYS, "AgentConfigOut")
+        assert resp.json()["notebook_path"] == result.path
 
 
 class TestExplorerResponseShapes:
@@ -476,7 +796,7 @@ class TestExplorerResponseShapes:
         expected = {
             "id", "version", "status", "deployment_status",
             "base_version_id", "vibe_instructions", "confidence_score",
-            "scope", "created_at", "is_base",
+            "scope", "created_at", "is_base", "parent_deleted",
         }
         _assert_keys(versions[0], expected, "VersionTreeOut")
 
@@ -539,9 +859,11 @@ class TestVibeInputsResponseShapes:
         body = self._create(client, bid, vid)
         _assert_keys(body, {
             "id", "business_id", "origin", "author", "text", "category",
-            "priority", "confidence_score", "consumed", "selected_for_run",
-            "status", "deprecated_by", "created_at", "updated_at", "anchor",
+            "priority", "confidence_score", "consumed", "consumed_by_run_id",
+            "selected_for_run", "status", "deprecated_by", "created_at",
+            "updated_at", "anchor",
         }, "VibeInputOut")
+        assert body["consumed_by_run_id"] is None
         # User-origin create carries a null category (feedback has no category).
         assert body["category"] is None
         # createVibeInput does not hydrate the anchor (list-only).
@@ -614,8 +936,8 @@ class TestVibeInputsResponseShapes:
             json={"input_ids": [vi["id"]]},
         ).json()
         _assert_keys(body, {
-            "markdown", "blocks", "included_input_ids",
-            "excluded_input_ids", "excluded_reasons",
+            "markdown", "agent_markdown", "blocks", "included_input_ids",
+            "excluded_input_ids", "excluded_reasons", "input_scope_domains",
         }, "CompileOut")
 
     def test_carry_forward_out_shape(self, client, seeded_app):
@@ -673,24 +995,27 @@ class TestPublishPreviewResponseShape:
             session.commit()
             return biz.id, mv.id
 
-    def _app(self, engine, fake_http):
-        from fastapi import FastAPI
+    def _app(self, engine, fake_http, monkeypatch):
         from fastapi.testclient import TestClient
 
         from vibe_modeling.backend.core._config import AppConfig
-        from vibe_modeling.backend.core._defaults import _ConfigDependency
+        from vibe_modeling.backend.core._defaults import (
+            _ConfigDependency,
+            _WorkspaceClientDependency,
+        )
         from vibe_modeling.backend.core._roles import require_modeler
         from vibe_modeling.backend.core.lakebase import _LakebaseDependency
         from vibe_modeling.backend.routes.industry_models import router as im_router
         from vibe_modeling.backend.services import publish_preview as svc
         from vibe_modeling.backend.sources.github import GithubSourceConnector
 
-        svc.build_github_connector = lambda repo_owner="", repo_name="", **_: GithubSourceConnector(  # noqa: E731
-            http=fake_http
+        monkeypatch.setattr(
+            svc,
+            "build_source_connector",
+            lambda cfg, app_config, ws, **_: GithubSourceConnector(http=fake_http),
         )
 
-        app = FastAPI()
-        app.include_router(im_router)
+        app = make_test_app(im_router)
 
         def override_session():
             with Session(engine) as session:
@@ -698,10 +1023,12 @@ class TestPublishPreviewResponseShape:
 
         app.dependency_overrides[_LakebaseDependency.__call__] = override_session
         app.dependency_overrides[_ConfigDependency.__call__] = lambda: AppConfig(app_name="test")
+        # App-SP client: the configured source read-auth reads its secret with it.
+        app.dependency_overrides[_WorkspaceClientDependency.__call__] = lambda: object()
         app.dependency_overrides[require_modeler] = lambda: object()
         return TestClient(app)
 
-    def test_publish_preview_endpoint_shape_tier1(self, engine):
+    def test_publish_preview_endpoint_shape_tier1(self, engine, monkeypatch):
         from .test_publish_preview import (
             _SAMPLE_BASELINE_DOC,
             _industry_listing_http,
@@ -709,7 +1036,7 @@ class TestPublishPreviewResponseShape:
 
         bid, vid = self._seed(engine)
         http = _industry_listing_http("preview_corp", {"v1": ["ecm"]}, model_doc=_SAMPLE_BASELINE_DOC)
-        client = self._app(engine, http)
+        client = self._app(engine, http, monkeypatch)
         body = client.post(
             f"/api/businesses/{bid}/model-versions/{vid}/publish-preview", json={}
         ).json()
@@ -722,12 +1049,12 @@ class TestPublishPreviewResponseShape:
         assert body["manual_needed"] is False
         assert set(body["diff"]["counts"]) == {"new", "modified", "deleted"}
 
-    def test_publish_preview_endpoint_manual_needed_no_500(self, engine):
+    def test_publish_preview_endpoint_manual_needed_no_500(self, engine, monkeypatch):
         from .test_publish_preview import _industry_listing_http
 
         bid, vid = self._seed(engine)
         http = _industry_listing_http("preview_corp", {})  # empty industry -> Tier 3
-        client = self._app(engine, http)
+        client = self._app(engine, http, monkeypatch)
         resp = client.post(
             f"/api/businesses/{bid}/model-versions/{vid}/publish-preview", json={}
         )
@@ -736,10 +1063,10 @@ class TestPublishPreviewResponseShape:
         assert body["manual_needed"] is True
         assert body["diff"] is None
 
-    def test_publish_preview_endpoint_requires_no_userclient(self, engine):
-        # The route resolves with ONLY Session + Config + ModelerOnly overridden
-        # (no UserClient override) -> 200. A future regression that adds a
-        # Dependencies.UserClient param would 500 under this public-only client.
+    def test_publish_preview_endpoint_requires_no_userclient(self, engine, monkeypatch):
+        # The route resolves with ONLY Session + Config + Client (app SP) +
+        # ModelerOnly overridden (no UserClient override) -> 200. A future
+        # regression that adds a Dependencies.UserClient param would 500 here.
         from .test_publish_preview import (
             _SAMPLE_BASELINE_DOC,
             _industry_listing_http,
@@ -747,7 +1074,7 @@ class TestPublishPreviewResponseShape:
 
         bid, vid = self._seed(engine)
         http = _industry_listing_http("preview_corp", {"v1": ["ecm"]}, model_doc=_SAMPLE_BASELINE_DOC)
-        client = self._app(engine, http)
+        client = self._app(engine, http, monkeypatch)
         resp = client.post(
             f"/api/businesses/{bid}/model-versions/{vid}/publish-preview", json={}
         )
@@ -833,6 +1160,33 @@ class TestCatalogSchemaWarningResponseShape:
         assert body["catalog"] == "my_catalog"
         assert isinstance(body["schema_count"], int)
         assert isinstance(body["schemas"], list)
+
+
+class TestCatalogListAndCapabilitiesShape:
+    """Pin the wire shapes of listCatalogs (``CatalogOut``) and
+    getCatalogCapabilities (``CatalogCapabilityOut``); the deployment catalog
+    picker reads these fields by name."""
+
+    LIST_KEYS = {"name", "comment", "owner", "can_create_schema"}
+    CAP_KEYS = {"name", "create_schema", "use_metamodel", "create_schema_fix", "use_metamodel_fix"}
+
+    def test_list_shape(self, client, mock_ws):
+        from types import SimpleNamespace
+
+        mock_ws.catalogs.list.return_value = [SimpleNamespace(name="main", comment=None, owner=None)]
+        resp = client.get("/api/catalogs")
+        assert resp.status_code == 200, resp.text
+        _assert_keys(resp.json()[0], self.LIST_KEYS, "CatalogOut")
+
+    def test_capabilities_shape(self, client, mock_ws, monkeypatch):
+        from vibe_modeling.backend.core import _uc_privileges
+
+        monkeypatch.setattr(_uc_privileges, "_CHECK_WS", mock_ws)
+        resp = client.get("/api/catalogs/capabilities", params={"names": "main"})
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert len(body) == 1
+        _assert_keys(body[0], self.CAP_KEYS, "CatalogCapabilityOut")
 
 
 class TestSourceCapabilitiesShape:
@@ -1281,7 +1635,7 @@ class TestAddNextVibesToFeedbackShape:
 
 
 class TestTaxonomyResponseShapes:
-    """Wire contracts for the Domain Taxonomy Builder: the 7 ``/api/taxonomy/*``
+    """Wire contracts for the Domain Taxonomy Builder: the 10 ``/api/taxonomy/*``
     routes and the 4 ``/config/taxonomy`` settings routes, with the feature
     installed and a stored model service."""
 
@@ -1296,6 +1650,7 @@ class TestTaxonomyResponseShapes:
     ISSUE_KEYS = {"severity", "message", "rule_id", "domains"}
     CONFIG_KEYS = {
         "installed", "model_service", "install_default_model_service", "max_concurrency", "ready", "last_check",
+        "updated_by", "updated_at",
     }
     CHECK_KEYS = {"status", "message", "checked_at"}
 
@@ -1303,7 +1658,6 @@ class TestTaxonomyResponseShapes:
     def tax(self, engine, monkeypatch):
         from unittest.mock import MagicMock
 
-        from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
         from vibe_modeling.backend.core._config import AppConfig
@@ -1340,19 +1694,22 @@ class TestTaxonomyResponseShapes:
 
         llm_ws = MagicMock()
         llm_ws.config.client_id = "sp-id"
-        llm_ws.api_client.do.return_value = {"choices": [{"message": {"role": "assistant", "content": "OK"}}]}
+        # The LLM client answers the gateway POST and, as the bounded client
+        # the model-services list uses, the UC list GET.
+        llm_ws.api_client.do.side_effect = lambda method, path, **kw: (
+            {"choices": [{"message": {"role": "assistant", "content": "OK"}}]}
+            if method == "POST"
+            else {"model_services": [{"name": f"model-services/{service}"}]}
+        )
         monkeypatch.setattr(llm_module, "_LLM_WS", llm_ws)
         self.llm_ws = llm_ws
         app_ws = MagicMock()
-        app_ws.api_client.do.return_value = {"model_services": [{"name": f"model-services/{service}"}]}
 
         with Session(engine) as session:
             session.add(AgentConfig(taxonomy_model_service=service))
             session.commit()
 
-        app = FastAPI()
-        app.include_router(config_routes.router)
-        app.include_router(taxonomy_routes.router)
+        app = make_test_app(config_routes.router, taxonomy_routes.router)
 
         def override_session():
             with Session(engine) as session:
@@ -1456,6 +1813,38 @@ class TestTaxonomyResponseShapes:
         for issue in body["issues"]:
             _assert_keys(issue, self.ISSUE_KEYS, "TaxonomyIssue")
 
+    SAVED_KEYS = {
+        "revision", "step", "sector_id", "strictness", "intake", "tree", "sections", "updated_at", "expires_at",
+    }
+
+    def test_saved_wizard_shapes(self, tax):
+        from vibe_modeling.backend.taxonomy.example import load_ridgeline_example
+
+        ex = load_ridgeline_example()
+        empty = tax.get("/api/taxonomy/saved")
+        assert empty.status_code == 200
+        _assert_keys(empty.json(), {"saved"}, "TaxonomySavedWizardOut")
+        body = {
+            "revision": 0, "step": 2, "intake": self.INTAKE, "tree": ex.tree.model_dump(),
+            "sections": {"company": ex.sections["company"].model_dump()},
+        }
+        saved = tax.put("/api/taxonomy/saved", json=body)
+        assert saved.status_code == 200, saved.text
+        _assert_keys(saved.json(), self.SAVED_KEYS, "TaxonomyWizardStateOut")
+        self._assert_tree(saved.json()["tree"])
+        loaded = tax.get("/api/taxonomy/saved")
+        assert loaded.status_code == 200
+        _assert_keys(loaded.json()["saved"], self.SAVED_KEYS, "TaxonomyWizardStateOut")
+
+        stale = tax.put("/api/taxonomy/saved", json=body)
+        assert stale.status_code == 409
+        _assert_keys(stale.json(), {"detail"}, "saved 409")
+        _assert_keys(stale.json()["detail"], {"error", "revision", "message"}, "stale_revision detail")
+
+        discarded = tax.delete("/api/taxonomy/saved")
+        assert discarded.status_code == 200
+        _assert_keys(discarded.json(), {"discarded"}, "TaxonomyWizardDiscardOut")
+
     def test_example_shape(self, tax):
         resp = tax.get("/api/taxonomy/example")
         assert resp.status_code == 200
@@ -1484,7 +1873,7 @@ class TestTaxonomyResponseShapes:
         self.llm_ws.api_client.do.side_effect = PermissionDenied("no")
         resp = tax.put("/api/config/taxonomy", json={"model_service": self.SERVICE, "max_concurrency": 4})
         assert resp.status_code == 400
-        _assert_keys(resp.json()["detail"], {"error", "status", "message"}, "model_service_refused")
+        _assert_keys(resp.json()["detail"], {"error", "key", "status", "message"}, "model_service_refused")
 
     def test_model_services_shape(self, tax):
         resp = tax.get("/api/config/taxonomy/model-services")
@@ -1507,3 +1896,118 @@ class TestUserPreferenceDeleteShape:
         assert miss.status_code == 200, miss.text
         _assert_keys(miss.json(), {"deleted"}, "UserPreferenceDeleteOut")
         assert miss.json()["deleted"] is False
+
+
+class TestDeploymentVerificationShapes:
+    """``checkDeploymentCatalog`` / ``getDeployedUcSchema`` / ``compareDeployment``:
+    each body carries ``verification_error``."""
+
+    def test_model_fields(self):
+        from vibe_modeling.backend.models import (
+            DeployedUcSchemaOut,
+            DeploymentCatalogCheckOut,
+            DeploymentVerificationOut,
+        )
+
+        assert set(DeploymentCatalogCheckOut.model_fields) == {"exists", "catalog", "error", "verification_error"}
+        assert set(DeployedUcSchemaOut.model_fields) == {
+            "tables", "columns", "primary_keys", "foreign_keys", "verification_error",
+        }
+        assert set(DeploymentVerificationOut.model_fields) == {"tables", "summary", "verification_error"}
+
+    def test_compare_route_shape(self, client, seeded_app, mock_ws):
+        from _sql_fakes import response, ws_returning
+
+        mock_ws.statement_execution = ws_returning(response([])).statement_execution
+        bid, vid = seeded_app["business_id"], seeded_app["version_id"]
+        resp = client.get(f"/api/businesses/{bid}/versions/{vid}/deployment/compare")
+        assert resp.status_code == 200, resp.text
+        _assert_keys(resp.json(), {"tables", "summary", "verification_error"}, "DeploymentVerificationOut")
+
+
+class TestLinkRunShape:
+    """previewLinkRun answers ``LinkRunPreviewOut``; linkRun answers ``RunOut``
+    (``TestRunDetailShape``); the import routes take ``databricks_run_id`` and
+    answer ``linked_run_id``."""
+
+    PREVIEW_KEYS = {"databricks_run_id", "linkable", "tier", "intent", "evidence", "problems"}
+
+    def test_preview_shape(self, client, engine, mock_ws, seed_business):
+        from databricks.sdk.errors import NotFound
+        from sqlmodel import Session
+
+        from vibe_modeling.backend.db_models import ModelVersion
+
+        with Session(engine) as s:
+            mv = ModelVersion(
+                business_id=seed_business, version=1, scope="mvm", status="completed",
+                import_source_path="/Volumes/c/_metamodel/vol_root/business/test_corp/v1/mvm/model.json",
+            )
+            s.add(mv)
+            s.commit()
+            vid = mv.id
+        mock_ws.jobs.get_run.side_effect = NotFound("no such run")
+        resp = client.post(
+            f"/api/businesses/{seed_business}/versions/{vid}/link-run/preview",
+            json={"databricks_run_id": 1},
+        )
+        assert resp.status_code == 200, resp.text
+        _assert_keys(resp.json(), self.PREVIEW_KEYS, "LinkRunPreviewOut")
+        assert resp.json()["linkable"] is False
+
+    def test_model_fields(self):
+        from vibe_modeling.backend.models import (
+            ImportCreateBusinessAndExecuteIn,
+            ImportExecuteIn,
+            ImportExecuteOut,
+            LinkRunIn,
+            LinkRunPreviewOut,
+        )
+
+        assert set(LinkRunPreviewOut.model_fields) == self.PREVIEW_KEYS
+        assert set(LinkRunIn.model_fields) == {"databricks_run_id"}
+        assert "databricks_run_id" in ImportExecuteIn.model_fields
+        assert "databricks_run_id" in ImportCreateBusinessAndExecuteIn.model_fields
+        assert ImportExecuteOut.model_fields["linked_run_id"].default is None
+
+
+class TestOrphanSchemaShapes:
+    """``listOrphanSchemas`` and ``dropOrphanSchemas``. The list's ``impact``
+    has the ``getUninstallImpact`` shape."""
+
+    def test_list_fields(self):
+        from vibe_modeling.backend.models import OrphanSchemaOut, OrphanSchemasOut
+
+        assert set(OrphanSchemasOut.model_fields) == {"catalog", "schemas", "impact", "confirm_subject"}
+        assert set(OrphanSchemaOut.model_fields) == {
+            "name", "owner", "owned_by_app", "match", "table_count", "blocked_reason",
+        }
+
+    def test_drop_fields(self):
+        from vibe_modeling.backend.models import DropOrphanSchemasOut, OrphanSchemaDropOut
+
+        assert set(DropOrphanSchemasOut.model_fields) == {"run_id", "catalog", "schemas", "metamodel_cleanup"}
+        assert set(OrphanSchemaDropOut.model_fields) == {"name", "status", "table_count", "error"}
+
+    def test_list_route_shape_with_nothing_to_drop(self, client, engine, mock_ws):
+        from types import SimpleNamespace
+
+        from _sql_fakes import response
+        from vibe_modeling.backend.db_models import AgentConfig, Business
+
+        with Session(engine) as s:
+            s.add(AgentConfig(deployment_catalog="regression_cat", warehouse_id="wh-regression"))
+            b = Business(name="Orphan Shape", description="t")
+            s.add(b)
+            s.commit()
+            bid = b.id
+        mock_ws.schemas.list.side_effect = lambda **_kw: iter([SimpleNamespace(name="_metamodel", owner="x")])
+        mock_ws.statement_execution.execute_statement.side_effect = [
+            response([], columns=["business", "version", "model_scope", "database_name", "catalog"]),
+            response([], columns=["business", "version", "model_scope", "session_id"]),
+        ]
+        resp = client.get(f"/api/businesses/{bid}/orphan-schemas")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {
+            "catalog": "regression_cat", "schemas": [], "impact": None, "confirm_subject": None,
+        }

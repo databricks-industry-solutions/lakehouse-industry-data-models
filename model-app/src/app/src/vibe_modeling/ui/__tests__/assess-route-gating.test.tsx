@@ -1,12 +1,12 @@
 /**
- * The assessment pages' install/ready states (`AssessGate`): not installed,
+ * The assessment pages' install/ready states (`FeatureGate feature="assessment"`): not installed,
  * every assessment page and the help topic say so; installed but not ready,
  * results stay readable, the New assessment page and button are replaced by
  * the not-set-up notice, and app admins also see `missing` with a Settings
  * link.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense, type ReactNode } from "react";
 import {
@@ -59,7 +59,9 @@ import { Route as IndexRoute } from "@/routes/_sidebar/businesses.$businessId.as
 import { Route as NewRoute } from "@/routes/_sidebar/businesses.$businessId.assessments.new";
 import { Route as BatchRoute } from "@/routes/_sidebar/businesses.$businessId.assessments.$batchId";
 import { Route as HelpTopicRoute } from "@/routes/_sidebar/help.$topic";
-import { NOT_INSTALLED_TEXT, NOT_READY_TEXT } from "@/components/assessment/assess-gate";
+import { ASSESS_NOT_READY_TEXT as NOT_READY_TEXT, FEATURE_INFO } from "@/lib/features";
+
+const NOT_INSTALLED_TEXT = FEATURE_INFO.assessment.notInstalledText;
 import { ApiError } from "@/lib/api";
 
 afterEach(() => {
@@ -125,11 +127,12 @@ describe("assessment pages when the skill is not installed", () => {
   it("a config fetch error reads as an error with a retry, not as not installed", async () => {
     state.error = new ApiError(500, "Internal Server Error", { detail: "Lakebase unavailable" });
     renderAt("/businesses/biz-1/assessments");
-    const err = await screen.findByTestId("assess-config-error");
+    const err = await screen.findByTestId("feature-config-error");
     expect(err).toHaveTextContent("Lakebase unavailable");
+    expect(err).toHaveTextContent(/Next try in 00:\d\d/);
     expect(screen.queryByText(NOT_INSTALLED_TEXT)).toBeNull();
     screen.getByRole("button", { name: /try again/i }).click();
-    expect(state.refetch).toHaveBeenCalled();
+    await waitFor(() => expect(state.refetch).toHaveBeenCalled());
   });
 
   it("waits for the config instead of flashing the not-installed page", async () => {
@@ -163,9 +166,9 @@ describe("assessment pages when installed but not ready", () => {
     expect(await screen.findByText(NOT_READY_TEXT)).toBeInTheDocument();
     expect(screen.queryByTestId("wizard")).toBeNull();
     expect(screen.getByText("No reader service principal")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /open settings → assessment/i })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /open settings/i })).toHaveAttribute(
       "href",
-      "/settings?tab=assessment",
+      "/settings?tab=platform#feature-assessment",
     );
   });
 

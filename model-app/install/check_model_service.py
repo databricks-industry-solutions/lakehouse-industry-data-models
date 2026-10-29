@@ -29,8 +29,8 @@ governance call, and a DENY would win anyway.
 Exit codes: 0 = ok or could not verify (warned), 1 = stop the install
 (app SP mode only), 2 = usage error (not a three-part name).
 
-``--validate-only`` checks just the name (no network), for install.sh's
-up-front argument validation.
+install.sh validates the name up front through ``install/deploy_settings.py``,
+which applies the same rule.
 
 The name rule is the app's canonical
 ``src/app/src/vibe_modeling/backend/taxonomy/service_name.py``, loaded by file
@@ -41,8 +41,6 @@ must run from a repo checkout.
 from __future__ import annotations
 
 import argparse
-import functools
-import importlib.util
 import json
 import logging
 import shlex
@@ -52,6 +50,8 @@ from typing import Any
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import NotFound
+
+from _install_common import load_backend_module, workspace_client
 
 logger = logging.getLogger("install.check_model_service")
 logging.basicConfig(format="%(message)s", level=logging.INFO)
@@ -67,19 +67,8 @@ EXIT_USAGE = 2
 ALL_PRIVILEGES = "ALL_PRIVILEGES"
 
 
-@functools.lru_cache(maxsize=None)
-def _load_backend_module(path: Path):
-    """A dependency-light backend module loaded by file path (the installer runs without the app package)."""
-    spec = importlib.util.spec_from_file_location(f"_vibe_install_{path.stem}", path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load {path}; run from a repo checkout")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _load_service_name():
-    return _load_backend_module(SERVICE_NAME_PATH)
+    return load_backend_module(SERVICE_NAME_PATH)
 
 
 class _Unverifiable(Exception):
@@ -126,7 +115,7 @@ def _securable_owners(w: WorkspaceClient, getter, full_name: str) -> set[str]:
 def _reader_exists(w: WorkspaceClient, principal: str) -> bool | None:
     """True/False when the workspace answers; None when it can't be read. The lookup is the app's ``find_reader_sp``."""
     try:
-        return _load_backend_module(READER_SP_PATH).find_reader_sp(w, principal) is not None
+        return load_backend_module(READER_SP_PATH).find_reader_sp(w, principal) is not None
     except Exception as exc:  # noqa: BLE001 - warn-only: report and continue
         logger.warning(f"[warn] could not look up service principal {principal}: {exc}")
         return None
@@ -138,7 +127,7 @@ def check_reader(w: WorkspaceClient, *, reader: str, app_sp: str) -> None:
     if exists is False:
         logger.warning(
             f"[warn] reader service principal {reader} does not exist in this workspace. "
-            f"Create it (or add it to the workspace), then set it in Settings -> Assessment."
+            f"Create it (or add it to the workspace), then set it in Settings -> Platform (Optional features)."
         )
     elif exists:
         logger.info(f"[ok]   reader service principal {reader} exists")
@@ -185,7 +174,7 @@ def check(
     warn_only = principal != app_sp
     who = f"the reader SP {principal}" if warn_only else f"the app service principal {app_sp}"
     schema_full = f"{catalog}.{schema}"
-    w = WorkspaceClient(profile=profile) if profile else WorkspaceClient()
+    w = workspace_client(profile)
 
     if warn_only:
         check_reader(w, reader=principal, app_sp=app_sp)
@@ -266,23 +255,13 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--profile", default=None, help="Databricks CLI profile")
     p.add_argument("--model-service", required=True, help="UC model service full name (catalog.schema.service)")
-    p.add_argument("--app-sp", help="App service principal application_id (UUID)")
+    p.add_argument("--app-sp", required=True, help="App service principal application_id (UUID)")
     p.add_argument(
         "--principal",
         default=None,
         help="Principal to check (default: --app-sp). Another principal is the assessment reader: warn-only.",
     )
-    p.add_argument("--validate-only", action="store_true", help="Check the name only (no network)")
     args = p.parse_args(argv if argv is not None else sys.argv[1:])
-    if args.validate_only:
-        try:
-            _load_service_name().split_model_service_name(args.model_service)
-        except ValueError as exc:
-            logger.error(f"ERROR: {exc}")
-            return EXIT_USAGE
-        return EXIT_OK
-    if not args.app_sp:
-        p.error("--app-sp is required unless --validate-only")
     return check(
         profile=args.profile,
         model_service=args.model_service,

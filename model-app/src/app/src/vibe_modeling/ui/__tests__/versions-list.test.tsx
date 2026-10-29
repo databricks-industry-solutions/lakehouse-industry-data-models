@@ -14,6 +14,7 @@
  * standalone.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -37,6 +38,10 @@ vi.mock("@/lib/api", async () => {
     ...actual,
     useGetBusinessSuspense: () => businessHook(),
     useGetExplorerVersionsSuspense: () => versionsHook(),
+    // The explorer joins the lifecycle columns from the versions list and
+    // lists unfinished metamodel cleanups.
+    useListVersionsSuspense: () => versionsHook(),
+    useListMetamodelCleanups: () => ({ data: { data: [] } }),
     useListIndustriesSuspense: () => ({ data: [] }),
     useListSectorsSuspense: () => ({ data: [] }),
   };
@@ -126,6 +131,24 @@ async function renderExplorer(versions: unknown[]) {
     </QueryClientProvider>,
   );
 }
+
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.explorer"));
+
+describe("Versions list — lifecycle badges", () => {
+  it("labels drafts, replaced versions and promoted drafts", async () => {
+    await renderExplorer([
+      makeVersion({ id: "v-3", version: 3, scope: "ecm", dry_run: true, promoted_at: "2026-10-22T00:00:00Z" }),
+      makeVersion({ id: "v-4", version: 4, scope: "ecm", status: "draft", dry_run: true, draft_state: "older_base" }),
+      makeVersion({ id: "v-5", version: 5, scope: "ecm", status: "superseded", replaced_at: "2026-10-22T00:00:00Z", replaced_by_version_id: "v-3" }),
+      makeVersion({ id: "v-6", version: 6, scope: "ecm", status: "draft", dry_run: true, draft_state: "ready" }),
+    ]);
+    const list = await screen.findByTestId("versions-list");
+    expect(within(within(list).getByTestId("version-row-6-ecm")).getByText("Dry Run")).toBeInTheDocument();
+    expect(within(within(list).getByTestId("version-row-4-ecm")).getByText("Dry Run (older base)")).toBeInTheDocument();
+    expect(within(within(list).getByTestId("version-row-5-ecm")).getByText("Replaced by v3")).toBeInTheDocument();
+    expect(within(within(list).getByTestId("version-row-3-ecm")).getByText("from Dry Run")).toBeInTheDocument();
+  });
+});
 
 describe("Versions list — (version, scope) rows", () => {
   it("renders TWO rows (one ECM + one MVM) at the same version number", async () => {

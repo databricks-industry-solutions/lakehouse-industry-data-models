@@ -1,7 +1,11 @@
 import { useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ApiError, cancelTaxonomyDraft, getTaxonomyDraft, retryTaxonomyDraftPart, type TaxonomyDraftOut } from "@/lib/api";
+import {
+  ApiError, cancelTaxonomyDraft, getTaxonomyDraft, retryTaxonomyDraftPart,
+  type TaxonomyDraftCreateIn, type TaxonomyDraftOut, type TaxonomyIntake, type TaxonomySection, type TaxonomyTree,
+} from "@/lib/api";
 import { notifyError } from "@/lib/notify";
+import { finishedParts } from "@/lib/taxonomy/tree";
 
 export const TAXONOMY_POLL_MS = 1500;
 
@@ -34,7 +38,8 @@ export function useTaxonomyDraft(draftId: string | null, { pollMs = TAXONOMY_POL
  * The one per-part Retry and Cancel path for a draft (wizard parts and the
  * review step's description). Each writes the returned draft into the polling
  * hook's cache, so a retried part on a finished draft renders and polls.
- * Failures go to `notifyError` (a 422 `config_missing` shows its message).
+ * Failures go to `notifyError` (a 422 `config_missing` or a 400
+ * `model_service_refused` shows its message).
  */
 export function useTaxonomyDraftActions(draftId: string | null) {
   const queryClient = useQueryClient();
@@ -62,4 +67,20 @@ export function useTaxonomyDraftActions(draftId: string | null) {
   }, [apply, draftId]);
 
   return { retry, cancel };
+}
+
+/**
+ * The createTaxonomyDraft body. With `seeds` (Draft again, or drafting the
+ * parts a resumed wizard is missing), the user's tree and sections go along
+ * so the server drafts only what is missing. A tree with blank names or no
+ * domains is not sent: the server drafts the tree, and the wizard keeps the
+ * user's own tree anyway.
+ */
+export function draftCreateBody(
+  intake: TaxonomyIntake,
+  seeds?: { tree: TaxonomyTree | null; sections: Record<string, TaxonomySection> },
+): TaxonomyDraftCreateIn {
+  if (!seeds) return intake;
+  const parts = finishedParts(seeds.tree, seeds.sections);
+  return { ...intake, seed_tree: parts.tree, seed_sections: parts.sections };
 }

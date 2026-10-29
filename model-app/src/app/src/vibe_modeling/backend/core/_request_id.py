@@ -71,6 +71,9 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
         rid = request.headers.get("x-request-id") or _new_request_id()
+        # The unhandled-exception handler runs outside this middleware, after
+        # the ContextVar is reset; it reads the id from here.
+        request.state.request_id = rid
         token = current_request_id.set(rid)
         try:
             response = await call_next(request)

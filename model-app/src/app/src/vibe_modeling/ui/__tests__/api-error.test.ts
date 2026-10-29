@@ -7,7 +7,16 @@
  * detail string or the Pydantic msg(s) instead.
  */
 import { describe, expect, it } from "vitest";
-import { apiErrorMessage, parse409, parseAdminHelp, parsePlainConflict } from "@/lib/api-error";
+import {
+  apiErrorMessage,
+  parse409,
+  parseAdminHelp,
+  parseConfigMissing,
+  parseNeedsConfirmation,
+  parsePlainConflict,
+  parseSettingRefused,
+  parseSettingsError,
+} from "@/lib/api-error";
 import { ApiError } from "@/lib/api";
 
 interface SampleConflict {
@@ -198,5 +207,110 @@ describe("parsePlainConflict", () => {
     expect(parsePlainConflict(new ApiError(500, "Error", { detail: { message: "m" } }))).toBeNull();
     expect(parsePlainConflict(new ApiError(409, "Conflict", { detail: { message: " " } }))).toBeNull();
     expect(parsePlainConflict(new Error("m"))).toBeNull();
+  });
+});
+
+describe("parseNeedsConfirmation", () => {
+  const issues = [
+    { field_path: "version_id", step_index: -1, severity: "confirm", message: "v5 is the latest ECM version...", subject: "install_over_newer:mv-5" },
+    { field_path: "catalog", step_index: -1, severity: "confirm", message: "Catalog x holds v5...", subject: "install_replaces_in_catalog:mv-5" },
+  ];
+  const err = new ApiError(422, "Unprocessable", {
+    detail: { error: "needs_confirmation", issues, message: "Confirm what this run changes before it starts: ".padEnd(500, ".") },
+  });
+
+  it("reads every issue with its subject and message (not the cut message)", () => {
+    const parsed = parseNeedsConfirmation(err);
+    expect(parsed?.issues.map((i) => i.subject)).toEqual([
+      "install_over_newer:mv-5",
+      "install_replaces_in_catalog:mv-5",
+    ]);
+    expect(parsed?.issues[1].message).toBe("Catalog x holds v5...");
+  });
+
+  it("is distinct from config_missing", () => {
+    expect(parseConfigMissing(err)).toBeNull();
+    const missing = new ApiError(422, "Unprocessable", { detail: { error: "config_missing", missing: [], message: "m" } });
+    expect(parseNeedsConfirmation(missing)).toBeNull();
+  });
+
+  it("drops issues without a subject and ignores other errors", () => {
+    const partial = new ApiError(422, "Unprocessable", {
+      detail: { error: "needs_confirmation", issues: [{ message: "x", subject: null }, issues[0]] },
+    });
+    expect(parseNeedsConfirmation(partial)?.issues).toHaveLength(1);
+    expect(parseNeedsConfirmation(new Error("x"))).toBeNull();
+    expect(parseNeedsConfirmation(new ApiError(422, "U", { detail: "plain" }))).toBeNull();
+  });
+});
+
+describe("parseSettingRefused / parseSettingsError", () => {
+  const refused = (error: string, key: string, extra: Record<string, unknown> = {}) =>
+    new ApiError(400, "Bad Request", { detail: { error, key, message: "Refused.", ...extra } });
+
+  it("reads a model_service_refused with its key and test-call status", () => {
+    expect(parseSettingRefused(refused("model_service_refused", "taxonomy_llm", { status: "denied" }))).toEqual({
+      error: "model_service_refused", key: "taxonomy_llm", message: "Refused.", status: "denied",
+    });
+  });
+
+  it("reads a setting_refused with its key", () => {
+    expect(parseSettingRefused(refused("setting_refused", "warehouse_id"))).toEqual({
+      error: "setting_refused", key: "warehouse_id", message: "Refused.",
+    });
+  });
+
+  it("is null for other errors and other discriminators", () => {
+    expect(parseSettingRefused(new Error("x"))).toBeNull();
+    expect(parseSettingRefused(new ApiError(409, "Conflict", { detail: { error: "admin_help", message: "m" } }))).toBeNull();
+    expect(parseSettingsError(new ApiError(401, "Unauthorized", { detail: { error: "identity_missing", message: "m" } }))).toBeNull();
+  });
+
+  it("gives every settings error its message and Settings links", () => {
+    expect(parseSettingsError(refused("setting_refused", "reader_application_id"))).toEqual({
+      message: "Refused.",
+      missing: [{ key: "reader_application_id", label: "Assessment reader service principal", settings_url: "/settings?tab=platform#feature-assessment" }],
+      refusedKey: "reader_application_id",
+    });
+    const cm = new ApiError(422, "Unprocessable Entity", {
+      detail: { error: "config_missing", missing: [{ key: "warehouse", label: "SQL warehouse", settings_url: "/settings?tab=platform" }], message: "Set it." },
+    });
+    expect(parseSettingsError(cm)).toEqual({
+      message: "Set it.",
+      missing: [{ key: "warehouse", label: "SQL warehouse", settings_url: "/settings?tab=platform" }],
+      refusedKey: null,
+    });
+  });
+
+  it("a config_missing item of a feature setting links to its card; others keep their URL", () => {
+    const cm = new ApiError(422, "Unprocessable Entity", {
+      detail: {
+        error: "config_missing",
+        missing: [
+          { key: "taxonomy_llm", label: "Domain Taxonomy Builder model service", settings_url: "/settings?tab=platform" },
+          { key: "warehouse", label: "SQL warehouse", settings_url: "/settings?tab=platform" },
+        ],
+        message: "Set them.",
+      },
+    });
+    expect(parseSettingsError(cm)?.missing.map((m) => m.settings_url)).toEqual([
+      "/settings?tab=platform#feature-taxonomy",
+      "/settings?tab=platform",
+    ]);
+  });
+
+  it("an unknown refused key still links to Settings", () => {
+    expect(parseSettingsError(refused("setting_refused", "something_new"))?.missing).toEqual([
+      { key: "something_new", label: "something_new", settings_url: "/settings" },
+    ]);
+  });
+});
+
+describe("identity_missing", () => {
+  it("reads as its message", () => {
+    const err = new ApiError(401, "Unauthorized", {
+      detail: { error: "identity_missing", message: "Sign in to the workspace to copy the hand-off." },
+    });
+    expect(apiErrorMessage(err)).toBe("Sign in to the workspace to copy the hand-off.");
   });
 });

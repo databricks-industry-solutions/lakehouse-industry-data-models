@@ -1,5 +1,7 @@
 import { Badge } from "@/components/ui/badge";
-import { STATUS_LABEL, formatResume } from "@/lib/assessment";
+import { STATUS_LABEL } from "@/lib/assessment";
+import { nextTryAt } from "@/lib/retry-time";
+import { useNow } from "@/lib/use-now";
 
 const VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   completed: "secondary",
@@ -8,7 +10,7 @@ const VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline
   cancelled: "outline",
 };
 
-/** Assessment status pill; rate-limited runs also show the attempt and resume time. */
+/** Assessment status pill; a busy (rate-limited) run also shows the attempt and its next try. */
 export function StatusBadge({
   status,
   attempt,
@@ -18,11 +20,12 @@ export function StatusBadge({
   attempt?: number;
   resumeAt?: string | null;
 }) {
+  const busy = status === "rate_limited";
+  const now = useNow(busy && Boolean(resumeAt), 30000);
   let label = STATUS_LABEL[status] ?? status;
-  if (status === "rate_limited") {
+  if (busy) {
     if (attempt) label += ` · attempt ${attempt}`;
-    const resume = formatResume(resumeAt);
-    if (resume) label += ` · resumes ${resume}`;
+    if (resumeAt) label += ` · ${nextTryAt(resumeAt, now)}`;
   }
   return <Badge variant={VARIANT[status] ?? "default"}>{label}</Badge>;
 }

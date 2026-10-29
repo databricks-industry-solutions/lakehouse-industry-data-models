@@ -1,0 +1,89 @@
+{
+  "_comment": "Trimmed from a live agent 5.3.3 Vibe ECM + MVM run (T2 J7 A2): the model.json of the ECM the vibe step made (the agent kept its base ECM's conventions: SCREAMING_CASE, Int (0/1), dd/MM/yyyy, tag_suffix _wt) and of the MVM the shrink step then made from it with the run's widget defaults (snake_case, Boolean (True/False), yyyy-MM-dd, no tag suffix). Kept to the keys the conventions readers use: agent_version, the _vibe_scope mode, model_requirements.model_conventions (what the step was sent) and model.model_conventions (what the model has). Used by tests/test_app/test_run_defaults.py and test_primitives_shrink_to_mvm.py.",
+  "ecm": {
+    "agent_version": "5.3.3",
+    "release_version": "0.8.0",
+    "_vibe_scope": {
+      "mode": "requested",
+      "operation": "vibe modeling of version"
+    },
+    "model_requirements": {
+      "model_conventions": {
+        "data_classification_levels": "",
+        "data_asset_naming_convention": "snake_case",
+        "primary_key_suffix": "_id",
+        "foreign_key_suffix": "",
+        "schema_prefix": "ecm_",
+        "schema_suffix": "",
+        "tag_prefix": "dbx_",
+        "tag_suffix": "",
+        "catalog_prefix": "",
+        "catalog_suffix": "",
+        "table_id_type": "BIGINT",
+        "boolean_format": "Boolean (True/False)",
+        "date_format": "yyyy-MM-dd",
+        "timestamp_format": "yyyy-MM-dd HH:mm:ss",
+        "add_house_keeping_columns": "No",
+        "add_history_tracking_columns": "No"
+      }
+    },
+    "model": {
+      "model_conventions": {
+        "data_asset_naming_convention": "SCREAMING_CASE",
+        "primary_key_suffix": "_id",
+        "schema_prefix": "ecm_",
+        "schema_suffix": "",
+        "tag_prefix": "dbx_",
+        "tag_suffix": "_wt",
+        "table_id_type": "BIGINT",
+        "boolean_format": "Int (0/1)",
+        "date_format": "dd/MM/yyyy",
+        "timestamp_format": "yyyy-MM-dd HH:mm:ss",
+        "data_classification_levels": "",
+        "housekeeping_columns": "",
+        "history_tracking_columns": ""
+      }
+    }
+  },
+  "mvm": {
+    "agent_version": "5.3.3",
+    "release_version": "0.8.0",
+    "model_requirements": {
+      "model_conventions": {
+        "data_classification_levels": "",
+        "data_asset_naming_convention": "snake_case",
+        "primary_key_suffix": "_id",
+        "foreign_key_suffix": "",
+        "schema_prefix": "mvm_",
+        "schema_suffix": "",
+        "tag_prefix": "dbx_",
+        "tag_suffix": "",
+        "catalog_prefix": "",
+        "catalog_suffix": "",
+        "table_id_type": "BIGINT",
+        "boolean_format": "Boolean (True/False)",
+        "date_format": "yyyy-MM-dd",
+        "timestamp_format": "yyyy-MM-dd HH:mm:ss",
+        "add_house_keeping_columns": "No",
+        "add_history_tracking_columns": "No"
+      }
+    },
+    "model": {
+      "model_conventions": {
+        "data_asset_naming_convention": "snake_case",
+        "primary_key_suffix": "_id",
+        "schema_prefix": "mvm_",
+        "schema_suffix": "",
+        "tag_prefix": "dbx_",
+        "tag_suffix": "",
+        "table_id_type": "BIGINT",
+        "boolean_format": "Boolean (True/False)",
+        "date_format": "yyyy-MM-dd",
+        "timestamp_format": "yyyy-MM-dd HH:mm:ss",
+        "data_classification_levels": "",
+        "housekeeping_columns": "",
+        "history_tracking_columns": ""
+      }
+    }
+  }
+}

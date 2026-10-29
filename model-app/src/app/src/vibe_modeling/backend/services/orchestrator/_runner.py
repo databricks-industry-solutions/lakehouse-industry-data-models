@@ -36,7 +36,9 @@ from ..operations import (
     OperationObservation,
 )
 from ..operations._protocol import Operation
+from ...core._json import json_object
 from ...db_models import ModelVersion, Run, RunOperation
+from ...error_sanitization import recorded_error_text, sanitize_error_message
 from .dag import Dag, OperationStep
 
 
@@ -105,6 +107,17 @@ class CancelResult:
     op_failures: list[dict] = field(default_factory=list)
     """Populated when rollback halted mid-chain. Each entry:
     ``{"op": <RunOperation snapshot dict>, "error": str}``."""
+
+    refusal_reason: str = ""
+    """Set when the call refused before changing anything: the run is
+    untouched and still live. One of the ``CANCEL_REFUSED_*`` codes; the
+    matching human message is ``op_failures[0]["error"]``. Empty when the
+    rollback ran (whether it finished or halted)."""
+
+
+CANCEL_REFUSED_PHASE_SUCCEEDED = "phase_job_succeeded"
+"""The running op's Databricks job already TERMINATED/SUCCESS: rolling it
+back would undo completed work (spec §6.3)."""
 
 
 def _now() -> datetime:
@@ -290,7 +303,8 @@ class Orchestrator:
         run an uninstall explicitly (spec §6.3). On safety-gate refusal
         the run is left untouched and the caller receives
         ``CancelResult(ok=False, final_run_status=<unchanged>)`` so the
-        route handler can map that to a 409 without us having raised.
+        route handler can map that to a 409 without us having raised;
+        ``refusal_reason`` says which check refused.
 
         Per spec §4: ``ws`` is a method argument — passing it here
         overrides any ``ws`` set on the orchestrator instance for the
@@ -338,11 +352,16 @@ class Orchestrator:
                             {
                                 "op": _row_snapshot(running),
                                 "error": (
-                                    "Refusing rollback: in-flight Databricks "
-                                    "job has TERMINATED/SUCCESS"
+                                    f"Cancel-with-rollback refused: the "
+                                    f"Databricks job of step "
+                                    f"'{running.operation_name}' already "
+                                    f"finished successfully, so rolling it "
+                                    f"back would undo completed work. The run "
+                                    f"continues."
                                 ),
                             }
                         ],
+                        refusal_reason=CANCEL_REFUSED_PHASE_SUCCEEDED,
                     )
             except Exception as e:  # noqa: BLE001 — best-effort gate
                 logger.warning(
@@ -376,6 +395,8 @@ class Orchestrator:
                 if first_failure is not None:
                     # Halt — operator inspects residual state.
                     break
+                if self._keeps_its_effect(row):
+                    continue
                 try:
                     self._rollback_one(row, session)
                     row.status = "rolled_back"
@@ -395,7 +416,8 @@ class Orchestrator:
                     # exactly which UC state still needs manual cleanup.
                     first_failure = {
                         "op": _row_snapshot(row),
-                        "error": f"{type(e).__name__}: {e}",
+                        "error": recorded_error_text(
+                            e, f"Rollback of {row.operation_name}", f"{type(e).__name__}: {e}"),
                     }
                     op_failures.append(first_failure)
 
@@ -676,6 +698,14 @@ class Orchestrator:
             session.flush()
             return AdvanceOutcome.ADVANCED
 
+        # A registry release an earlier uninstall from this catalog could not
+        # complete is issued again first (bounded, never fails the step).
+        catalog = str((validated_params or {}).get("deployment_catalog") or "")
+        if catalog:
+            from ..operations.uninstall import retry_registry_releases
+
+            retry_registry_releases(session, self._ws, catalog)
+
         # Live dispatch.
         try:
             handle = op.dispatch(ctx, self._ws, session)
@@ -684,7 +714,9 @@ class Orchestrator:
                 "dispatch failed for run=%s op=%s", run.id, op.name,
             )
             return self._fail_run(
-                run, row, session, f"dispatch error: {e!r}",
+                run, row, session,
+                "dispatch error: " + recorded_error_text(
+                    e, f"Dispatch of {op.name}", sanitize_error_message(repr(e))),
             )
 
         row.status = "running"
@@ -701,7 +733,7 @@ class Orchestrator:
         # column stays "{}" until a terminal observation overwrites it
         # with ``result.rollback_state`` — see below) — so an install
         # that reaches TERMINATED/SUCCESS on its first observed tick
-        # calls ``_mark_version_deployed`` with ``deployment_catalog=""``
+        # calls ``mark_version_deployed`` with ``deployment_catalog=""``
         # even though ``dispatch()`` built the real value. This is what
         # live run 771d6b7d hit: deployment_status flipped to "deployed"
         # but uc_catalog stayed "" because the runner never round-tripped
@@ -788,12 +820,7 @@ class Orchestrator:
         # rollback_state_json column is overloaded with both dispatch
         # context and rollback state; treat any persisted dict as
         # carry-forward extras.
-        import json as _json
-        try:
-            _persisted = _json.loads(row.rollback_state_json or "{}")
-            extras = _persisted if isinstance(_persisted, dict) else {}
-        except (ValueError, TypeError):
-            extras = {}
+        extras = json_object(row.rollback_state_json)
         # Inject the live (non-persisted) _vibe_progress drainer so the
         # model-producing observe() can run model_sync's synchronous final
         # drain before reading rename/merge/delete signals (Task 4 §2.0a).
@@ -812,7 +839,7 @@ class Orchestrator:
                 "observe failed for run=%s op=%s", run.id, op.name,
             )
             # Treat as a transient — the poll loop will retry.
-            run.last_poll_error = repr(e)
+            run.last_poll_error = recorded_error_text(e, f"Observe of {op.name}", repr(e))
             session.add(run)
             return AdvanceOutcome.CONTINUE
 
@@ -891,7 +918,8 @@ class Orchestrator:
             # Background ELK prefetch for the new version so the first
             # diagram view is instant. Non-blocking; helper logs and
             # swallows any failure so a flaky cache layer can never
-            # block the run from completing.
+            # block the run from completing. The jobs start only after
+            # the tick commits the new version.
             if op.produces_version and result.output_version_id and self._session_factory and self._ws:
                 self._queue_layout_prefetch(run, result.output_version_id, session)
             return self._post_terminal(run, session)
@@ -1025,13 +1053,13 @@ class Orchestrator:
         """
         rows = self._load_rows(run, session)
         first_failure: Optional[dict] = None
+        # Every caller hands in a row already marked ``failed``, which is not
+        # a rollback candidate: only the steps that succeeded (or are still
+        # running) before it are rolled back.
         for row in sorted(rows, key=lambda r: r.step_index, reverse=True):
-            if row.id == failed_row.id:
-                # The failing op itself: only roll back if it left
-                # partial state, indicated by a non-empty rollback_state.
-                if not row.rollback_state_json or row.rollback_state_json == "{}":
-                    continue
             if row.status not in _ROLLBACK_CANDIDATE_STATUSES:
+                continue
+            if self._keeps_its_effect(row):
                 continue
             try:
                 self._rollback_one(row, session)
@@ -1052,7 +1080,8 @@ class Orchestrator:
                 # needs manual cleanup.
                 first_failure = {
                     "op": _row_snapshot(row),
-                    "error": f"{type(e).__name__}: {e}",
+                    "error": recorded_error_text(
+                        e, f"Rollback of {row.operation_name}", f"{type(e).__name__}: {e}"),
                 }
                 break
 
@@ -1083,6 +1112,18 @@ class Orchestrator:
             transition_run(session, run, target_status="rolled_back_failed", reason=err)
         session.flush()
         return AdvanceOutcome.TERMINAL_FAILED
+
+    def _keeps_its_effect(self, row: RunOperation) -> bool:
+        """A succeeded op whose rollback undoes nothing (an uninstall) keeps
+        ``succeeded``: its effect stands in UC, so ``rolled_back`` would be
+        untrue."""
+        if row.status != "succeeded":
+            return False
+        try:
+            op = self._registry_get(row.operation_name)
+        except KeyError:
+            return False
+        return getattr(op, "rollback_is_noop", False) is True
 
     def _rollback_one(self, row: RunOperation, session: Session) -> None:
         """Resolve the operation, build a context, and call

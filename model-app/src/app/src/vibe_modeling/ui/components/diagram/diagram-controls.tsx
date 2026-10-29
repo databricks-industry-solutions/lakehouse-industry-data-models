@@ -40,8 +40,8 @@ interface DiagramControlsProps {
    *  diagram is the single home for feedback on this view; page-level
    *  callers suppress their own button while the diagram tab is active. */
   feedbackSlot?: ReactNode;
-  /** Hide the toolbar's own domain dropdown, e.g. when a host renders an
-   *  equivalent picker elsewhere (item 3). Defaults to true. */
+  /** Hide the toolbar's own domain dropdown on surfaces that only follow a
+   *  focused input. Defaults to true. */
   showDomainSelect?: boolean;
 }
 
@@ -74,8 +74,8 @@ export function DiagramControls({
   };
   return (
     <div className="flex items-center gap-3 py-2 flex-wrap">
-      {/* Domain selector - hidden when a host renders an equivalent picker
-          elsewhere (item 3, e.g. the domain page title). */}
+      {/* Domain selector - hidden on surfaces that only follow a focused
+          input (input review, following pane). */}
       {showDomainSelect && (
         <DomainSelect
           domains={domains}

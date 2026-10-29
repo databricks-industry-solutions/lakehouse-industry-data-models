@@ -8,10 +8,13 @@ Statement Execution API and mirrors them into Lakebase
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import random
 import time
+from collections.abc import Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional
@@ -19,19 +22,29 @@ from typing import Optional
 from databricks.sdk import WorkspaceClient
 from sqlmodel import Session, select
 
-from .core import resolve_metamodel_catalog
+from .core import _sql, resolve_metamodel_catalog
 from .core._config import AppConfig
+from .core._metamodel_cleanups import sweep_metamodel_cleanups
 from .core._time import as_utc
 from .db_models import (
     AgentConfig,
     ModelVersion,
     Run,
+    RunAgentReport,
     RunInputLink,
     RunOperation,
     RunProgressEvent,
     VibeInput,
 )
+from .error_sanitization import recorded_error_text, sanitize_error_message
 from .job_launcher import session_id_to_bigint
+from .run_report import OUTCOME_APPLIED, run_is_dry_run
+from .services.operations._version_lifecycle import (
+    promotion_of_run,
+    queue_post_install_deletes,
+    reopen_then_consume,
+    run_post_install_deletes,
+)
 from .services.orchestrator import AdvanceOutcome, Orchestrator
 from .subdomain_allocation_parser import (
     apply_subdomain_allocation,
@@ -88,8 +101,51 @@ def resolve_session_id_bigint(
 
 logger = logging.getLogger(__name__)
 
-# SQL state name returned when a table does not exist
-_TABLE_NOT_FOUND = "TABLE_OR_VIEW_NOT_FOUND"
+_BOOTING_MESSAGE = "Booting agent — first events expected within ~2 min"
+
+
+def _poll_error_note(exc: Exception, run: Run) -> str:
+    """The user-facing ``last_poll_error`` for a failed read of the agent's
+    tables, or ``""`` for a timeout before the first event: a stopped
+    warehouse waking up reads as the agent booting, not as an error."""
+    if isinstance(exc, _sql.SqlStatementError):
+        if exc.state == "TIMEOUT" and not run.last_consumed_step_id:
+            return ""
+        return f"Could not read the agent's progress ({exc.state}): {exc.message}"
+    return f"Could not read the agent's progress: {recorded_error_text(exc, 'Reading the agent progress')}"
+
+
+# Each tick reads and writes the agent's tables with one 30 s server wait and
+# no polls: the next tick asks again, and a statement still running at the end
+# is cancelled and raises SqlStatementError("TIMEOUT").
+_TICK_SQL_WAIT = "30s"
+
+# Worker threads for advance ticks, owned by the tracker (never the shared
+# default pool). A run holds at most one tick at a time (its tick lock), so
+# this is how many runs can advance at once; more queue for a worker.
+TICK_EXECUTOR_WORKERS = 8
+# How long app shutdown waits for in-flight ticks before it moves on.
+SHUTDOWN_TICK_WAIT_SECONDS = 5.0
+
+
+async def _wait_through_cancels(futures: Iterable[asyncio.Future]) -> None:
+    """Wait until every future is done, absorbing cancels of the caller.
+
+    An advance tick's worker thread cannot be interrupted, so whoever holds
+    the run's tick lock (or awaits the task that does) keeps waiting until
+    the thread really ends; the caller re-raises its own cancel afterwards.
+    Exceptions are marked retrieved so asyncio does not log them as lost.
+    """
+    futs = list(futures)
+    pending = {f for f in futs if not f.done()}
+    while pending:
+        try:
+            _, pending = await asyncio.wait(pending)
+        except asyncio.CancelledError:
+            pending = {f for f in pending if not f.done()}
+    for f in futs:
+        if not f.cancelled():
+            f.exception()
 
 
 def _finalize_run_inputs(run_id: str, session: Session, success: bool) -> None:
@@ -97,15 +153,42 @@ def _finalize_run_inputs(run_id: str, session: Session, success: bool) -> None:
 
     ``RunInputLink`` rows are written at launch as the *intended* set. Here:
 
-    - **On success**: flip ``VibeInput.consumed=true`` for every input the run
-      attempted (its ``RunInputLink`` rows), and clear ``selected_for_run``.
+    - **On success**, for the run's linked inputs (its ``RunInputLink`` rows),
+      "consume" means ``consumed=true``, ``consumed_by_run_id=<run>`` and
+      ``selected_for_run=false``. It reads the agent's report rows that
+      ``run_report.persist_agent_report`` wrote when the vibe op finished:
+
+      * a **Dry Run** (``run_report.run_is_dry_run``) consumes nothing; its
+        links stay as the audit record and selection is left alone;
+      * only inputs whose link has ``outcome_status="applied"`` are consumed
+        (an input already consumed keeps its first consuming run and is
+        deselected); every
+        other status, ``not_reported`` or NULL stays open and selected;
+      * a malformed ``input_outcomes``, no ``input_outcomes`` key, or no
+        ``RunAgentReport`` at all (an older agent, a run without a
+        ``vibe_iterate`` op, a run finished before reports existed) leaves
+        every outcome NULL, so nothing is consumed (logged): without the
+        agent's per-item outcomes no input is marked done.
+
+      A model.json of the wrong version never reaches here: the vibe op
+      fails on ``version_mismatch``.
+
+      An install run that made its version current
+      (``_version_lifecycle.promotion_of_run``) reopens the feedback of the
+      versions it replaced and consumes what the installed version applied
+      (``reopen_then_consume``), and queues the deletes the user asked for
+      (``queue_post_install_deletes``; performed after this commit by
+      :meth:`ProgressTracker._run_post_install_deletes`).
     - **On failure**: consume nothing and DELETE the run's ``RunInputLink``
       rows, so the selected inputs re-pool clean for the next attempt (the
       failed run never consumed them, so there is no usage to preserve).
 
-    All mutations build, then ONE ``session.commit()`` at the end - no
-    half-state where a ``RunInputLink`` exists but ``consumed`` is still false
-    or vice-versa (``feedback_state_atomicity``).
+    All mutations build, then ONE ``session.commit()`` at the end, together
+    with the terminal run-status flip (``feedback_state_atomicity``). A
+    successful run can still leave linked inputs with ``consumed=false``: the
+    Dry Run, missing-outcomes and non-``applied`` cases above keep the link
+    as the audit record and leave the input open and selected for the next
+    run.
 
     Callers invoke this AFTER flushing (not committing) the run's terminal
     transition, so the run-status flip commits in this same transaction: a
@@ -120,19 +203,33 @@ def _finalize_run_inputs(run_id: str, session: Session, success: bool) -> None:
         input_links = session.exec(
             select(RunInputLink).where(RunInputLink.run_id == run_id)
         ).all()
-        input_ids = [link.input_id for link in input_links]
-        if input_ids:
+        if input_links and not run_is_dry_run(session, session.get(Run, run_id)):
+            _log_unreported_outcomes(session, run_id, len(input_links))
+            applied_ids = [
+                link.input_id for link in input_links
+                if link.outcome_status == OUTCOME_APPLIED
+            ]
             inputs = session.exec(
-                select(VibeInput).where(VibeInput.id.in_(input_ids))
-            ).all()
+                select(VibeInput).where(VibeInput.id.in_(applied_ids))
+            ).all() if applied_ids else []
             for vi in inputs:
-                vi.consumed = True
                 # Clear the run-selection flag in the SAME commit as consumed,
                 # so a consumed input never silently re-enters the next run's
-                # selected set (selection is moot once consumed).
+                # selected set (selection is moot once consumed). An input
+                # consumed earlier (the manual consume route keeps its
+                # selection) keeps its first consuming run but is deselected.
+                if not vi.consumed:
+                    vi.consumed = True
+                    vi.consumed_by_run_id = run_id
+                elif not vi.selected_for_run:
+                    continue
                 vi.selected_for_run = False
                 vi.updated_at = now
                 session.add(vi)
+        promotion = promotion_of_run(session, run_id)
+        if promotion is not None:
+            reopen_then_consume(session, run_id, promotion)
+            queue_post_install_deletes(session, run_id, promotion)
     else:
         # A failed run consumed nothing: delete its RunInputLink rows (the
         # per-run attempt record). ``VibeInput.selected_for_run`` is left
@@ -149,32 +246,28 @@ def _finalize_run_inputs(run_id: str, session: Session, success: bool) -> None:
     session.commit()
 
 
-def _supersede_deployed_siblings(session: Session, new_mv: ModelVersion) -> int:
-    """Mark prior `deployed` ModelVersions of the same (business, catalog) as uninstalled.
+def _log_unreported_outcomes(session: Session, run_id: str, n_links: int) -> None:
+    """Log why a successful run's linked inputs carry no agent outcomes."""
+    report = session.get(RunAgentReport, run_id)
+    if report is None:
+        reason = "recorded no agent report"
+    elif report.outcomes_malformed:
+        reason = "agent input_outcomes is malformed"
+    elif not report.has_input_outcomes:
+        reason = "the agent reported no input_outcomes"
+    else:
+        return
+    logger.warning(
+        "run %s: %s; consuming no inputs (%d linked input(s) stay open and "
+        "selected)", run_id, reason, n_links,
+    )
 
-    Only one ModelVersion can own the physical UC schemas per (business_id,
-    uc_catalog) at a time, so flipping the incoming row to `deployed` must
-    evict its siblings. Rows with an empty `uc_catalog` (e.g. catalog-less
-    drafts that somehow carry `deployed`) are treated as sharing a scope so
-    they still get cleaned up.
-    """
-    siblings = session.exec(
-        select(ModelVersion).where(
-            ModelVersion.business_id == new_mv.business_id,
-            ModelVersion.deployment_status == "deployed",
-            ModelVersion.uc_catalog == (new_mv.uc_catalog or ""),
-            ModelVersion.id != new_mv.id,
-        )
-    ).all()
-    for sib in siblings:
-        sib.deployment_status = "uninstalled"
-        session.add(sib)
-    if siblings:
-        logger.info(
-            "Superseded %d prior deployed ModelVersion(s) for business=%s catalog=%r",
-            len(siblings), new_mv.business_id, new_mv.uc_catalog,
-        )
-    return len(siblings)
+
+def _log_boot_sweep_failure(future: asyncio.Future) -> None:
+    """Log a boot sweep that raised outside its own handling (e.g. no
+    session could be opened); the future is never awaited."""
+    if not future.cancelled() and future.exception() is not None:
+        logger.error("boot sweep failed (post-install deletes, metamodel cleanups)", exc_info=future.exception())
 
 
 @dataclass
@@ -226,10 +319,7 @@ STALE_THRESHOLD_MINUTES = 20
 WATCHDOG_WARM_UP_SECONDS = 180
 
 
-from .core._names import (
-    escape_sql_literal as _esc,
-    sanitize_catalog_segment as _sanitize_catalog_segment,
-)
+from .core._names import escape_sql_literal as _esc
 from .core._paths import version_dir_candidates
 
 
@@ -265,33 +355,6 @@ def index_artifacts_for_version(
             volume_root_path=root,
         ):
             return
-
-
-def compute_install_catalog_and_prefix(
-    cataloging_style: str,
-    deployment_catalog: str,
-    scope: str,
-    version_int: int,
-) -> tuple[str, str]:
-    """Return (catalog, schema_prefix) for an install phase.
-
-    - `One Catalog`: user's deployment_catalog, schema_prefix scoped to avoid
-      collision between the ECM and MVM install in the same catalog.
-    - `Catalog per Division` / `Catalog per Domain`: derive per-scope catalogs
-      (`{base}_ecm_v{N}` / `{base}_mvm_v{N}`) matching the runner's pattern.
-      schema_prefix stays empty — the agent organises schemas within the
-      per-scope catalog based on cataloging_style.
-    """
-    # `scope` may be "ecm"/"mvm" (short) or "Expanded Coverage Model - ECM" /
-    # "Minimum Viable Model - MVM" (full). Match either by presence of "ecm".
-    scope_short = "ecm" if "ecm" in str(scope).lower() else "mvm"
-    if cataloging_style == "One Catalog":
-        return deployment_catalog, f"{scope_short}_"
-    base = _sanitize_catalog_segment(deployment_catalog)
-    # Match the runner's `<biz>_ecm_v1` / `<biz>_mvm_v1` convention. Using the
-    # app's own `deployment_catalog` (sanitized) as the base so users who set
-    # e.g. `myproject` get `myproject_ecm_v1` + `myproject_mvm_v1`.
-    return f"{base}_{scope_short}_v{version_int}", ""
 
 
 # Maps raw agent status strings to a stable app-side enum that downstream
@@ -350,6 +413,13 @@ class ProgressTracker:
         self._config = config
         self._session_factory = session_factory
         self._tasks: dict[str, asyncio.Task] = {}
+        # Per-run lock: a run's drain and advance ticks never interleave.
+        self._tick_locks: dict[str, asyncio.Lock] = {}
+        self._tick_executor = ThreadPoolExecutor(
+            max_workers=TICK_EXECUTOR_WORKERS, thread_name_prefix="tracker-tick"
+        )
+        # The startup sweep of post-install deletes (resume_running_runs).
+        self._boot_sweep: Optional[asyncio.Future] = None
         self._loop: asyncio.AbstractEventLoop | None = None
         # The orchestrator owns every run's lifecycle. The tracker holds
         # the singleton so route handlers can borrow it via
@@ -378,25 +448,18 @@ class ProgressTracker:
     # Delta table SQL methods (formerly DeltaPoller)
     # ------------------------------------------------------------------
 
-    def _execute_sql(self, sql: str) -> Optional[object]:
-        """Execute SQL and return the statement result, or None on table-not-found."""
-        try:
-            result = self._ws.statement_execution.execute_statement(
-                warehouse_id=self._resolve_warehouse_id(),
-                statement=sql,
-                wait_timeout="30s",
-            )
-            status = result.status
-            if status and status.error:
-                error_msg = status.error.message or ""
-                if _TABLE_NOT_FOUND in error_msg:
-                    return None
-                raise RuntimeError(f"SQL error: {error_msg}")
-            return result
-        except Exception as e:
-            if _TABLE_NOT_FOUND in str(e):
-                return None
-            raise
+    def _query(self, sql: str) -> Optional[list[list]]:
+        """Rows of a read on the agent's tables, ``None`` when the table does
+        not exist yet. Any other failure raises ``SqlStatementError``."""
+        return _sql.rows(
+            self._ws, self._resolve_warehouse_id(), sql,
+            wait_timeout=_TICK_SQL_WAIT, missing_table="none",
+        )
+
+    def _write(self, sql: str) -> None:
+        """A write on ``_metamodel.business``; every failure raises
+        ``SqlStatementError``, a missing table included."""
+        _sql.run(self._ws, self._resolve_warehouse_id(), sql, wait_timeout=_TICK_SQL_WAIT)
 
     def _poll_session_status(
         self,
@@ -417,15 +480,11 @@ class ProgressTracker:
             f"AND model_scope = '{_esc(model_scope)}' "
             f"ORDER BY session_id DESC LIMIT 1"
         )
-        result = self._execute_sql(sql)
-        if result is None:
+        found = self._query(sql)
+        if not found or not found[0]:
             return None
 
-        data = result.result
-        if not data or not data.data_array or not data.data_array[0]:
-            return None
-
-        row = data.data_array[0]
+        row = found[0]
         results = None
         if row[4]:
             try:
@@ -461,15 +520,11 @@ class ProgressTracker:
             f"WHERE session_id = {session_id_bigint} "
             f"LIMIT 1"
         )
-        result = self._execute_sql(sql)
-        if result is None:
+        found = self._query(sql)
+        if not found or not found[0]:
             return None
 
-        data = result.result
-        if not data or not data.data_array or not data.data_array[0]:
-            return None
-
-        row = data.data_array[0]
+        row = found[0]
         results = None
         if row[4]:
             try:
@@ -517,16 +572,12 @@ class ProgressTracker:
             f"WHERE session_id = {session_id_bigint} AND event_seq > {last_event_seq} "
             f"ORDER BY event_seq ASC"
         )
-        result = self._execute_sql(sql)
-        if result is None:
-            return []
-
-        data = result.result
-        if not data or not data.data_array:
+        found = self._query(sql)
+        if not found:
             return []
 
         events = []
-        for row in data.data_array:
+        for row in found:
             rj = None
             if row[7]:
                 try:
@@ -571,7 +622,7 @@ class ProgressTracker:
             f"SET processing_status = 'done' "
             f"WHERE {' AND '.join(where_parts)}"
         )
-        self._execute_sql(sql)
+        self._write(sql)
 
     def _finalize_session_completion(
         self,
@@ -630,7 +681,7 @@ class ProgressTracker:
         # Up to 3 retries (= 4 total attempts) before giving up.
         for attempt in range(len(backoff_ms) + 1):
             try:
-                self._execute_sql(sql)
+                self._write(sql)
                 return
             except Exception as exc:
                 msg = str(exc)
@@ -667,7 +718,11 @@ class ProgressTracker:
         an empty ``request_id`` because the loop runs on a fresh task
         whose context inherits from the loop's startup, not the caller.
         """
-        if run_id in self._tasks:
+        # Skip only while the existing loop is alive. A poll loop that ended
+        # (terminal state, cancel) leaves its done task in ``_tasks``; a
+        # Retry on the same run must replace it, or the run is never polled.
+        existing = self._tasks.get(run_id)
+        if existing is not None and not existing.done():
             return
         loop = self._loop or asyncio.get_event_loop()
         # `loop.create_task(coro, context=ctx)` is the asyncio-native way
@@ -688,6 +743,26 @@ class ProgressTracker:
         if task and not task.done():
             task.cancel()
 
+    async def shutdown(self, wait_seconds: float = SHUTDOWN_TICK_WAIT_SECONDS) -> None:
+        """Stop tracking every run and shut the tick executor down.
+
+        Waits up to ``wait_seconds`` for in-flight ticks to finish (a tick
+        cannot be interrupted), then stops the executor without waiting:
+        queued ticks are cancelled, a running one ends on its own SQL/HTTP
+        timeout.
+        """
+        tasks = [t for t in self._tasks.values() if not t.done()]
+        for run_id in self.get_active_runs():
+            self.stop_tracking(run_id)
+        if tasks:
+            _, still_running = await asyncio.wait(tasks, timeout=wait_seconds)
+            if still_running:
+                logger.warning(
+                    f"ProgressTracker shutdown: {len(still_running)} tick(s) "
+                    f"still running after {wait_seconds}s"
+                )
+        self._tick_executor.shutdown(wait=False, cancel_futures=True)
+
     def get_active_runs(self) -> list[str]:
         """Return IDs of runs currently being tracked."""
         return [rid for rid, t in self._tasks.items() if not t.done()]
@@ -700,22 +775,27 @@ class ProgressTracker:
 
         Runs on the fast (``drain_interval_seconds``) loop so new agent
         events surface in the UI within seconds of being written to Delta,
-        independent of how long the advance tick is taking.
+        independent of how long the advance tick is taking (it waits only
+        while the same run's advance tick holds the run's tick lock).
         """
-        with self._session_factory() as session:
-            run = session.get(Run, run_id)
-            if not run:
-                return True
-            if run.status not in ("running", "pending", "stale"):
-                return True
-            try:
-                self._sync_orch_progress_events(run, session)
-            except Exception:
-                logger.exception(
-                    f"Failed to sync orchestrator progress events for run {run_id}"
-                )
-            session.commit()
-            return False
+        async with self._tick_lock(run_id):
+            with self._session_factory() as session:
+                run = session.get(Run, run_id)
+                if not run:
+                    return True
+                if run.status not in ("running", "pending", "stale"):
+                    return True
+                try:
+                    self._sync_orch_progress_events(run, session)
+                except Exception:
+                    logger.exception(
+                        f"Failed to sync orchestrator progress events for run {run_id}"
+                    )
+                session.commit()
+                return False
+
+    def _tick_lock(self, run_id: str) -> asyncio.Lock:
+        return self._tick_locks.setdefault(run_id, asyncio.Lock())
 
     async def _advance_tick(self, run_id: str) -> bool:
         """Slow tick: Jobs API check + ``orchestrator.advance`` +
@@ -725,7 +805,36 @@ class ProgressTracker:
         This is the path that pays cold-warehouse SQL latency and the
         Jobs API roundtrip. By keeping it on its own cadence, a 60–80s
         tick here does not delay event mirroring.
+
+        The body blocks (Jobs API, warehouse SQL, an install dispatch's
+        bounded ``model.json`` read), so it runs on the tracker's own
+        bounded executor (``_tick_executor``) and the event loop is not
+        held by it. (The drain tick still runs its SQL on the loop.) The
+        session is opened in the worker thread; contextvars (request ids)
+        are copied in. The run's tick lock keeps the tick from
+        interleaving with the same run's drain tick, and it is held until
+        the thread ends, however often the tick is cancelled.
         """
+        async with self._tick_lock(run_id):
+            ctx = contextvars.copy_context()
+            tick = asyncio.get_running_loop().run_in_executor(
+                self._tick_executor, lambda: ctx.run(self._advance_tick_sync, run_id)
+            )
+            try:
+                return await asyncio.shield(tick)
+            except asyncio.CancelledError:
+                # A thread cannot be interrupted. Let the tick finish, as it
+                # always did on the loop, before releasing the lock.
+                await _wait_through_cancels([tick])
+                if not tick.cancelled() and tick.exception() is not None:
+                    logger.error(
+                        f"Advance tick for run {run_id} failed during cancel",
+                        exc_info=tick.exception(),
+                    )
+                raise
+
+    def _advance_tick_sync(self, run_id: str) -> bool:
+        """The blocking body of :meth:`_advance_tick`."""
         with self._session_factory() as session:
             run = session.get(Run, run_id)
             if not run:
@@ -764,9 +873,38 @@ class ProgressTracker:
                     run_id, session,
                     success=outcome == AdvanceOutcome.TERMINAL_SUCCESS,
                 )
+                if outcome == AdvanceOutcome.TERMINAL_SUCCESS:
+                    self._run_post_install_deletes(session, run_id)
                 return True
             session.commit()
             return False
+
+    def _run_post_install_deletes(self, session: Session, run_id: Optional[str]) -> None:
+        """Perform the post-install deletes queued by ``run_id`` (all pending
+        rows when None, the boot sweep), after the install's terminal commit.
+        A failure is recorded on its row and logged; it never changes the
+        install's result."""
+        try:
+            run_post_install_deletes(
+                session, self._ws, self._resolve_warehouse_id(),
+                run_id=run_id, recheck=run_id is None,
+                discard_change_feedback=self._config.run_change_review_enabled,
+            )
+        except Exception:
+            session.rollback()
+            logger.exception("post-install deletes failed (run %s)", run_id or "boot sweep")
+
+    def _sweep_post_install_deletes(self) -> None:
+        """The boot sweep: leftover post-install deletes, then one more
+        attempt at every unfinished ``_metamodel`` cleanup below its attempt
+        limit (``core._metamodel_cleanups.sweep_metamodel_cleanups``)."""
+        with self._session_factory() as session:
+            self._run_post_install_deletes(session, None)
+            try:
+                sweep_metamodel_cleanups(session, self._ws, self._resolve_warehouse_id())
+            except Exception:
+                session.rollback()
+                logger.exception("metamodel cleanup boot sweep failed")
 
     def _fail_op_if_jobs_api_terminal(self, run: Run, session: Session) -> None:
         """Bug C safety net for the orchestrator path.
@@ -1011,7 +1149,8 @@ class ProgressTracker:
                             # mask it. Only stamp on virgin rows.
                             if mv is not None and mv.sync_state == "ok":
                                 mv.sync_state = "finalize_failed"
-                                mv.sync_error_text = str(exc)[:500]
+                                mv.sync_error_text = recorded_error_text(
+                                    exc, f"Finalizing version {mv.id}", str(exc)[:500])
                                 session.add(mv)
                                 session.commit()
                     except Exception:
@@ -1022,10 +1161,15 @@ class ProgressTracker:
                     logger.exception(
                         f"Error finalizing session completion for run {run.id}"
                     )
-        except Exception:
+        except Exception as e:
+            # The cursor stays where it was, so the next tick reads these
+            # events again; the failure shows on the run's watchdog signal.
+            drain_error = _poll_error_note(e, run)
             logger.exception(
                 f"Error draining orchestrator progress events for run {run.id}"
             )
+        else:
+            drain_error = ""
 
         # 2) Read session-status row (per-stage % + processing_status).
         try:
@@ -1033,16 +1177,25 @@ class ProgressTracker:
                 catalog, sid_bigint
             )
         except Exception as e:
-            self._record_poll_signals(
-                run, session, jobs_api_state=None, poll_error=repr(e),
-            )
+            note = drain_error or _poll_error_note(e, run)
+            if note:
+                self._record_poll_signals(
+                    run, session, jobs_api_state=None, poll_error=note,
+                )
+            elif run.progress_message != _BOOTING_MESSAGE:
+                run.progress_message = _BOOTING_MESSAGE
+                session.add(run)
             return
 
         # Successful poll: clear any sticky error from a prior tick so the
         # UI's "watchdog signal" banner doesn't lie about a recovered
         # transient. _record_poll_signals only writes when the value
         # actually changes, so this is a no-op when the field was empty.
-        if run.last_poll_error:
+        if drain_error:
+            self._record_poll_signals(
+                run, session, jobs_api_state=None, poll_error=drain_error,
+            )
+        elif run.last_poll_error:
             self._record_poll_signals(
                 run, session, jobs_api_state=None, poll_error="",
             )
@@ -1051,7 +1204,7 @@ class ProgressTracker:
             # Agent hasn't written its session row yet. Set a baseline
             # message + 1% dispatch-ack bar — but the events drained
             # above are already in Lakebase for the UI's progress feed.
-            waiting = "Booting agent — first events expected within ~2 min"
+            waiting = _BOOTING_MESSAGE
             changed = False
             if run.progress_message != waiting:
                 run.progress_message = waiting
@@ -1136,9 +1289,7 @@ class ProgressTracker:
             else f"Phase {total}/{total}"
         )
         if events_drained is None:
-            run.progress_message = (
-                "Booting agent — first events expected within ~2 min"
-            )
+            run.progress_message = _BOOTING_MESSAGE
         else:
             run.progress_message = (
                 f"{user_state} — {phase_label}, {status.completed_percent:.0f}%"
@@ -1184,6 +1335,15 @@ class ProgressTracker:
                     self.start_tracking(run.id)
             if runs:
                 logger.info(f"Resumed tracking for {len(runs)} running runs")
+            # Post-install deletes queued by an install that finished before
+            # a restart: performed now, or recorded not_run when the version
+            # changed since; then the unfinished _metamodel cleanups.
+            # Scheduled on the tick executor and not awaited: each calls the
+            # warehouse, and app startup must not wait.
+            self._boot_sweep = self._loop.run_in_executor(
+                self._tick_executor, self._sweep_post_install_deletes,
+            )
+            self._boot_sweep.add_done_callback(_log_boot_sweep_failure)
         except Exception as e:
             # Don't crash the lifespan on a SELECT failure (e.g., migration
             # silently skipped a column the model now references). Log loud,
@@ -1238,28 +1398,40 @@ class ProgressTracker:
         """
         max_retries = 5  # was 3 — long agent runs see more transient dips
         base_wait = self._config.poll_interval_seconds
-        for attempt in range(max_retries + 1):
-            try:
-                await self._run_split_loops(run_id)
-                return
-            except asyncio.CancelledError:
-                logger.info(f"Tracking cancelled for run {run_id}")
-                return
-            except Exception:
-                if attempt < max_retries:
-                    # Capped exponential backoff: 10s, 20s, 40s, 80s, 120s
-                    wait = min(base_wait * (2 ** attempt), 120)
-                    logger.exception(
-                        f"Poll loop error for run {run_id} "
-                        f"(attempt {attempt + 1}/{max_retries}), retrying in {wait}s"
-                    )
-                    await asyncio.sleep(wait)
-                else:
-                    logger.exception(
-                        f"Poll loop exhausted retries for run {run_id} "
-                        f"after {max_retries} attempts"
-                    )
-                    self._handle_watchdog_exit(run_id)
+        try:
+            for attempt in range(max_retries + 1):
+                try:
+                    await self._run_split_loops(run_id)
+                    return
+                except asyncio.CancelledError:
+                    logger.info(f"Tracking cancelled for run {run_id}")
+                    return
+                except Exception:
+                    if attempt < max_retries:
+                        # Capped exponential backoff: 10s, 20s, 40s, 80s, 120s
+                        wait = min(base_wait * (2 ** attempt), 120)
+                        logger.exception(
+                            f"Poll loop error for run {run_id} "
+                            f"(attempt {attempt + 1}/{max_retries}), retrying in {wait}s"
+                        )
+                        await asyncio.sleep(wait)
+                    else:
+                        logger.exception(
+                            f"Poll loop exhausted retries for run {run_id} "
+                            f"after {max_retries} attempts"
+                        )
+                        self._handle_watchdog_exit(run_id)
+        finally:
+            # Drop the run's lock only if no newer poll loop has taken over
+            # the run (stop then resume) and nothing holds it.
+            owner = self._tasks.get(run_id)
+            lock = self._tick_locks.get(run_id)
+            if (
+                owner in (None, asyncio.current_task())
+                and lock is not None
+                and not lock.locked()
+            ):
+                self._tick_locks.pop(run_id, None)
 
     async def _run_split_loops(self, run_id: str) -> None:
         """Run the drain and advance loops concurrently. Returns when
@@ -1288,6 +1460,10 @@ class ProgressTracker:
             for t in (drain_task, advance_task):
                 if not t.done():
                     t.cancel()
+            # The advance child holds the run's tick lock until its worker
+            # thread ends. Wait for both children so the loop never exits
+            # (and a resumed loop never starts a second tick) while it runs.
+            await _wait_through_cancels([drain_task, advance_task])
             raise
 
     async def _drain_loop_inner(self, run_id: str) -> None:
@@ -1379,7 +1555,10 @@ class ProgressTracker:
         except Exception:
             logger.exception(f"Watchdog handler crashed for run {run_id}")
         finally:
-            self._tasks.pop(run_id, None)
+            # Only drop our own entry: a stop + restart from a threadpool
+            # route may have registered a new loop for this run meanwhile.
+            if self._tasks.get(run_id) is asyncio.current_task():
+                self._tasks.pop(run_id, None)
 
     def _job_lifecycle(self, run: Run) -> tuple[str, str]:
         """Fetch the Databricks job's (life_cycle_state, result_state) pair.
@@ -1410,9 +1589,9 @@ class ProgressTracker:
         jobs_api_state: Optional[str],
         poll_error: Optional[str],
     ) -> None:
-        """Persist watchdog signals on a Run row. Best-effort: any DB error
-        is swallowed so we never break a polling tick on a side-channel
-        write. Only commits when at least one field actually changed.
+        """Set watchdog signals on a Run row and add it to ``session``.
+        Never commits: the caller owns the transaction, and the final drain
+        runs inside the model-sync savepoint, where a commit would close it.
 
         - `jobs_api_state`: pass `None` to leave the field unchanged (e.g.
           when the Jobs API call itself failed); pass a string (possibly
@@ -1430,7 +1609,6 @@ class ProgressTracker:
                 changed = True
             if changed:
                 session.add(run)
-                session.commit()
         except Exception:
             logger.exception(
                 f"Failed to record watchdog signals for run {run.id}"

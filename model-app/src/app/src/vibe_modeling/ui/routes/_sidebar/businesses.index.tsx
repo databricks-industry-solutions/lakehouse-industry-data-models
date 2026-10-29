@@ -1,8 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Suspense, useState } from "react";
-import { toast } from "sonner";
 import { useListBusinessesSuspense, useDeleteBusiness, useGetAgentConfig, useListSectorsSuspense, BusinessKind } from "@/lib/api";
-import { notifyError } from "@/lib/notify";
+import { APP_FOLDERS_DELETE_NOTE, notifyBusinessDeleted, notifyDeleteFailed } from "@/lib/delete-outcome";
 import { invalidateEntityLists } from "@/lib/delete-invalidation";
 import { selector } from "@/lib/selector";
 import { formatDate } from "@/lib/date";
@@ -36,6 +35,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { AlertTriangle, Building2, FileUp, Plus, Settings, Trash2 } from "lucide-react";
 import { ImportNewBusinessDialog } from "@/components/import/import-new-business-dialog";
+import { OobBanner } from "@/components/oob/oob-banner";
 
 export const Route = createFileRoute("/_sidebar/businesses/")({
   component: () => (
@@ -60,6 +60,7 @@ export const Route = createFileRoute("/_sidebar/businesses/")({
           </Button>
         </div>
       </div>
+      <OobBanner />
       <Suspense fallback={<BusinessTableSkeleton />}>
         <BusinessTable />
       </Suspense>
@@ -132,17 +133,20 @@ export function BusinessTable() {
     },
   });
 
-  const runDelete = async (id: string, cascade: boolean) => {
+  // Always cascade, like the Explorer: the backend refuses a bare delete of a
+  // row that has runs but no versions, and a confirmed delete removes them all.
+  const runDelete = async (id: string, name: string) => {
+    let res;
     try {
-      await deleteBiz({
-        params: cascade ? { business_id: id, cascade: true } : { business_id: id },
-      });
+      res = await deleteBiz({ params: { business_id: id, cascade: true } });
     } catch (err) {
-      notifyError(err, { title: "Delete failed" });
+      if (notifyDeleteFailed(err, { title: "Delete failed" })) {
+        await invalidateEntityLists(queryClient, "business");
+      }
       return;
     }
     await invalidateEntityLists(queryClient, "business");
-    toast.success("Business deleted");
+    notifyBusinessDeleted(res.data, BusinessKind.business, name);
   };
 
   if (businesses.length === 0) {
@@ -230,7 +234,7 @@ function DeleteBusinessButton({
   id: string;
   name: string;
   modelCount: number;
-  runDelete: (id: string, cascade: boolean) => Promise<void>;
+  runDelete: (id: string, name: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const hasModels = modelCount > 0;
@@ -262,20 +266,21 @@ function DeleteBusinessButton({
                       {modelCount} {versionWord}
                     </strong>
                     , plus all attached runs, feedback, artifacts, and business
-                    contexts. This cannot be undone.
+                    contexts. This cannot be undone. {APP_FOLDERS_DELETE_NOTE}
                   </span>
                 </div>
               </AlertDialogDescription>
             ) : (
               <AlertDialogDescription>
-                This cannot be undone.
+                Any runs, feedback, artifacts, and business contexts attached to it are
+                deleted too. This cannot be undone.
               </AlertDialogDescription>
             )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => runDelete(id, hasModels)}
+              onClick={() => runDelete(id, name)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {hasModels ? "Delete everything" : "Delete"}

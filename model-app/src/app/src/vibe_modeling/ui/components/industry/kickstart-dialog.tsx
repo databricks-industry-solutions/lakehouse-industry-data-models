@@ -63,7 +63,8 @@ interface KickstartDialogProps {
  * with 400 - so the UI sends ``whole_model: true`` and offers no scope
  * narrowing.
  *
- * On success it navigates to the new business's explorer. A 409
+ * On success it navigates to the new business's explorer; the copy continues
+ * in the background and ``KickstartProgressBanner`` shows its progress. A 409
  * (``business_name_taken``) surfaces inline on the name field; a 404 (the
  * source industry/version is gone) shows a top-level message.
  */
@@ -199,10 +200,9 @@ function KickstartForm({
         },
       );
       await invalidateBusinessLists(queryClient);
-      toast.success(
-        `"${data.business.name}" kickstarted from ${industryName}. ` +
-          `Artifacts are copying in the background.`,
-      );
+      toast.success("Kickstart started", {
+        description: `"${data.business.name}" is being set up from ${industryName}.`,
+      });
       onClose();
       navigate({
         to: "/businesses/$businessId/explorer",

@@ -23,9 +23,17 @@ from sqlmodel import Session, select
 
 from ..._metadata import api_prefix
 from ..core import Dependencies
+from ..core._runs import lock_business_for_run
 from ..db_models import AgentConfig
-from ._helpers import require_config
-from ..models import BusinessOut, ChangeStatus
+from ._helpers import business_name_taken_error, require_config, resolve_warehouse_id
+from ..models import (
+    BusinessOut,
+    ChangeStatus,
+    IndustryScopePrefixesIn,
+    IndustryScopePrefixesOut,
+    IndustryScopePrefixRowOut,
+)
+from ..services import industry_prefix_fix
 from ..services.github_publish import publish_model_version
 from ..services.industry_kickstart import (
     KickstartDescriptionRequired,
@@ -361,20 +369,23 @@ def preview_publish_model_version_endpoint(
     version_id: str,
     session: Dependencies.Session,
     config: Dependencies.Config,
+    ws: Dependencies.Client,
     _role: Dependencies.ModelerOnly,
     data: PublishPreviewIn = Body(default=PublishPreviewIn()),
 ) -> PublishPreviewOut:
     """Diff the model.json that WOULD be published against the repo's latest
     same-scope version (tiered fallback + manual pick/skip). model.json only,
-    never artifacts. PUBLIC read — no UserClient, no UC connection — so the
-    preview is smoke-testable and a missing baseline is normal (manual_needed),
-    never a 500."""
+    never artifacts. Reads the repo with the installation's configured source
+    read-auth (the browse/download resolver; secrets read by the app SP ``ws``).
+    No UserClient, no UC connection, so the preview is smoke-testable and a
+    missing baseline is normal (manual_needed), never a 500."""
     from ..services.publish_preview import compute_publish_preview
 
     cfg = session.exec(select(AgentConfig).limit(1)).first() or AgentConfig()
     result = compute_publish_preview(
         cfg, session=session, business_id=business_id, version_id=version_id,
         target_path=data.target_path, baseline_model_id=data.baseline_model_id,
+        app_config=config, ws=ws,
     )
     return _result_to_preview_out(result)
 
@@ -494,10 +505,7 @@ def kickstart_industry_model(
             schedule_copy=_schedule,
         )
     except KickstartNameConflict as e:
-        raise HTTPException(
-            status_code=409,
-            detail={"error": "business_name_taken", "name": data.new_name, "message": str(e)},
-        )
+        raise business_name_taken_error(data.new_name, str(e)) from e
     except KickstartSourceNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
     except KickstartDescriptionRequired as e:
@@ -506,9 +514,62 @@ def kickstart_industry_model(
         # description, regardless of entry point.
         raise HTTPException(status_code=422, detail=str(e))
     except KickstartError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=e.detail)
     # kickstart_from_industry commits internally (Lakebase durable before the
     # external _metamodel seed) and refreshes new_business before scheduling
     # the background copy, so no further session I/O happens here - reading
     # new_business now is a plain in-memory attribute access.
     return KickstartOut(business=BusinessOut.model_validate(new_business, from_attributes=True))
+
+
+# --- Scope prefixes for industries downloaded before 0.9.0 -----------------
+
+
+@router.post(
+    "/industries/{business_id}/scope-prefixes",
+    response_model=IndustryScopePrefixesOut,
+    operation_id="applyIndustryScopePrefixes",
+)
+def apply_industry_scope_prefixes(
+    business_id: str,
+    session: Dependencies.Session,
+    ws: Dependencies.Client,
+    config: Dependencies.Config,
+    _role: Dependencies.AdminOnly,
+    data: IndustryScopePrefixesIn = Body(default=IndustryScopePrefixesIn()),
+) -> IndustryScopePrefixesOut:
+    """Give the app's copies of an industry downloaded before 0.9.0 the scope
+    prefixes a download adds now (``services/industry_prefix_fix``).
+
+    ``business_id`` is the industry's ``businesses`` row (``kind='industry'``;
+    a business is a 400). Without ``apply`` it reports what would change and
+    writes nothing. With ``apply`` it refuses (409, nothing written) while a
+    run is active or when a version changed since the plan, then rewrites
+    every ``changed`` version on its own; a version that fails is ``failed``
+    with what completed, and a rerun finishes it. Installed versions are
+    ``skipped`` with the catalogs named. A rerun answers ``unchanged``."""
+    needs = ["metamodel_catalog", "warehouse"] if data.apply else ["metamodel_catalog"]
+    require_config(session, config, needs, mode="raise")
+    business = industry_prefix_fix.industry_or_404(session, business_id)
+    business_name = business.name
+    plans = industry_prefix_fix.plan_prefix_fix(session, ws, business)
+    if data.apply and any(row.action == industry_prefix_fix.CHANGED for row in plans):
+        warehouse_id = resolve_warehouse_id(session, config)
+        # Refuse a busy industry or a changed version before any write; the
+        # lock is released again, and each version takes it for its own rows.
+        lock_business_for_run(session, business_id)
+        industry_prefix_fix.recheck(session, plans)
+        session.commit()
+        industry_prefix_fix.apply_prefix_fix(session, ws, business_id, plans, warehouse_id)
+    return IndustryScopePrefixesOut(
+        business_id=business_id,
+        business_name=business_name,
+        applied=data.apply,
+        rows=[
+            IndustryScopePrefixRowOut(
+                version_id=row.version_id, version=row.version, scope=row.scope,
+                action=row.action, reason=row.reason, warnings=row.warnings,
+            )
+            for row in plans
+        ],
+    )

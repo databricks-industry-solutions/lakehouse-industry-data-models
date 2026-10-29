@@ -74,16 +74,18 @@ def test_permission_denied_is_409_scope_message(client, mock_ws, user_ws, ingest
     assert r.status_code == 409 and "Reload the app and accept the permission prompt" in r.json()["detail"]["message"]
 
 
-def test_no_email_is_409(client, user_ws, ingested_completed):
+def test_no_email_is_401_identity_missing(client, user_ws, ingested_completed):
     r = client.post(_url(ingested_completed.dr_id), json={})
-    assert r.status_code == 409
+    assert r.status_code == 401
+    assert r.json()["detail"]["error"] == "identity_missing"
+    user_ws.workspace.import_.assert_not_called()
 
 
-def test_missing_bundle_is_502(client, mock_ws, user_ws, ingested_completed, monkeypatch):
+def test_missing_bundle_is_409_admin_help(client, mock_ws, user_ws, ingested_completed, monkeypatch):
     from vibe_modeling.backend.routes import assessments
     monkeypatch.setattr(assessments, "resolve_vendored_assessment", lambda: None)
     r = client.post(_url(ingested_completed.dr_id), json={"names": ["domain-model-assessment"]}, headers=WHO)
-    assert r.status_code == 502
+    assert r.status_code == 409 and r.json()["detail"]["error"] == "admin_help"
     assert r.json()["detail"]["message"] == "The app's bundled skills are missing — redeploy the app."
 
 
@@ -163,12 +165,12 @@ def test_unrelated_error_no_delete():
     uw.workspace.delete.assert_not_called()
 
 
-def test_502_names_failing_skill(client, mock_ws, user_ws, ingested_completed):
+def test_409_names_failing_skill(client, mock_ws, user_ws, ingested_completed):
     mock_ws.workspace.get_status.side_effect = NotFound("none")
     user_ws.workspace.get_status.side_effect = NotFound("none")
     user_ws.workspace.import_.side_effect = DatabricksError("boom")
     r = client.post(_url(ingested_completed.dr_id), json={"names": ["domain-model-assessment"]}, headers=WHO)
-    assert r.status_code == 502
+    assert r.status_code == 409
     d = r.json()["detail"]
     assert "Updating domain-model-assessment failed" in d["message"] and "Other skills may already be updated" in d["message"]
     assert set(d) == {"error", "message"}  # this run has no job or run id yet, so no links

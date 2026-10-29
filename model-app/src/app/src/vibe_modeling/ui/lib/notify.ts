@@ -14,7 +14,7 @@
  */
 import { createElement, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { apiErrorMessage, parseConfigMissing } from "./api-error";
+import { apiErrorMessage, parseSettingsError } from "./api-error";
 import { ConfigMissingNotice } from "@/components/config-missing-notice";
 
 export interface NotifyErrorOptions {
@@ -77,16 +77,17 @@ export async function copyToClipboard(text: string): Promise<void> {
  * latter case.
  */
 /**
- * If `err` is the backend's structured `config_missing` error, raise the
- * shared rich toast (the backend's sentence + one Settings deep-link per
- * missing item) and return `true`. Otherwise return `false` so the caller can
+ * If `err` is an error a Settings change fixes (the backend's 422
+ * `config_missing`, or a 400 `model_service_refused` / `setting_refused`,
+ * read by `parseSettingsError`), raise the shared rich toast (the backend's
+ * sentence + one Settings deep-link per setting) and return `true`. Otherwise return `false` so the caller can
  * fall back to its own handling. This is the ONE handler every config-gated
  * surface routes through - do not re-implement config_missing rendering at a
  * call site. `notifyError` calls it too, so any surface already using
  * `notifyError(err)` gets the rich treatment for free.
  */
 export function notifyConfigMissing(input: unknown): boolean {
-  const cm = parseConfigMissing(input);
+  const cm = parseSettingsError(input);
   if (!cm) return false;
   toast.error(
     createElement(ConfigMissingNotice, { missing: cm.missing, message: cm.message }),
@@ -115,4 +116,17 @@ export function notifyError(input: string | unknown, opts: NotifyErrorOptions = 
       onClick: () => openDetails(detail),
     },
   });
+}
+
+/**
+ * A warning toast for a request that succeeded with `warnings` (the server's
+ * user-facing notes, such as a registry seed that failed): `title` with the
+ * warnings as its description. Returns false, showing nothing, when there are
+ * none, so the caller can show its own success.
+ */
+export function notifyWarnings(title: string, warnings: readonly string[] | null | undefined): boolean {
+  const list = (warnings ?? []).filter((w) => w.trim());
+  if (!list.length) return false;
+  toast.warning(title, { description: list.join(" ") });
+  return true;
 }

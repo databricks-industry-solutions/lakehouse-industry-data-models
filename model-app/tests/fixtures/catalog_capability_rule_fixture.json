@@ -1,0 +1,34 @@
+{
+  "_doc": "BE/FE parity for which runs need CREATE_SCHEMA, when a catalog is usable, and the per-call check cap. BE: core/_uc_privileges.run_creates_schemas + catalog_usable (tests/test_app/test_uc_privileges.py). FE: ui/lib/catalog-capability.ts (ui/__tests__/catalog-capability.test.ts).",
+  "check_cap": 25,
+  "creates_schemas": [
+    {"intent": "new-base-model", "dry_run": false, "cataloging_style": "One Catalog", "expected": true},
+    {"intent": "vibe-iterate", "dry_run": false, "cataloging_style": "One Catalog", "expected": true},
+    {"intent": "vibe-iterate", "dry_run": true, "cataloging_style": "One Catalog", "expected": false},
+    {"intent": "vibe-new-ecm-mvm", "dry_run": false, "cataloging_style": "One Catalog", "expected": true},
+    {"intent": "install", "dry_run": false, "cataloging_style": "One Catalog", "expected": true},
+    {"intent": "uninstall", "dry_run": false, "cataloging_style": "One Catalog", "expected": false},
+    {"intent": "generate-samples", "dry_run": false, "cataloging_style": "One Catalog", "expected": false},
+    {"intent": "revert", "dry_run": false, "cataloging_style": "One Catalog", "expected": false},
+    {"intent": "import-from-volume", "dry_run": false, "cataloging_style": "One Catalog", "expected": false},
+    {"intent": "", "dry_run": false, "cataloging_style": "One Catalog", "expected": false},
+    {"intent": "new-base-model", "dry_run": false, "cataloging_style": "Catalog per Division", "expected": false},
+    {"intent": "install", "dry_run": false, "cataloging_style": "Catalog per Domain", "expected": false},
+    {"intent": "vibe-iterate", "dry_run": false, "cataloging_style": "", "expected": true}
+  ],
+  "usable": [
+    {"create_schema": true, "use_metamodel": true, "creates_schemas": true, "expected": true},
+    {"create_schema": true, "use_metamodel": true, "creates_schemas": false, "expected": true},
+    {"create_schema": false, "use_metamodel": true, "creates_schemas": true, "expected": false},
+    {"create_schema": false, "use_metamodel": true, "creates_schemas": false, "expected": true},
+    {"create_schema": true, "use_metamodel": false, "creates_schemas": true, "expected": false},
+    {"create_schema": true, "use_metamodel": false, "creates_schemas": false, "expected": false},
+    {"create_schema": false, "use_metamodel": false, "creates_schemas": false, "expected": false},
+    {"create_schema": null, "use_metamodel": true, "creates_schemas": true, "expected": null},
+    {"create_schema": null, "use_metamodel": true, "creates_schemas": false, "expected": true},
+    {"create_schema": true, "use_metamodel": null, "creates_schemas": true, "expected": null},
+    {"create_schema": false, "use_metamodel": null, "creates_schemas": true, "expected": false},
+    {"create_schema": null, "use_metamodel": false, "creates_schemas": true, "expected": false},
+    {"create_schema": null, "use_metamodel": null, "creates_schemas": false, "expected": null}
+  ]
+}

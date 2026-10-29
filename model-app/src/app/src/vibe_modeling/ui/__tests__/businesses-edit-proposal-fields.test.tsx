@@ -5,6 +5,7 @@
  * value that is no longer a preset survives an unrelated edit.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense } from "react";
@@ -73,6 +74,8 @@ beforeEach(() => {
   m.business = { ...BUSINESS };
   m.updateBusiness.mockReset().mockResolvedValue({ data: BUSINESS });
 });
+
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.edit"));
 
 describe("Edit Business: proposed domains + coverage", () => {
   it("shows the stored values", async () => {

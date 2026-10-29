@@ -1,15 +1,16 @@
-import { Sparkles, Database, Flag, AlertTriangle } from "lucide-react";
+import { Sparkles, Database, Flag, AlertTriangle, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { VibeInputOrigin, VibeInputPriority } from "@/lib/api";
 import type { VibeInputState } from "./state";
 
 /** Human labels for the known origins. Unknown / future import origins fall
- *  back to a title-cased raw value (CONFLICT-2: v1 backend only emits
- *  user/agent_next_vibe; import variants render defensively for forward-compat). */
+ *  back to a title-cased raw value (the backend emits user, agent_next_vibe and
+ *  change_rejection; import variants render defensively for forward-compat). */
 const ORIGIN_LABELS: Record<string, string> = {
   user: "User",
   agent_next_vibe: "AI suggestion",
+  change_rejection: "Rejected change",
   uc_import: "UC import",
   genie_import: "Genie import",
   dashboard_import: "Dashboard import",
@@ -23,8 +24,9 @@ function titleCase(raw: string): string {
     .join(" ");
 }
 
-/** Origin chip. AI → sparkles; *_import → outline + database; user/unknown →
- *  plain. Tolerant of origins outside the current TS union. */
+/** Origin chip. AI → sparkles; rejected change → outline + undo; *_import →
+ *  outline + database; user/unknown → plain. Tolerant of origins outside the
+ *  current TS union. */
 export function OriginBadge({ origin }: { origin: VibeInputOrigin | string }) {
   const key = String(origin);
   const label = ORIGIN_LABELS[key] ?? titleCase(key);
@@ -32,6 +34,14 @@ export function OriginBadge({ origin }: { origin: VibeInputOrigin | string }) {
     return (
       <Badge variant="default" className="gap-1">
         <Sparkles className="h-3 w-3" />
+        {label}
+      </Badge>
+    );
+  }
+  if (key === "change_rejection") {
+    return (
+      <Badge variant="outline" className="gap-1">
+        <Undo2 className="h-3 w-3" />
         {label}
       </Badge>
     );

@@ -12,21 +12,47 @@
  */
 import { vi } from "vitest";
 
-type FetchHandler = (
-  url: string,
-  init?: RequestInit,
-) => Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }>;
+/** What the generated client reads from a response: `json()` on success, `text()` and `statusText` on any non-2xx. */
+export interface StubResponse {
+  ok: boolean;
+  status: number;
+  statusText: string;
+  json: () => Promise<unknown>;
+  text: () => Promise<string>;
+}
+
+type FetchHandler = (url: string, init?: RequestInit) => Promise<StubResponse>;
 
 export interface FirstRunOverrides {
   /** Per-URL-substring overrides. Longest match wins. */
   [urlFragment: string]: FetchHandler | { status: number; body?: unknown };
 }
 
-const json = (status: number, body: unknown) => ({
+/**
+ * The one builder for stubbed fetch responses, so every stub answers both read
+ * paths of the generated client. A hand-written `{ ok: false, status, json }`
+ * lacks `text()`, which the client calls on every non-2xx response, and the
+ * resulting TypeError surfaces outside the test.
+ */
+export const jsonResponse = (status: number, body: unknown, statusText = ""): StubResponse => ({
   ok: status >= 200 && status < 300,
   status,
+  statusText,
   json: async () => body,
+  text: async () => (typeof body === "string" ? body : JSON.stringify(body)),
 });
+
+export const EMPTY_SOURCE_AUTH_CONFIG = {
+  auth_mode: "",
+  github_app_id: "",
+  github_app_installation_id: "",
+  github_app_secret_scope: "",
+  github_app_secret_key: "",
+  token_secret_scope: "",
+  token_secret_key: "",
+  effective_mode: "anonymous",
+  error: null,
+};
 
 /**
  * Default first-run map: agent unconfigured (404), no businesses, no
@@ -51,6 +77,8 @@ export const FIRST_RUN_DEFAULTS: Record<
   },
   "/api/config/deployment-catalog": { status: 404 },
   "/api/config/warehouse": { status: 404 },
+  // Source-auth card on Settings > Sources reads this on mount.
+  "/api/config/source-auth": { status: 200, body: EMPTY_SOURCE_AUTH_CONFIG },
   // GitHub publishing — unconfigured on a fresh install (all fields empty).
   "/api/config/github": {
     status: 200,
@@ -65,11 +93,6 @@ export const FIRST_RUN_DEFAULTS: Record<
   },
   // Agent-compat advisory card — fail quiet on first run.
   "/api/config/agent-compat": { status: 404 },
-  // Bundled-agent install button reads this on mount.
-  "/api/admin/bundled-agent": {
-    status: 200,
-    body: { available: false },
-  },
   "/api/warehouses": { status: 200, body: { data: [] } },
   // Domain data — empty workspace.
   "/api/businesses": { status: 200, body: { data: [] } },
@@ -104,10 +127,10 @@ export function firstRunFetcher(overrides: FirstRunOverrides = {}) {
     for (const [fragment, handler] of [...overrideEntries, ...defaultEntries]) {
       if (!u.includes(fragment)) continue;
       if (typeof handler === "function") return handler(u, init);
-      return json(handler.status, handler.body ?? {});
+      return jsonResponse(handler.status, handler.body ?? {});
     }
     // Unknown URL → 404 with empty body. Loud-fail surfaces missing
     // fixtures without hanging the test on a real network request.
-    return json(404, { detail: `firstRunFetcher: no stub for ${u}` });
+    return jsonResponse(404, { detail: `firstRunFetcher: no stub for ${u}` });
   });
 }

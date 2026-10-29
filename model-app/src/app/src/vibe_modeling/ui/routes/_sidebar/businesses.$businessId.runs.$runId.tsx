@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import {
   useGetBusinessSuspense,
   useGetRunSuspense,
@@ -15,7 +15,10 @@ import { notifyError } from "@/lib/notify";
 import { selector } from "@/lib/selector";
 import { useBreadcrumbs } from "@/components/explorer/breadcrumb-context";
 import { formatDateTime, formatElapsedSeconds } from "@/lib/date";
-import { intentLabel } from "@/lib/intent";
+import { ORPHAN_DROP_RUN_INTENT, canRetryRunIntent, intentLabel, isSetupRunIntent } from "@/lib/intent";
+import { RunSchemaDropsCard } from "@/components/runs/run-schema-drops-card";
+import { RunWarningsCard } from "@/components/runs/run-warnings-card";
+import { useInvalidateOnRunTerminal } from "@/lib/hooks";
 import { isTerminalRunStatus } from "@/lib/run-status";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -39,8 +42,13 @@ import { toast } from "sonner";
 import { RunHierarchyPipeline } from "@/components/runs/run-hierarchy-pipeline";
 import { ArtifactsTab } from "@/components/artifacts/artifacts-tab";
 import { WhatYouSubmitted } from "@/components/runs/what-you-submitted";
+import { joinCommaList } from "@/lib/comma-list";
+import { parseRunVibeScope } from "@/lib/vibe-scope";
 
 import { LineageCard } from "@/components/lineage/lineage-card";
+import { RunReportCard } from "@/components/runs/run-report-card";
+import { FailedInstallActions } from "@/components/runs/failed-install-actions";
+import { RunChangesCard } from "@/components/runs/run-changes-card";
 
 export const Route = createFileRoute("/_sidebar/businesses/$businessId/runs/$runId")({
   component: () => {
@@ -170,19 +178,9 @@ export function RunDetail({ businessId, runId }: { businessId: string; runId: st
     { label: `${intentLabel(run.intent)} run` },
   ]);
   const queryClient = useQueryClient();
-  // When the run transitions INTO a terminal state (e.g. running -> completed
-  // via the poll above), refresh sibling queries so the newly-produced model
-  // version appears in the left-nav version tree / explorer without a manual
-  // reload. The poll only updates THIS run's row; the cancel/retry/resume
-  // handlers invalidate, but a run that finishes on its own did not.
-  const prevStatusRef = useRef<string | null>(null);
-  useEffect(() => {
-    const prev = prevStatusRef.current;
-    prevStatusRef.current = run.status;
-    if (prev !== null && prev !== run.status && isTerminalRunStatus(run.status)) {
-      queryClient.invalidateQueries();
-    }
-  }, [run.status, queryClient]);
+  // A run that finishes on its own produced versions other pages cached; the
+  // cancel/retry/resume handlers invalidate themselves.
+  useInvalidateOnRunTerminal(run.status, runId);
   const [acting, setActing] = useState(false);
   const [tab, setTab] = useState<"overview" | "artifacts">("overview");
   const [resumeOpen, setResumeOpen] = useState(false);
@@ -193,6 +191,7 @@ export function RunDetail({ businessId, runId }: { businessId: string; runId: st
   // from here.
   const runParams = useMemo(() => parseRunParameters(run), [run]);
   const isUnifiedPipeline = runParams["ecm_mvm_unified"] === true;
+  const vibeScopeInfo = useMemo(() => parseRunVibeScope(runParams), [runParams]);
   const currentPhaseKey = typeof runParams["ecm_mvm_phase"] === "string"
     ? (runParams["ecm_mvm_phase"] as string)
     : "";
@@ -265,6 +264,7 @@ export function RunDetail({ businessId, runId }: { businessId: string; runId: st
     }
   };
 
+  const setupRun = isSetupRunIntent(run.intent);
   const showResume = isUnifiedPipeline
     && ["failed", "cancelled", "stale"].includes(run.status);
 
@@ -285,19 +285,30 @@ export function RunDetail({ businessId, runId }: { businessId: string; runId: st
           {run.status}
         </Badge>
         <WatchdogBadge state={run.watchdog_state} warmUpRemaining={run.watchdog_warm_up_seconds_remaining} />
+        {vibeScopeInfo.dryRun && (
+          <Badge variant="outline" data-testid="run-dry-run-badge">Dry Run</Badge>
+        )}
+        {vibeScopeInfo.scopeDomains && (
+          <Badge variant="outline" data-testid="run-scope-badge">
+            Scope: {joinCommaList(vibeScopeInfo.scopeDomains) || "some domains"}
+          </Badge>
+        )}
         <div className="flex-1" />
-        {/* D-09: Cancel is visible whenever the run can still be stopped —
-            covers both `running` and `stale`. Hidden once the run reaches
-            a terminal state (completed / failed / cancelled / rolled_back_failed). */}
+        {/* D-09: Cancel is visible whenever the run is `running` or
+            `stale`. A setup run (kickstart, download, orphan-schema drop)
+            works inside the app with no agent job: cancelling only marks the
+            run cancelled, which frees the business when its work died (e.g.
+            an app restart). */}
         {(run.status === "running" || run.status === "stale") && (
           <Button
             variant="destructive"
             size="sm"
             onClick={() => setCancelOpen(true)}
             disabled={acting}
+            data-testid="cancel-run"
           >
             <Square className="h-4 w-4 mr-2" />
-            Cancel
+            {setupRun ? "Mark as cancelled" : "Cancel"}
           </Button>
         )}
         {showResume && (
@@ -312,7 +323,7 @@ export function RunDetail({ businessId, runId }: { businessId: string; runId: st
             Resume
           </Button>
         )}
-        {(run.status === "failed" || run.status === "cancelled") && (
+        {(run.status === "failed" || run.status === "cancelled") && canRetryRunIntent(run.intent) && (
           <Button variant="outline" size="sm" onClick={handleRetry} disabled={acting}>
             <RotateCcw className="h-4 w-4 mr-2" />
             Retry
@@ -363,9 +374,11 @@ export function RunDetail({ businessId, runId }: { businessId: string; runId: st
       <AlertDialog open={cancelOpen} onOpenChange={setCancelOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Cancel run?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Any partial work will be rolled back, and the run marked as canceled.
+            <AlertDialogTitle>{setupRun ? "Mark this setup run as cancelled?" : "Cancel run?"}</AlertDialogTitle>
+            <AlertDialogDescription data-testid="cancel-run-copy">
+              {setupRun
+                ? "This setup run works inside the app and has no Databricks job. Marking it cancelled frees the business for other runs. It does not stop a step that is still going or undo what was done; if a step is still going, the run shows its own result when it ends."
+                : "Any partial work will be rolled back, and the run marked as canceled."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -375,7 +388,7 @@ export function RunDetail({ businessId, runId }: { businessId: string; runId: st
               disabled={acting}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {acting ? "Cancelling..." : "Cancel run"}
+              {acting ? "Cancelling..." : setupRun ? "Mark as cancelled" : "Cancel run"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -388,6 +401,9 @@ export function RunDetail({ businessId, runId }: { businessId: string; runId: st
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
+          {run.intent === ORPHAN_DROP_RUN_INTENT && (
+            <RunSchemaDropsCard businessId={businessId} runId={runId} active={run.status === "running"} />
+          )}
           {/* #118: rolled_back_failed — one of the rollback reverse-ops threw.
               Surface a prominent manual-cleanup banner with the recorded
               failure message so the operator knows to chase residual state
@@ -411,6 +427,8 @@ export function RunDetail({ businessId, runId }: { businessId: string; runId: st
               </CardContent>
             </Card>
           )}
+
+          <RunWarningsCard warnings={run.warnings} />
 
           {/* Stale warning — the polling loop hasn't seen progress for a while,
               or the Databricks job itself may have crashed. Pushes the user to
@@ -525,6 +543,19 @@ export function RunDetail({ businessId, runId }: { businessId: string; runId: st
           </Card>
 
           <LineageCard runId={runId} businessId={businessId} runStatus={run.status} />
+
+          <RunReportCard businessId={businessId} runId={runId} runStatus={run.status} />
+
+          <RunChangesCard businessId={businessId} runId={runId} runStatus={run.status} operations={operations} />
+
+          {run.intent === "install" && ["failed", "cancelled", "rolled_back_failed"].includes(run.status) && (
+            <FailedInstallActions
+              businessId={businessId}
+              run={run}
+              runParams={runParams}
+              operations={operations}
+            />
+          )}
 
           {/* Unified hierarchical pipeline tree — one row per Phase (DAG node)
               with Steps (agent stages) nested inside each. Replaces the two

@@ -12,9 +12,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from _assess_helpers import seed_domain_run  # noqa: E402
 from test_assess_ingest import OUT, _fixture_files, _seed_run, _ws_with  # noqa: E402
+from vibe_modeling.backend.assessment.assets import resolve_vendored_assessment  # noqa: E402
 from vibe_modeling.backend.assessment.handoff import (  # noqa: E402
-    SIGN_IN_TO_CHECK_SKILLS, build_next_steps, build_prompts, default_handoff_path, render_decisions_md,
-    skills_check, skills_check_with_note,
+    EXPECTED_HANDOFFS, SIGN_IN_TO_CHECK_SKILLS, build_next_steps, build_prompts, default_handoff_path,
+    render_decisions_md, skills_check, skills_check_with_note,
 )
 from vibe_modeling.backend.assessment.ingest import ingest_domain_run  # noqa: E402
 from vibe_modeling.backend.db_models import (  # noqa: E402
@@ -120,14 +121,24 @@ def test_prompts_reference_project_root_and_skills():
     assert [p.key for p in build_prompts("/x")] == ["continue", "build", "validate", "document"]
 
 
-def test_hybrid_prompts_derive_gold_between_build_and_validate():
+def test_hybrid_prompts_build_and_validate_each_layer():
     ps = build_prompts("/x", "hybrid")
-    assert [p.key for p in ps] == ["continue", "build", "gold", "validate", "document"]
-    assert [p.title.split(".")[0] for p in ps] == ["1", "2", "3", "4", "5"]
-    gold = ps[2]
-    assert gold.skill == "domain-model-assessment" and gold.title == "3. Derive gold"
+    assert [p.key for p in ps] == ["continue", "build", "validate", "gold", "build_gold", "validate_gold", "document"]
+    assert [p.title.split(".")[0] for p in ps] == ["1", "2", "3", "4", "5", "6", "7"]
+    by = {p.key: p for p in ps}
+    assert by["build"].title == "2. Build silver" and by["validate"].title == "3. Validate silver"
+    assert "silver layer" in by["validate"].prompt
+    gold = by["gold"]
+    assert gold.skill == "domain-model-assessment" and gold.title == "4. Derive gold"
     assert "Mode B" in gold.prompt and "autonomous-validation" in gold.prompt and "etl-development-framework" in gold.prompt
-    assert "/x" in gold.prompt
+    assert "docs/design/" in gold.prompt
+    bg = by["build_gold"]
+    assert bg.skill == "etl-development-framework" and bg.title == "5. Build gold"
+    assert "autonomous-validation" in bg.prompt and "gold layer" in bg.prompt
+    assert "docs/design/" in bg.prompt and "gold_requirements.md" in bg.prompt and "gold_layer_assessment.md" in bg.prompt
+    vg = by["validate_gold"]
+    assert vg.skill == "domain-model-validation" and vg.title == "6. Validate gold" and "gold layer" in vg.prompt
+    assert all("/x" in p.prompt for p in ps)
 
 
 def test_non_hybrid_prompts_have_no_gold_step():
@@ -137,12 +148,31 @@ def test_non_hybrid_prompts_have_no_gold_step():
         assert [p.title.split(".")[0] for p in ps] == ["1", "2", "3", "4"]
 
 
-def test_next_steps_lists_gold_only_for_hybrid():
-    kw = dict(verdict=None, open_blocking=0, open_total=0, before_build_vibes=0, copied=False)
-    hybrid = build_next_steps(**kw, output_model="hybrid")[-1]
-    assert "Derive gold" in hybrid.title and "five prompts" in hybrid.detail
-    plain = build_next_steps(**kw, output_model="normalized")[-1]
-    assert "Derive gold" not in plain.title and "four prompts" in plain.detail
+@pytest.mark.parametrize("om", ["normalized", "dimensional", "hybrid"])
+def test_next_steps_run_step_follows_the_prompts(om):
+    """The last checklist step names every prompt title in order (gold steps only for hybrid)."""
+    step = build_next_steps(verdict=None, open_blocking=0, open_total=0, before_build_vibes=0, copied=False,
+                            output_model=om)[-1]
+    titles = [p.title.split(". ", 1)[1] for p in build_prompts("/x", om)]
+    assert step.title == "In Genie Code, run " + " → ".join(titles)
+    assert step.detail == f"Paste the {'seven' if om == 'hybrid' else 'four'} prompts in order."
+
+
+def test_build_prompts_name_the_files_the_vendored_skills_use():
+    """Build inputs are in docs/design/, where the assessment writes them and the ETL skill reads them;
+    docs/.pipeline/handoffs/ holds what the build and validation skills write, so no prompt points there."""
+    skills = resolve_vendored_assessment() / "skills"
+    etl = (skills / "etl-development-framework" / "SKILL.md").read_text()
+    assess = (skills / "domain-model-assessment" / "SKILL.md").read_text()
+    gold_protocol = (skills / "domain-model-assessment" / "gold-derivation-protocol.md").read_text()
+    for name in ("business_requirements.md", "etl_detailed_spec.md"):
+        assert f"docs/design/{name}" in etl and f"docs/design/{name}" in assess
+    assert "docs/design/gold_requirements.md" in etl and "gold_layer_assessment.md" in gold_protocol
+    by = {p.key: p for p in build_prompts("/x", "hybrid")}
+    assert "business_requirements.md" in by["build"].prompt and "etl_detailed_spec.md" in by["build"].prompt
+    assert all(".pipeline/handoffs" not in p.prompt for p in by.values())
+    assert all(".pipeline/handoffs" not in h for h in EXPECTED_HANDOFFS)
+    assert any("business_requirements.md" in h and "etl_detailed_spec.md" in h for h in EXPECTED_HANDOFFS)
 
 
 USER = "dana@example.com"
@@ -290,7 +320,7 @@ def test_handoff_writes_into_the_callers_home_through_obo(client, mock_ws, user_
     mock_ws.permissions.update.assert_not_called(); user_ws.permissions.update.assert_not_called()
     user_ws.files.download.assert_not_called()  # volume reads stay on the app SP client
     body = r.json()
-    assert [p["key"] for p in body["prompts"]] == ["continue", "build", "gold", "validate", "document"]
+    assert [p["key"] for p in body["prompts"]] == ["continue", "build", "validate", "gold", "build_gold", "validate_gold", "document"]
     assert body["created_by"] == "dana@example.com" and body["created_at"]
     assert body["folder_url"] == f"https://test-workspace.databricks.com/#workspace{root}"
 
@@ -323,11 +353,13 @@ def test_handoff_content_has_decisions_and_readme(client, mock_ws, user_ws, engi
     assert pos == sorted(pos)
 
 
-def test_handoff_without_user_email_is_422_and_writes_nothing(client, mock_ws, user_ws, engine, ingested_completed):
+def test_handoff_without_user_email_is_401_identity_missing_and_writes_nothing(client, mock_ws, user_ws, engine,
+                                                                               ingested_completed):
+    from vibe_modeling.backend.core._identity import NO_EMAIL_MESSAGE
     _wire_volume(mock_ws, ingested_completed.out_dir)
     r = client.post(f"/api/assessment-domain-runs/{ingested_completed.dr_id}/handoff", json={})
-    assert r.status_code == 422, r.text
-    assert r.json()["detail"] == "Hand-off needs your workspace email"
+    assert r.status_code == 401, r.text
+    assert r.json()["detail"] == {"error": "identity_missing", "message": NO_EMAIL_MESSAGE}
     user_ws.workspace.upload.assert_not_called()
     with Session(engine) as s:
         assert s.exec(select(AssessHandoff)).all() == []
@@ -339,7 +371,7 @@ def test_handoff_custom_path_and_get_reports_last(client, mock_ws, user_ws, inge
     g0 = client.get(f"/api/assessment-domain-runs/{dr}/handoff", headers=WHO).json()
     assert g0["created_at"] is None and g0["path"].startswith(f"{HOME}/vibe-assess/")
     assert [s["name"] for s in g0["skills"]][:2] == ["domain-model-assessment", "autonomous-validation"]
-    assert g0["user_scope_note"] and g0["expected_handoffs"] and len(g0["prompts"]) == 5
+    assert g0["user_scope_note"] and g0["expected_handoffs"] and len(g0["prompts"]) == 7
     mine = "/Workspace/Users/Dana@Example.com/proj"
     r = client.post(f"/api/assessment-domain-runs/{dr}/handoff", json={"path": mine}, headers=WHO)
     assert r.status_code == 200 and r.json()["path"] == mine
@@ -348,25 +380,26 @@ def test_handoff_custom_path_and_get_reports_last(client, mock_ws, user_ws, inge
     assert g1["created_at"] and mine in g1["prompts"][0]["prompt"]
 
 
-def test_handoff_failure_is_502_with_runs_path_and_records_nothing(client, mock_ws, user_ws, engine, ingested_completed):
+def test_handoff_failure_is_409_with_runs_path_and_records_nothing(client, mock_ws, user_ws, engine, ingested_completed):
     _wire_volume(mock_ws, ingested_completed.out_dir)
     user_ws.workspace.upload.side_effect = DatabricksError("boom")
     r = client.post(f"/api/assessment-domain-runs/{ingested_completed.dr_id}/handoff", json={}, headers=WHO)
-    assert r.status_code == 502
-    root = f"{HOME}/vibe-assess/Meridian_Mfg/sales_order/"
+    assert r.status_code == 409
     d = r.json()["detail"]
+    # ``runs_path`` is structural and passes through. The message leaves the
+    # target folder out: the user chose it and sees it in the form.
     assert d["error"] == "admin_help" and d["runs_path"] == ingested_completed.out_dir
-    assert d["message"].startswith(f"Hand-off failed writing to {root}") and d["message"].endswith(": boom")
+    assert d["message"] == "Hand-off failed writing to the chosen folder: boom"
     with Session(engine) as s:
         assert s.exec(select(AssessHandoff)).all() == []
 
 
-def test_handoff_file_cap_is_502(client, mock_ws, user_ws, ingested_completed, monkeypatch):
+def test_handoff_file_cap_is_409_admin_help(client, mock_ws, user_ws, ingested_completed, monkeypatch):
     from vibe_modeling.backend.assessment import handoff
     monkeypatch.setattr(handoff, "MAX_FILES", 1)
     _wire_volume(mock_ws, ingested_completed.out_dir)
     r = client.post(f"/api/assessment-domain-runs/{ingested_completed.dr_id}/handoff", json={}, headers=WHO)
-    assert r.status_code == 502
+    assert r.status_code == 409 and r.json()["detail"]["error"] == "admin_help"
 
 
 def test_handoff_rejects_bad_path(client, ingested_completed):
@@ -408,12 +441,12 @@ def _pin_links(engine, dr_id):
         s.add(dr); s.commit()
 
 
-def test_handoff_generic_write_failure_is_502_with_run_links(client, mock_ws, user_ws, engine, ingested_completed):
+def test_handoff_generic_write_failure_is_409_with_run_links(client, mock_ws, user_ws, engine, ingested_completed):
     _pin_links(engine, ingested_completed.dr_id)
     _wire_volume(mock_ws, ingested_completed.out_dir)
     user_ws.workspace.mkdirs.side_effect = NotFound("parent folder does not exist")
     r = client.post(f"/api/assessment-domain-runs/{ingested_completed.dr_id}/handoff", json={}, headers=WHO)
-    assert r.status_code == 502
+    assert r.status_code == 409
     d = r.json()["detail"]
     assert "parent folder does not exist" in d["message"] and "re-consent" not in d["message"]
     assert d["job_url"].endswith("/jobs/99") and d["run_url"].endswith("/jobs/99/runs/1234")
@@ -424,7 +457,7 @@ def test_handoff_volume_read_denied_is_not_a_scope_error(client, mock_ws, user_w
     _wire_volume(mock_ws, ingested_completed.out_dir)
     mock_ws.files.download.side_effect = PermissionDenied("app SP cannot read the volume")
     r = client.post(f"/api/assessment-domain-runs/{ingested_completed.dr_id}/handoff", json={}, headers=WHO)
-    assert r.status_code == 502
+    assert r.status_code == 409
     d = r.json()["detail"]
     assert d["message"] == "Hand-off failed reading the run's files: app SP cannot read the volume"
     user_ws.workspace.upload.assert_not_called()
@@ -470,11 +503,20 @@ def test_handoff_target_outside_the_callers_home_is_422(client, mock_ws, user_ws
     user_ws.workspace.upload.assert_not_called()
 
 
+def test_handoff_outside_home_message_keeps_the_home_folder_hint(client, mock_ws, user_ws, ingested_completed):
+    _wire_volume(mock_ws, ingested_completed.out_dir)
+    r = client.post(f"/api/assessment-domain-runs/{ingested_completed.dr_id}/handoff",
+                    json={"path": "/Workspace/Users/other@example.com/x"}, headers=WHO)
+    assert r.status_code == 422
+    assert r.json() == {"detail": "Hand-off folder must be a subfolder of your own home folder "
+                                  "(/Workspace/Users/<your email>/)."}
+
+
 def test_handoff_home_subpath_ok_and_needs_email(client, mock_ws, user_ws, ingested_completed):
     _wire_volume(mock_ws, ingested_completed.out_dir)
     url = f"/api/assessment-domain-runs/{ingested_completed.dr_id}/handoff"
     assert client.post(url, json={"path": f"{HOME}/x"}, headers=WHO).status_code == 200
-    assert client.post(url, json={"path": f"{HOME}/x"}).status_code == 422
+    assert client.post(url, json={"path": f"{HOME}/x"}).status_code == 401
 
 
 def test_readme_notes_overwrite(client, mock_ws, user_ws, ingested_completed):
@@ -496,7 +538,7 @@ def test_walk_stops_at_cap(client, mock_ws, user_ws, ingested_completed, monkeyp
         return iter([NS(path=f"{p}/f{i}", is_directory=False) for i in range(50)] + [NS(path=f"{p}/sub", is_directory=True)])
     mock_ws.files.list_directory_contents.side_effect = lst
     r = client.post(f"/api/assessment-domain-runs/{ingested_completed.dr_id}/handoff", json={}, headers=WHO)
-    assert r.status_code == 502 and "docs folder exceeds" in r.json()["detail"]["message"]
+    assert r.status_code == 409 and "docs folder exceeds" in r.json()["detail"]["message"]
     assert len(seen) == 1  # never recursed into sub/
 
 
@@ -511,7 +553,7 @@ def test_get_handoff_reports_next_steps_and_skill_locations(client, mock_ws, ing
     assert not any(c.args[0].startswith("/Workspace/Users/") for c in mock_ws.workspace.get_status.call_args_list)
     assert {s["state"] for s in body["skills"]} == {"update_available"}  # marker unreadable -> not current
     assert any(s["title"] == "Install the Genie Code skills" for s in body["next_steps"])
-    assert all(s["bundled_version"].startswith("0.4.0") for s in body["skills"])
+    assert all(s["bundled_version"].startswith("0.5.0") for s in body["skills"])
 
 
 def test_get_handoff_without_email_reports_skills_unknown(client, mock_ws, ingested_completed):

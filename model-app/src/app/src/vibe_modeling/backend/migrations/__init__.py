@@ -23,6 +23,12 @@ from . import (
     v_0_7_1,
     v_0_7_3,
     v_0_8_0,
+    v_0_9_0,
+    v_0_9_0_1,
+    v_0_9_0_2,
+    v_0_9_0_3,
+    v_0_9_0_4,
+    v_0_9_1,
 )
 from .registry import (
     INSTALL_POLICY,
@@ -50,6 +56,12 @@ MIGRATIONS.append(v_0_7_0.MIGRATION)
 MIGRATIONS.append(v_0_7_1.MIGRATION)
 MIGRATIONS.append(v_0_7_3.MIGRATION)
 MIGRATIONS.append(v_0_8_0.MIGRATION)
+MIGRATIONS.append(v_0_9_0.MIGRATION)
+MIGRATIONS.append(v_0_9_0_1.MIGRATION)
+MIGRATIONS.append(v_0_9_0_2.MIGRATION)
+MIGRATIONS.append(v_0_9_0_3.MIGRATION)
+MIGRATIONS.append(v_0_9_0_4.MIGRATION)
+MIGRATIONS.append(v_0_9_1.MIGRATION)
 
 
 __all__ = [

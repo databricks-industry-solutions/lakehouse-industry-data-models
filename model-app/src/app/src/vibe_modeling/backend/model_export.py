@@ -45,7 +45,7 @@ import io
 import json
 import zipfile
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Callable, Iterable, Optional
 
 from sqlmodel import Session, select
 
@@ -96,8 +96,8 @@ def bundle_layout(
     lowercased (``ecm`` / ``mvm``). The version folder mirrors the agent's
     nested Volume convention (``v{N}/{scope}``) so an exported tree reads the
     same as the on-Volume layout. Importers resolve the legacy flat
-    ``{scope}_v{N}`` layout on the read side (``_scope_from_volume_path`` and
-    the volume readers), so a round-trip of an older bundle still works.
+    ``{scope}_v{N}`` layout on the read side (``core/_paths.version_dir_key``
+    and the volume readers), so a round-trip of an older bundle still works.
 
     When ``dir_override`` is given (and non-blank after strip), it is used RAW
     as the bundle root (only surrounding ``/`` stripped) — it is a real path the
@@ -285,6 +285,7 @@ def iter_bundle_files(
     layout: BundleLayout,
     model_json: dict,
     artifacts: Iterable[RunArtifact],
+    read_artifact: Optional[Callable[[RunArtifact], bytes]] = None,
 ) -> Iterable[tuple[str, bytes]]:
     """Yield every file in an exported bundle as ``(path, bytes)`` pairs.
 
@@ -294,7 +295,12 @@ def iter_bundle_files(
     filename-collision dedupe the flat artifact-download surface uses
     (``model.json`` -> ``model_1.json``, etc.). Both the zip packer
     (:func:`build_bundle_zip_bytes`) and the GitHub publish tree consume this
-    so the two can't diverge on layout or contents.
+    so the two can't diverge on layout.
+
+    ``read_artifact(artifact)``, when given, returns each artifact's bytes in
+    place of reading its Volume file: the publish strips the prefixes an
+    import added with it (``services/github_publish.PublishStrip.read``). The
+    zip passes none.
     """
     model_arcname = artifact_filename(layout.model_json_path)
     yield (
@@ -306,7 +312,9 @@ def iter_bundle_files(
     for a in artifacts:
         if not a.file_path:
             continue
-        data = read_artifact_bytes(ws, a.file_path)
+        data = (
+            read_artifact(a) if read_artifact is not None else read_artifact_bytes(ws, a.file_path)
+        )
         arcname = dedupe_arcname(seen, artifact_filename(a.file_path))
         yield (f"{layout.dir}/{arcname}", data)
 

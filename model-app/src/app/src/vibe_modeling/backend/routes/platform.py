@@ -1,8 +1,7 @@
 """Platform / workspace bootstrap endpoints.
 
 Covers identity, RBAC role lookup, per-user preferences, the workspace
-catalog picker, and the bundled-agent install flow surfaced in the admin
-console. These are the cross-cutting endpoints the UI hits to stand up the
+catalog picker, and the bundled-agent routes surfaced in Settings. These are the cross-cutting endpoints the UI hits to stand up the
 shell of the app — none of them are scoped to a single business or run.
 """
 
@@ -11,28 +10,29 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import delete, update
-from sqlmodel import Session, select
+from sqlalchemy import delete
+from sqlmodel import select
 
 from ..._metadata import api_prefix
 from ..core import Dependencies
-from ..core._identity import (
-    actor_label,
-    current_user_profile,
-    legacy_username_alias,
-)
+from ..core._bundled_agent_init import AgentChangeAborted, point_agent_at_bundled
+from ..core._identity import actor_label, current_user_profile
+from ..core._runs import count_in_flight_runs
+from ..core._uc_privileges import app_catalog_capabilities, cached_positive
 from ..db_models import UserPreference
 from ..models import (
-    BundledAgentInfoOut,
+    AgentConfigOut,
+    CatalogCapabilityOut,
+    CatalogOut,
     CurrentUserOut,
-    InstallBundledAgentOut,
     UserPreferenceDeleteOut,
     UserPreferenceIn,
     UserPreferenceOut,
     VersionOut,
 )
+from ._helpers import _build_dbx_job_url, _get_or_create_agent_config
 
 logger = logging.getLogger(__name__)
 
@@ -124,54 +124,6 @@ def get_user_role(role: Dependencies.Role):
 # --- User Preferences ---
 
 
-def _has_rows_for(session: Session, user_id: str) -> bool:
-    """Cheap existence probe so steady-state GETs stay read-only."""
-    return (
-        session.exec(
-            select(UserPreference.user_id)
-            .where(UserPreference.user_id == user_id)
-            .limit(1)
-        ).first()
-        is not None
-    )
-
-
-def _rekey_legacy_preferences(session: Session, alias: str, identity: str) -> None:
-    """Move preference rows keyed on the legacy username onto the identity.
-
-    Two set-based Core statements (portable to SQLite and Postgres): drop the
-    alias rows whose key already exists under the identity (the identity row
-    wins), then move the remaining alias rows. No ORM primary-key mutation, so
-    a parallel request that already moved a row cannot raise StaleDataError.
-
-    Best effort: any failure (e.g. an IntegrityError from a concurrent PUT on
-    the same `(identity, key)`) rolls back and logs, and the caller's GET still
-    returns the identity's rows. Remove after one release.
-    """
-    try:
-        session.execute(
-            delete(UserPreference).where(
-                UserPreference.user_id == alias,
-                UserPreference.key.in_(
-                    select(UserPreference.key).where(UserPreference.user_id == identity)
-                ),
-            )
-        )
-        session.execute(
-            update(UserPreference)
-            .where(UserPreference.user_id == alias)
-            .values(user_id=identity)
-        )
-        session.commit()
-    except Exception:
-        session.rollback()
-        logger.warning(
-            "user-preference re-key from legacy username to identity failed; "
-            "continuing with identity rows only",
-            exc_info=True,
-        )
-
-
 @router.get(
     "/user/preferences",
     response_model=list[UserPreferenceOut],
@@ -179,24 +131,12 @@ def _rekey_legacy_preferences(session: Session, alias: str, identity: str) -> No
 )
 def get_user_preferences(
     session: Dependencies.Session,
-    headers: Dependencies.Headers,
     user_id: Dependencies.UserIdentity,
 ):
-    """Get all preferences for the current user.
-
-    Transitional: preferences used to key on the preferred username. When the
-    caller's username differs from their email identity, rows still stored
-    under the username are moved onto the email first (see
-    `_rekey_legacy_preferences`). This is the only write a GET performs, and
-    it touches only the caller's own rows.
-    """
-    alias = legacy_username_alias(headers)
-    if alias is not None and _has_rows_for(session, alias):
-        _rekey_legacy_preferences(session, alias, user_id)
-    prefs = session.exec(
+    """Get all preferences for the current user."""
+    return session.exec(
         select(UserPreference).where(UserPreference.user_id == user_id)
     ).all()
-    return prefs
 
 
 @router.put(
@@ -236,8 +176,7 @@ def delete_user_preference(
     """Delete the caller's preference row for ``key``.
 
     Idempotent: a missing row returns ``{"deleted": false}``, never 404.
-    Touches only the caller's own row and never runs the legacy-username
-    re-key (that stays on GET).
+    Touches only the caller's own row.
     """
     result = session.execute(
         delete(UserPreference).where(
@@ -253,103 +192,106 @@ def delete_user_preference(
 
 @router.get(
     "/catalogs",
-    response_model=list,
+    response_model=list[CatalogOut],
     operation_id="listCatalogs",
 )
 def list_catalogs(ws: Dependencies.Client):
     """Return the UC catalogs visible to the app service principal.
 
-    Intended to populate catalog pickers in the UI. The list is naturally
-    filtered by what the SP can `USE CATALOG` on — catalogs the SP cannot
-    see are not returned by `w.catalogs.list()`. The UI can offer this list
-    as a dropdown on the run-creation form so users don't have to type a
-    catalog name from memory.
+    Populates the catalog pickers. The list is naturally filtered by what the
+    SP can `USE CATALOG` on: catalogs the SP cannot see are not returned by
+    `w.catalogs.list()`. No privilege check runs here, so the list never
+    waits on one; `can_create_schema` is filled only from a cached positive
+    check (`getCatalogCapabilities` does the checking).
     """
     try:
         catalogs = list(ws.catalogs.list())
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list catalogs: {e}") from e
     return [
-        {
-            "name": c.name,
-            "comment": c.comment or "",
-            "owner": c.owner or "",
-        }
+        CatalogOut(
+            name=c.name,
+            comment=c.comment or "",
+            owner=c.owner or "",
+            can_create_schema=True if cached_positive(c.name) else None,
+        )
         for c in catalogs
         if c.name
+    ]
+
+
+@router.get(
+    "/catalogs/capabilities",
+    response_model=list[CatalogCapabilityOut],
+    operation_id="getCatalogCapabilities",
+)
+def get_catalog_capabilities(names: list[str] = Query(default=[])):
+    """What the app service principal can do in each named catalog, read-only.
+
+    Checks at most `CAPABILITY_CHECK_CAP` unique names per call, in request
+    order, on a bounded pool with a timeout; the rest come back unchecked
+    (`null` fields). Positive results are cached for ten minutes, negative
+    ones never, so a grant an admin adds shows on the next call. The reads go
+    through the app SP's own short-timeout client, not `Dependencies.Client`.
+    """
+    return [
+        CatalogCapabilityOut(
+            name=name,
+            create_schema=cap.create_schema,
+            use_metamodel=cap.use_metamodel,
+            create_schema_fix=cap.create_schema_fix,
+            use_metamodel_fix=cap.use_metamodel_fix,
+        )
+        for name, cap in app_catalog_capabilities(names)
     ]
 
 
 # --- Bundled agent notebook ---
 
 
-@router.get(
-    "/admin/bundled-agent",
-    response_model=BundledAgentInfoOut,
-    operation_id="getBundledAgentInfo",
-)
-def get_bundled_agent_info():
-    """Describe the vibe-modelling-agent notebook shipped alongside the app.
-
-    Returns `available=False` if the wheel was built without the vendored
-    notebook (e.g. legacy installs). The first-run gate hides the install
-    button in that case.
-    """
-    from ..bundled_agent import resolve_bundled_agent
-    agent = resolve_bundled_agent()
-    if agent is None:
-        return BundledAgentInfoOut(available=False)
-    return BundledAgentInfoOut(
-        available=True,
-        pinned_tag=agent.pinned_tag,
-        supported_tags=agent.supported_tags,
-        file_name=agent.file_name,
-    )
-
-
 @router.post(
-    "/admin/install-bundled-agent",
-    response_model=InstallBundledAgentOut,
-    operation_id="installBundledAgent",
+    "/admin/agent/switch-to-bundled",
+    response_model=AgentConfigOut,
+    operation_id="switchToBundledAgent",
 )
-def install_bundled_agent(
+def switch_to_bundled_agent(
+    session: Dependencies.Session,
     ws: Dependencies.Client,
+    config: Dependencies.Config,
     _role: Dependencies.AdminOnly,
-):
-    """Upload the bundled vibe-modelling-agent notebook into the workspace.
+) -> AgentConfigOut:
+    """Point the agent configuration at the bundled notebook.
 
-    The file is written under `/Users/<app_sp_user>/vibe-modelling-agent/`.
-    The same install logic runs unconditionally on every app boot via the
-    ``_BundledAgentInitDependency`` lifespan, so a fresh deploy is usable
-    immediately; this route exists so an admin can manually re-install
-    via Settings (e.g. after the bundled tag bumps, or after deleting the
-    workspace copy by hand).
+    Uploads the bundled notebook into the app's agent folder, then moves
+    ``AgentConfig.notebook_path`` and the persistent job to it in one save
+    (``core/_bundled_agent_init.point_agent_at_bundled``, the step the boot
+    upgrade runs). From then on the app owns the notebook and upgrades it on
+    boot. The admin's own notebook is left in place, unchanged.
 
-    Sibling caller — stays in sync with
-    ``backend/core/_bundled_agent_init.py:_ensure_bundled_agent_installed``
-    (boot-time auto-install). Both call
-    ``install_bundled_agent_into_workspace`` so the workspace install
-    path is identical. This route deliberately does NOT update
-    ``AgentConfig.notebook_path`` or create the Job: the admin copies
-    the returned path into the Settings form and ``PUT /config/agent``
-    (with its own preflight) takes it from there. Don't merge the two
-    responsibilities — the lifespan owns the boot-time bootstrap; this
-    route owns manual reinstall.
+    409 while a run is in flight (the job must not move under it), also when
+    a run starts or the configuration is saved during the switch. 500 (the
+    app's error handler sanitizes the detail) when the build has no bundled notebook, the upload fails, or
+    the job cannot be updated; in each case the configuration is unchanged.
     """
-    from ..bundled_agent_install import (
-        BundledAgentNotPackagedError,
-        install_bundled_agent_into_workspace,
-    )
-
+    in_flight = count_in_flight_runs(session)
+    if in_flight:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{in_flight} run(s) in flight. Wait for them to finish, or cancel them "
+                "on their run pages, then switch to the bundled agent."
+            ),
+        )
+    cfg = _get_or_create_agent_config(session, config)
     try:
-        result = install_bundled_agent_into_workspace(ws)
-    except BundledAgentNotPackagedError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        point_agent_at_bundled(session, ws, cfg, expected_path=cfg.notebook_path)
+    except AgentChangeAborted as e:
+        raise HTTPException(
+            status_code=409, detail=f"The agent was not switched: {e}. Try again."
+        ) from e
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
-
-    return InstallBundledAgentOut(
-        path=result.path,
-        version=result.version,
-        overwritten=result.overwritten,
+    return AgentConfigOut(
+        **cfg.model_dump(),
+        job_url=_build_dbx_job_url(ws, cfg.job_id),
     )

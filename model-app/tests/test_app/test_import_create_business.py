@@ -3,9 +3,9 @@
 
 Exercises the create-by-import flow end-to-end: digest extraction in
 the analyze response, Business + ModelVersion creation in a single
-transaction, industry auto-create when the model.json's
-``industry_alignment`` isn't in the catalog, and the skip-if-exists
-409.
+transaction, industry resolution through ``industry_resolve`` (no
+industry when the alignment matches none, a new one only on
+``create_industry``), and the skip-if-exists 409.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 
 from sqlmodel import Session, select
 
+from ._assess_helpers import table_digests
 from vibe_modeling.backend.db_models import (
     Business,
     BusinessContext,
@@ -85,7 +86,7 @@ def _payload(
 
 
 class TestAnalyzeRoot:
-    def test_returns_digest_with_industry_will_be_created_when_catalog_misses(
+    def test_returns_digest_without_industry_id_when_catalog_misses(
         self, client_with_agent, mock_ws,
     ):
         _mock_download(mock_ws, json.dumps(_payload()))
@@ -100,22 +101,23 @@ class TestAnalyzeRoot:
         digest = data["business_digest"]
         assert digest["business_name"] == "Quantum Co"
         assert digest["industry_alignment"] == "Quantum Computing"
-        assert digest["industry_will_be_created"] is True
+        assert digest["industry_id"] is None
         assert digest["core_business_processes"] == "qubits"
         # Story-1 path has no target business → no diff.
         assert data["business_digest_diff"] is None
 
-    def test_returns_digest_with_industry_will_be_created_false_for_known_industry(
+    def test_returns_the_resolved_industry_id_for_a_slug(
         self, client_with_agent, mock_ws, engine,
     ):
-        # Seed an Industry that matches our payload.
         with Session(engine) as s:
-            s.add(Industry(name="Retail", short_name="retail"))
+            ind = Industry(name="Energy - Utilities", short_name="utilities")
+            s.add(ind)
             s.commit()
+            ind_id = ind.id
 
         _mock_download(
             mock_ws,
-            json.dumps(_payload(business_name="Acme", industry="Retail")),
+            json.dumps(_payload(business_name="Acme", industry="energy-utilities")),
         )
         r = client_with_agent.post(
             "/api/import/analyze",
@@ -123,7 +125,8 @@ class TestAnalyzeRoot:
         )
         assert r.status_code == 200, r.text
         digest = r.json()["business_digest"]
-        assert digest["industry_will_be_created"] is False
+        assert digest["industry_alignment"] == "energy-utilities"
+        assert digest["industry_id"] == ind_id
 
     def test_bad_path_rejected(self, client_with_agent):
         r = client_with_agent.post(
@@ -159,13 +162,8 @@ class TestCreateBusinessAndExecute:
             assert biz is not None
             assert biz.name == "Quantum Co"
             assert biz.industry_alignment == "Quantum Computing"
-            assert biz.industry_id is not None
-
-            ind = s.get(Industry, biz.industry_id)
-            assert ind is not None
-            assert ind.is_auto_created is True
-            assert ind.name == "Quantum Computing"
-            assert ind.short_name == "quantum-computing"
+            assert biz.industry_id is None
+            assert s.exec(select(Industry)).all() == []
 
             mv = s.exec(
                 select(ModelVersion).where(
@@ -212,25 +210,144 @@ class TestCreateBusinessAndExecute:
             assert mv.agent_version == "4.9.8"
             assert mv.release_version == "0.8.0"
 
-    def test_auto_creates_industry_when_catalog_misses(
+    def test_unmatched_industry_leaves_the_business_unassigned(
         self, client_with_agent, mock_ws, engine,
     ):
-        # No Industry rows seeded — auto-create path.
-        _mock_download(
-            mock_ws,
-            json.dumps(_payload(industry="Quantum Computing")),
-        )
+        _mock_download(mock_ws, json.dumps(_payload(industry="Quantum Computing")))
         r = client_with_agent.post(
             "/api/import/create-business-and-execute",
             json={"volume_path": "/Volumes/a/b/c.json"},
         )
         assert r.status_code == 200, r.text
         with Session(engine) as s:
-            inds = s.exec(
-                select(Industry).where(Industry.name == "Quantum Computing")
-            ).all()
+            biz = s.get(Business, r.json()["business_id"])
+            assert biz.industry_id is None
+            assert biz.industry_alignment == "Quantum Computing"
+            assert s.exec(select(Industry)).all() == []
+
+    def test_create_industry_adds_the_alignment_to_the_catalog(
+        self, client_with_agent, mock_ws, engine,
+    ):
+        _mock_download(mock_ws, json.dumps(_payload(industry="Quantum Computing")))
+        r = client_with_agent.post(
+            "/api/import/create-business-and-execute",
+            json={"volume_path": "/Volumes/a/b/c.json", "create_industry": True},
+        )
+        assert r.status_code == 200, r.text
+        assert "Added industry 'Quantum Computing' to the catalog." in r.json()["warnings"]
+        with Session(engine) as s:
+            inds = s.exec(select(Industry)).all()
             assert len(inds) == 1
-            assert inds[0].is_auto_created is True
+            assert inds[0].name == "Quantum Computing"
+            assert inds[0].short_name == "quantum-computing"
+            assert inds[0].is_auto_created is False
+            assert s.get(Business, r.json()["business_id"]).industry_id == inds[0].id
+
+    def test_create_industry_reuses_a_slug_match(
+        self, client_with_agent, mock_ws, engine,
+    ):
+        with Session(engine) as s:
+            ind = Industry(name="Energy - Utilities", short_name="energy-utilities")
+            s.add(ind)
+            s.commit()
+            ind_id = ind.id
+        _mock_download(mock_ws, json.dumps(_payload(industry="energy_utilities")))
+        r = client_with_agent.post(
+            "/api/import/create-business-and-execute",
+            json={"volume_path": "/Volumes/a/b/c.json", "create_industry": True},
+        )
+        assert r.status_code == 200, r.text
+        with Session(engine) as s:
+            assert len(s.exec(select(Industry)).all()) == 1
+            assert s.get(Business, r.json()["business_id"]).industry_id == ind_id
+
+    def test_create_industry_refuses_an_alignment_without_letters_or_digits(
+        self, client_with_agent, mock_ws, engine,
+    ):
+        _mock_download(mock_ws, json.dumps(_payload(industry="%_%")))
+        r = client_with_agent.post(
+            "/api/import/create-business-and-execute",
+            json={"volume_path": "/Volumes/a/b/c.json", "create_industry": True},
+        )
+        assert r.status_code == 400, r.text
+        with Session(engine) as s:
+            assert s.exec(select(Industry)).all() == []
+            assert s.exec(select(Business)).all() == []
+
+    @staticmethod
+    def _seed(engine, *rows):
+        with Session(engine) as s:
+            for name, short_name, auto in rows:
+                s.add(Industry(id=short_name, name=name, short_name=short_name, is_auto_created=auto))
+            s.commit()
+
+    def _execute(self, client, mock_ws, industry, **extra):
+        _mock_download(mock_ws, json.dumps(_payload(industry=industry)))
+        return client.post(
+            "/api/import/create-business-and-execute",
+            json={"volume_path": "/Volumes/a/b/c.json", **extra},
+        )
+
+    def test_execute_prefers_a_curated_industry_over_an_auto_created_one(
+        self, client_with_agent, mock_ws, engine,
+    ):
+        self._seed(engine, ("apparel-fashion", "apparel-fashion", True), ("Apparel & Fashion", "apparel", False))
+        r = self._execute(client_with_agent, mock_ws, "apparel_fashion")
+        assert r.status_code == 200, r.text
+        with Session(engine) as s:
+            assert s.get(Business, r.json()["business_id"]).industry_id == "apparel"
+
+    def test_execute_leaves_an_ambiguous_alignment_unassigned(
+        self, client_with_agent, mock_ws, engine,
+    ):
+        self._seed(engine, ("Health Care", "healthcare", False), ("Health-Care", "hc", False))
+        r = self._execute(client_with_agent, mock_ws, "health care")
+        assert r.status_code == 200, r.text
+        with Session(engine) as s:
+            biz = s.get(Business, r.json()["business_id"])
+            assert biz.industry_id is None
+            assert biz.industry_alignment == "health care"
+            assert len(s.exec(select(Industry)).all()) == 2
+
+    def test_create_industry_refuses_an_ambiguous_alignment(
+        self, client_with_agent, mock_ws, engine,
+    ):
+        self._seed(engine, ("Health Care", "healthcare", False), ("Health-Care", "hc", False))
+        before = table_digests(engine)
+        r = self._execute(client_with_agent, mock_ws, "health care", create_industry=True)
+        assert r.status_code == 409, r.text
+        detail = r.json()["detail"]
+        assert detail["error"] == "industry_ambiguous"
+        assert detail["industries"] == [
+            {"id": "healthcare", "name": "Health Care"},
+            {"id": "hc", "name": "Health-Care"},
+        ]
+        assert "Pick one" in detail["message"]
+        assert table_digests(engine) == before
+
+    def test_an_explicit_industry_id_wins_over_an_ambiguous_name(
+        self, client_with_agent, mock_ws, engine,
+    ):
+        """The dialog sends the id it resolved; the name alone is ambiguous."""
+        self._seed(engine, ("Health Care", "healthcare", False), ("Health-Care", "hc", False))
+        r = self._execute(client_with_agent, mock_ws, "Health Care", industry_id="hc", create_industry=True)
+        assert r.status_code == 200, r.text
+        with Session(engine) as s:
+            assert s.get(Business, r.json()["business_id"]).industry_id == "hc"
+            assert len(s.exec(select(Industry)).all()) == 2
+
+    def test_an_unknown_or_inactive_industry_id_is_refused(
+        self, client_with_agent, mock_ws, engine,
+    ):
+        with Session(engine) as s:
+            s.add(Industry(id="old", name="Mining", short_name="mining", is_active=False))
+            s.commit()
+        before = table_digests(engine)
+        for industry_id in ("missing", "old"):
+            r = self._execute(client_with_agent, mock_ws, "Mining", industry_id=industry_id)
+            assert r.status_code == 404, r.text
+            assert r.json()["detail"]["error"] == "industry_not_found"
+        assert table_digests(engine) == before
 
     def test_reuses_existing_industry_no_duplicate(
         self, client_with_agent, mock_ws, engine,

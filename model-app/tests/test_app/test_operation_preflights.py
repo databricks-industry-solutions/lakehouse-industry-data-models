@@ -35,14 +35,14 @@ def test_initial_sync_422_when_unconfigured(client, engine):
     _assert_config_missing(client.post("/api/config/initial-sync"))
 
 
-def test_oob_check_422_when_unconfigured(client, engine):
+def test_oob_check_now_422_when_unconfigured(client, engine):
     _seed_empty_agent(engine)
-    _assert_config_missing(client.get("/api/config/oob-check"))
+    _assert_config_missing(client.post("/api/oob/check"))
 
 
-def test_oob_import_422_when_unconfigured(client, engine):
+def test_oob_import_new_businesses_422_when_unconfigured(client, engine):
     _seed_empty_agent(engine)
-    _assert_config_missing(client.post("/api/config/oob-import"))
+    _assert_config_missing(client.post("/api/oob/import-new-businesses"))
 
 
 def test_download_422_when_unconfigured(client, engine):

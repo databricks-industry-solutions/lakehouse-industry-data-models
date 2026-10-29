@@ -1,0 +1,259 @@
+{
+  "_comment": "BE/FE parity for industry resolution: backend/industry_resolve.py (industry_slug, matching_industries, pick_industry), the frozen slug in backend/migrations/v_0_9_0_1.py (_frozen_industry_slug, slugs only) and ui/lib/industry.ts (industrySlug, matchingIndustries, pickIndustry). slugs: [text, slug]. resolve: [text, expected industry id or null] over industries. candidates: [text, the ids of every active match, in catalog order].",
+  "slugs": [
+    [
+      "Energy - Utilities",
+      "energy-utilities"
+    ],
+    [
+      "energy_utilities",
+      "energy-utilities"
+    ],
+    [
+      "  Energy_Utilities  ",
+      "energy-utilities"
+    ],
+    [
+      "ENERGY UTILITIES",
+      "energy-utilities"
+    ],
+    [
+      "Oil & Gas",
+      "oil-gas"
+    ],
+    [
+      "Retail & E-Commerce",
+      "retail-e-commerce"
+    ],
+    [
+      "digital--fashion__commerce",
+      "digital-fashion-commerce"
+    ],
+    [
+      "-food-and-beverage-",
+      "food-and-beverage"
+    ],
+    [
+      "Café Chains",
+      "caf-chains"
+    ],
+    [
+      "3M Industrial",
+      "3m-industrial"
+    ],
+    [
+      "%",
+      ""
+    ],
+    [
+      "_",
+      ""
+    ],
+    [
+      "%_%",
+      ""
+    ],
+    [
+      "",
+      ""
+    ]
+  ],
+  "industries": [
+    {
+      "id": "ind-energy",
+      "name": "Energy - Utilities",
+      "short_name": "utilities",
+      "is_active": true,
+      "is_auto_created": false
+    },
+    {
+      "id": "ind-food",
+      "name": "Food and Beverage",
+      "short_name": "food-and-beverage",
+      "is_active": true,
+      "is_auto_created": false
+    },
+    {
+      "id": "ind-retail",
+      "name": "Retail & E-Commerce",
+      "short_name": "retail",
+      "is_active": true,
+      "is_auto_created": false
+    },
+    {
+      "id": "ind-apparel",
+      "name": "Apparel & Fashion",
+      "short_name": "apparel",
+      "is_active": true,
+      "is_auto_created": false
+    },
+    {
+      "id": "ind-apparel-dup",
+      "name": "apparel-fashion",
+      "short_name": "apparel-fashion",
+      "is_active": true,
+      "is_auto_created": true
+    },
+    {
+      "id": "ind-quantum",
+      "name": "Quantum Computing",
+      "short_name": "quantum-computing",
+      "is_active": true,
+      "is_auto_created": true
+    },
+    {
+      "id": "ind-mining",
+      "name": "Mining",
+      "short_name": "mining",
+      "is_active": false,
+      "is_auto_created": false
+    },
+    {
+      "id": "ind-health-a",
+      "name": "Health Care",
+      "short_name": "healthcare",
+      "is_active": true,
+      "is_auto_created": false
+    },
+    {
+      "id": "ind-health-b",
+      "name": "Health-Care",
+      "short_name": "hc",
+      "is_active": true,
+      "is_auto_created": false
+    },
+    {
+      "id": "ind-staffing-a",
+      "name": "staffing",
+      "short_name": "staffing",
+      "is_active": true,
+      "is_auto_created": true
+    },
+    {
+      "id": "ind-staffing-b",
+      "name": "Staffing",
+      "short_name": "staffing-2",
+      "is_active": true,
+      "is_auto_created": true
+    }
+  ],
+  "resolve": [
+    [
+      "energy-utilities",
+      "ind-energy"
+    ],
+    [
+      "Energy - Utilities",
+      "ind-energy"
+    ],
+    [
+      "energy_utilities",
+      "ind-energy"
+    ],
+    [
+      "UTILITIES",
+      "ind-energy"
+    ],
+    [
+      "food and beverage",
+      "ind-food"
+    ],
+    [
+      "Food & Beverage",
+      null
+    ],
+    [
+      "retail",
+      "ind-retail"
+    ],
+    [
+      "Retail & E-Commerce",
+      "ind-retail"
+    ],
+    [
+      "retai_",
+      null
+    ],
+    [
+      "r%",
+      null
+    ],
+    [
+      "%",
+      null
+    ],
+    [
+      "",
+      null
+    ],
+    [
+      "apparel-fashion",
+      "ind-apparel"
+    ],
+    [
+      "Apparel & Fashion",
+      "ind-apparel"
+    ],
+    [
+      "quantum computing",
+      "ind-quantum"
+    ],
+    [
+      "mining",
+      null
+    ],
+    [
+      "health care",
+      null
+    ],
+    [
+      "staffing",
+      null
+    ],
+    [
+      "unknown industry",
+      null
+    ]
+  ],
+  "candidates": [
+    [
+      "health care",
+      [
+        "ind-health-a",
+        "ind-health-b"
+      ]
+    ],
+    [
+      "staffing",
+      [
+        "ind-staffing-a",
+        "ind-staffing-b"
+      ]
+    ],
+    [
+      "apparel-fashion",
+      [
+        "ind-apparel",
+        "ind-apparel-dup"
+      ]
+    ],
+    [
+      "energy_utilities",
+      [
+        "ind-energy"
+      ]
+    ],
+    [
+      "mining",
+      []
+    ],
+    [
+      "%_%",
+      []
+    ],
+    [
+      "unknown industry",
+      []
+    ]
+  ]
+}

@@ -20,6 +20,7 @@ the dev-authored suites.
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -315,9 +316,18 @@ def _ws_flat(rel_files: list[str]) -> MagicMock:
         e.file_size = None
         entries.append(e)
     ws.files.list_directory_contents.return_value = entries
-    body = MagicMock()
-    body.contents.read.return_value = b"<bytes>"
-    ws.files.download.return_value = body
+
+    def _download(path):
+        body = MagicMock()
+        # The kickstart reads the industry model.json for its schema prefix
+        # (``scope_prefix.import_schema_prefix``); every other file is opaque bytes.
+        body.contents.read.return_value = (
+            json.dumps({"model": {"model_conventions": {"schema_prefix": ""}, "domains": []}}).encode()
+            if path.endswith("/model.json") else b"<bytes>"
+        )
+        return body
+
+    ws.files.download.side_effect = _download
     ws.files.upload = MagicMock()
     return ws
 

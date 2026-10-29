@@ -13,6 +13,7 @@ from databricks.sdk import WorkspaceClient
 from sqlalchemy import bindparam, insert as sa_insert, update as sa_update
 from sqlmodel import Session, select
 
+from .core import _sql
 from .core._names import (
     _AGENT_SEGMENT_NON_SAFE,
     agent_business_segment,
@@ -30,7 +31,7 @@ from .core.anchor_resolve import (
     _resolve_coords,
     prefetch_anchor_maps,
 )
-from .agent_compat import extract_version_provenance
+from .agent_compat import extract_version_provenance, extract_vibe_scope_facts
 from .fk import is_fk_attribute
 from .services._bulk_model_io import (
     _row_values,
@@ -52,6 +53,7 @@ from .db_models import (
 )
 from .core._ids import LINK_NS as NV_LINK_NS, VI_NV_NS
 from .model_lineage import link_previous_version, upsert_subdomains
+from .services.metamodel_registry import ensure_metamodel_registry
 from .models import NextVibeCategory, VibeInputOrigin, VibeInputPriority, VibeInputStatus
 
 logger = logging.getLogger(__name__)
@@ -74,18 +76,14 @@ class _SyncEmptyError(RuntimeError):
     """
 
 
-# SQL state name returned when a table does not exist
-_TABLE_NOT_FOUND = "TABLE_OR_VIEW_NOT_FOUND"
-
-# Statement states the SDK reports. A statement is not yet readable until it
-# leaves the non-terminal set; a terminal-failure state means the read failed.
-_NON_TERMINAL_STATES = ("PENDING", "RUNNING")
-_TERMINAL_FAILURE_STATES = ("FAILED", "CANCELED", "CLOSED")
-
-# Bounded poll budget for a statement that returns non-terminal after the
-# initial wait_timeout window (~60s of extra headroom before giving up).
-_MAX_STATEMENT_POLLS = 30
-_STATEMENT_POLL_INTERVAL_S = 2.0
+# Bound of a registry read during sync: the 50 s server wait, then polls 2 s
+# apart, about 110 s in total (wall clock); then it is cancelled and raises.
+_QUERY_WAIT = "50s"
+_QUERY_TIMEOUT_S = 110.0
+_QUERY_POLL_INTERVAL_S = 2.0
+# The registry setup before a request-time Delta write: the same bound as the
+# import writer's request budget.
+_REGISTRY_SETUP_TIMEOUT_S = 90.0
 
 # Fixed uuid5 namespaces so structured next-vibe input/link ids are stable across
 # re-ingestion (idempotent upsert keying). VI_NV_NS + NV_LINK_NS are imported
@@ -206,6 +204,8 @@ def _extract_quality_score(text: str) -> Optional[int]:
 
 
 # A ``domain.product`` or ``domain.product.column`` dotted element reference.
+# A trailing column segment is accepted so the whole token is consumed, but
+# ``_resolve_target_anchor`` anchors at the product and ignores the column.
 _ELEMENT_REF_RE = re.compile(r"\b([a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*){1,2})\b")
 
 # SA finding line: ``  - [SA:<class>] <detail>``.
@@ -869,6 +869,14 @@ class ModelSyncService:
         if release_version is not None and release_version != mv.release_version:
             mv.release_version = release_version
             changed = True
+        # The file's ``_vibe_scope`` facts, under the same never-NULL rule.
+        for attr, value in zip(
+            ("scope_fence_mode", "scope_base_version", "scope_base_scope"),
+            extract_vibe_scope_facts(model_payload),
+        ):
+            if value is not None and value != getattr(mv, attr):
+                setattr(mv, attr, value)
+                changed = True
 
         if next_vibes_preload is not _NOT_PRELOADED:
             next_vibes_payload, next_vibes_path = next_vibes_preload
@@ -1217,7 +1225,9 @@ class ModelSyncService:
     ) -> Optional[list[dict]]:
         """Query a metamodel Delta table filtered by business/version/scope.
 
-        Returns list of row dicts, or None if the table doesn't exist.
+        Returns list of row dicts, or None if the table doesn't exist. Any
+        other failure, including a result that is truncated or still running
+        at the end of the bound, raises ``SqlStatementError``.
         """
         # The agent stores `version` in the metamodel tables as a bare
         # integer string ("1", "2", …) while the app carries it in widget
@@ -1240,117 +1250,14 @@ class ModelSyncService:
 
         sql = f"SELECT * FROM `{catalog}`.`{schema}`.`{table}` WHERE {where}"
 
-        try:
-            # wait_timeout is the SDK max (50s); a warehouse that is still
-            # spinning up can return PENDING/RUNNING with no result, so poll to
-            # a terminal state before reading manifest/result.
-            result = self._ws.statement_execution.execute_statement(
-                warehouse_id=self._warehouse_id,
-                statement=sql,
-                wait_timeout="50s",
-            )
-            result = self._await_terminal_statement(result)
-
-            status = result.status
-            if status and status.error:
-                error_msg = status.error.message or ""
-                if _TABLE_NOT_FOUND in error_msg:
-                    return None
-                raise RuntimeError(f"SQL error querying {table}: {error_msg}")
-            if self._statement_state(status) in _TERMINAL_FAILURE_STATES:
-                raise RuntimeError(
-                    f"SQL statement querying {table} ended in state "
-                    f"{self._statement_state(status)}"
-                )
-
-            manifest = result.manifest
-            data = result.result
-            if not manifest or not data:
-                return []
-
-            rows = self._collect_all_chunks(
-                statement_id=getattr(result, "statement_id", None), first=data
-            )
-
-            # A truncated manifest or a fetched-vs-declared row-count mismatch
-            # means the payload is incomplete. Raise here - this happens during
-            # LOAD, before any delete/write, so it can never leave a
-            # half-written version.
-            if getattr(manifest, "truncated", None) is True:
-                raise RuntimeError(
-                    f"Delta result for {table} is truncated "
-                    f"(manifest.truncated=True); refusing partial sync"
-                )
-            total = getattr(manifest, "total_row_count", None)
-            if isinstance(total, int) and len(rows) != total:
-                raise RuntimeError(
-                    f"Delta result for {table} fetched {len(rows)} rows but "
-                    f"manifest.total_row_count={total}; refusing partial sync"
-                )
-
-            if not rows:
-                return []
-            columns = [col.name for col in manifest.schema.columns]
-            return [dict(zip(columns, row)) for row in rows]
-
-        except Exception as e:
-            if _TABLE_NOT_FOUND in str(e):
-                return None
-            raise
-
-    @staticmethod
-    def _statement_state(status) -> str:
-        """Return the uppercase statement-state string, or "" when unknown.
-
-        Defensive against test mocks that leave ``status.state`` unset: a
-        non-string ``value`` reads as unknown, so the caller neither polls nor
-        treats it as a terminal failure (preserves legacy pass-through).
-        """
-        state = getattr(status, "state", None) if status else None
-        val = getattr(state, "value", None)
-        return str(val).upper() if isinstance(val, str) else ""
-
-    def _await_terminal_statement(self, result):
-        """Poll ``get_statement`` until the statement leaves PENDING/RUNNING.
-
-        Returns the terminal response. Raises ``RuntimeError`` if the poll
-        budget is exhausted while still non-terminal. A response that is
-        already terminal (or whose state is unknown) is returned unchanged.
-        """
-        statement_id = getattr(result, "statement_id", None)
-        state = self._statement_state(result.status)
-        if state not in _NON_TERMINAL_STATES or not statement_id:
-            return result
-        for _ in range(_MAX_STATEMENT_POLLS):
-            time.sleep(_STATEMENT_POLL_INTERVAL_S)
-            result = self._ws.statement_execution.get_statement(statement_id)
-            state = self._statement_state(result.status)
-            if state not in _NON_TERMINAL_STATES:
-                return result
-        raise RuntimeError(
-            f"SQL statement {statement_id} still {state or 'non-terminal'} "
-            f"after {_MAX_STATEMENT_POLLS} polls"
+        # A truncated or incomplete result raises here, during LOAD, before
+        # any delete/write, so it can never leave a half-written version.
+        return _sql.rows(
+            self._ws, self._warehouse_id, sql,
+            wait_timeout=_QUERY_WAIT, timeout_s=_QUERY_TIMEOUT_S,
+            poll_interval_s=_QUERY_POLL_INTERVAL_S,
+            missing_table="none", as_dicts=True,
         )
-
-    def _collect_all_chunks(self, *, statement_id, first) -> list:
-        """Return every result row across all INLINE chunks.
-
-        The first chunk's rows come from the initial response; the SDK exposes
-        follow-on chunks via ``next_chunk_index`` + ``get_statement_result_chunk_n``.
-        A mid-stream chunk can legitimately carry zero rows, so guard each
-        ``data_array`` for ``None``/empty.
-        """
-        rows = list(getattr(first, "data_array", None) or [])
-        next_idx = getattr(first, "next_chunk_index", None)
-        while isinstance(next_idx, int) and statement_id:
-            chunk = self._ws.statement_execution.get_statement_result_chunk_n(
-                statement_id, next_idx
-            )
-            arr = getattr(chunk, "data_array", None)
-            if arr:
-                rows.extend(arr)
-            next_idx = getattr(chunk, "next_chunk_index", None)
-        return rows
 
     def _assemble_model_dict(
         self,
@@ -1741,7 +1648,10 @@ class ModelSyncService:
 
         Idempotent: if a `business` row already exists for the target
         (business, version, scope) we assume Delta is up-to-date and skip.
-        Returns True if rows were written.
+        Returns True if rows were written. The registry is set up first
+        (``metamodel_registry.ensure_metamodel_registry``), so this works in a
+        catalog the agent never ran in; a failed setup raises
+        ``MetamodelSetupError``.
 
         This is the inverse of `sync_from_model_json` — that method writes
         Lakebase; this one writes Delta. Paired they keep both stores
@@ -1753,6 +1663,9 @@ class ModelSyncService:
         if not self._ws or not self._warehouse_id:
             logger.warning("write_model_to_delta called without ws/warehouse — skipping")
             return False
+        ensure_metamodel_registry(
+            self._ws, catalog, self._warehouse_id, timeout_s=_REGISTRY_SETUP_TIMEOUT_S,
+        )
         v_stripped = str(version or "").lstrip("vV") or str(version or "")
         scope_norm = _normalize_scope(model_scope)
         schema = "_metamodel"
@@ -1907,48 +1820,40 @@ class ModelSyncService:
         check_sql = (
             f"SELECT COUNT(*) AS n FROM `{catalog}`.`{schema}`.business WHERE {where}"
         )
-        try:
-            exists = self._execute_scalar(check_sql)
-        except RuntimeError as exc:
-            if _TABLE_NOT_FOUND in str(exc):
-                return False
-            raise
+        # A missing business table means the version was never installed
+        # here; any other failure raises.
+        exists = self._execute_scalar(check_sql, missing_table="none")
         if not exists or int(exists) <= 0:
             return False
 
         # Order matters only loosely (no real FKs in the metamodel Delta
         # tables) — go child → parent to keep the intent obvious.
         for table in ("attribute", "product", "domain", "business"):
-            try:
-                self._execute(
-                    f"DELETE FROM `{catalog}`.`{schema}`.{table} WHERE {where}"
-                )
-            except RuntimeError as exc:
-                if _TABLE_NOT_FOUND in str(exc):
-                    continue
-                raise
+            self._execute(
+                f"DELETE FROM `{catalog}`.`{schema}`.{table} WHERE {where}",
+                missing_table="none",
+            )
         return True
 
-    def _execute(self, sql: str) -> None:
-        result = self._ws.statement_execution.execute_statement(
-            warehouse_id=self._warehouse_id,
-            statement=sql,
-            wait_timeout="50s",
+    def _execute(self, sql: str, *, missing_table: _sql.MissingTable = "raise") -> None:
+        """A write on the registry tables: one 50 s wait, no polls; a write
+        still running then is cancelled. Every failure raises
+        ``SqlStatementError``; ``missing_table="none"`` skips a missing table."""
+        _sql.run(
+            self._ws, self._warehouse_id, sql,
+            wait_timeout="50s", missing_table=missing_table,
         )
-        if result.status and result.status.state and result.status.state.value != "SUCCEEDED":
-            raise RuntimeError(
-                f"Delta write failed: {result.status.error.message if result.status.error else result.status.state.value}"
-            )
 
-    def _execute_scalar(self, sql: str) -> Optional[str]:
-        result = self._ws.statement_execution.execute_statement(
-            warehouse_id=self._warehouse_id,
-            statement=sql,
-            wait_timeout="30s",
+    def _execute_scalar(
+        self, sql: str, *, missing_table: _sql.MissingTable = "raise",
+    ) -> Optional[str]:
+        """One value from the registry tables: one 30 s wait, no polls. Every
+        failure raises ``SqlStatementError``; ``missing_table="none"`` reads a
+        missing table as ``None``."""
+        return _sql.scalar(
+            self._ws, self._warehouse_id, sql,
+            wait_timeout="30s", missing_table=missing_table,
         )
-        if result.result and result.result.data_array:
-            return result.result.data_array[0][0]
-        return None
 
     def clear_version_data(self, version_id: str) -> None:
         """Delete all model data for a version. Public alias for force-resync."""

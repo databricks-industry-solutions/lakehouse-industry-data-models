@@ -53,13 +53,31 @@ _VENDORED_AGENT_DIR = os.path.normpath(
 
 
 class TestVendoredAgentFiles:
-    """SPEC §3, §2: the v4.9.9 ipynb ships, the v0.6.0 ipynb is gone."""
+    """SPEC §3, §2: the v5.3.3 ipynb ships, the v0.6.0 ipynb is gone."""
 
-    def test_v499_notebook_present(self):
-        path = os.path.join(_VENDORED_AGENT_DIR, "vibe_modelling_agent_v4.9.9.ipynb")
+    def test_v533_notebook_present(self):
+        path = os.path.join(_VENDORED_AGENT_DIR, "vibe_modelling_agent_v5.3.3.ipynb")
         assert os.path.isfile(path), (
-            f"v4.9.9 notebook must be vendored at {path!r} — the new pinned "
+            f"v5.3.3 notebook must be vendored at {path!r} — the new pinned "
             f"tag depends on this file existing on disk."
+        )
+        # Assert the 4.9.9 file is absent
+        old_path = os.path.join(_VENDORED_AGENT_DIR, "vibe_modelling_agent_v4.9.9.ipynb")
+        assert not os.path.exists(old_path), (
+            f"v4.9.9 notebook must be removed but is still at {old_path!r}."
+        )
+        # Assert VERSIONS.json.agent_source.notebook_sha256 matches the file
+        versions_path = os.path.join(_VENDORED_AGENT_DIR, "VERSIONS.json")
+        with open(versions_path) as f:
+            versions_data = json.load(f)
+        expected_sha256 = versions_data.get("agent_source", {}).get("notebook_sha256")
+        assert expected_sha256, "VERSIONS.json must have agent_source.notebook_sha256"
+        # Verify the file's actual sha256
+        import hashlib
+        with open(path, "rb") as f:
+            file_sha256 = hashlib.sha256(f.read()).hexdigest()
+        assert file_sha256 == expected_sha256, (
+            f"File sha256 {file_sha256!r} does not match VERSIONS.json agent_source.notebook_sha256 {expected_sha256!r}."
         )
 
     def test_v060_notebook_absent(self):

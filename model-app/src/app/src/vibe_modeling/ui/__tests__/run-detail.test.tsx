@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 vi.mock("sonner", () => ({
   toast: {
@@ -74,6 +74,16 @@ function stubAllFetch(run: RunOut): FetchMock {
     }
     if (u.includes("/progress")) {
       return { ok: true, status: 200, json: async () => [] };
+    }
+    if (u.includes("/schema-drops")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => [
+          { name: "ecm_intake", status: "failed", table_count: 2, error: "[PERMISSION_DENIED] cannot drop" },
+          { name: "ecm_sales", status: "dropped", table_count: 1, error: null },
+        ],
+      };
     }
     if (u.includes("/businesses/") && u.includes("/versions")) {
       return { ok: true, status: 200, json: async () => [] };
@@ -207,6 +217,27 @@ describe("RunDetail — Cancel dialog", () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+
+  it.each(["kickstart-from-industry", "download-industry", "uninstall-orphan-schemas"])(
+    "offers 'Mark as cancelled' on a %s run, saying what it does and does not do",
+    async (intent) => {
+      stubAllFetch(makeRun({ status: "stale", intent, parameters_json: "{}" }));
+      renderWithRouter(<RunDetail businessId="biz-1" runId="run-1" />);
+      const button = await screen.findByTestId("cancel-run");
+      expect(button).toHaveTextContent("Mark as cancelled");
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(await screen.findByTestId("cancel-run-copy")).toHaveTextContent(
+        /frees the business for other runs\. It does not stop a step that is still going or undo what was done/,
+      );
+      mockedCancelRollback.mockResolvedValue({ data: { ok: true, status: "cancelled", ops_applied: [], op_failures: [] } } as never);
+      await act(async () => {
+        fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Mark as cancelled" }));
+      });
+      await waitFor(() => expect(mockedCancelRollback).toHaveBeenCalledWith({ business_id: "biz-1", run_id: "run-1" }));
+    },
+  );
 
   it("renders the single rollback-by-default cancel button on any running run", async () => {
     // v0.4.0 update: the dialog no longer offers a "Just cancel"
@@ -418,5 +449,136 @@ describe("RunDetail — Mutation error paths", () => {
     // Retry button re-enabled (acting flag flipped off in finally).
     const retryAfter = screen.getByRole("button", { name: /Retry/ });
     expect(retryAfter).not.toBeDisabled();
+  });
+});
+
+describe("RunDetail — Dry Run and scope badges", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows Dry Run and Scope badges from parameters_json", async () => {
+    stubAllFetch(
+      makeRun({
+        intent: "vibe-iterate",
+        status: "completed",
+        parameters_json: JSON.stringify({
+          intent: "vibe-iterate",
+          vibe_scope: "some_domains",
+          vibe_scope_domains: ["meter_to_cash", "billing"],
+          dry_run: true,
+        }),
+      }),
+    );
+    renderWithRouter(<RunDetail businessId="biz-1" runId="run-1" />);
+    await waitFor(() => expect(screen.getByText(/Run:/i)).toBeInTheDocument());
+    expect(screen.getByTestId("run-dry-run-badge")).toHaveTextContent("Dry Run");
+    expect(screen.getByTestId("run-scope-badge")).toHaveTextContent(
+      "Scope: meter_to_cash, billing",
+    );
+  });
+
+  it("shows no badges for an unscoped Full Run", async () => {
+    stubAllFetch(
+      makeRun({
+        intent: "vibe-iterate",
+        status: "completed",
+        parameters_json: JSON.stringify({
+          intent: "vibe-iterate",
+          vibe_scope: "all_domains",
+          vibe_scope_domains: [],
+          dry_run: false,
+        }),
+      }),
+    );
+    renderWithRouter(<RunDetail businessId="biz-1" runId="run-1" />);
+    await waitFor(() => expect(screen.getByText(/Run:/i)).toBeInTheDocument());
+    expect(screen.queryByTestId("run-dry-run-badge")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("run-scope-badge")).not.toBeInTheDocument();
+  });
+});
+
+describe("RunDetail — orphan-schema drop run", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("shows its label and each schema's outcome, and offers no Retry", async () => {
+    const fetchMock = stubAllFetch(makeRun({
+      status: "failed", intent: "uninstall-orphan-schemas", databricks_run_id: null,
+      parameters_json: JSON.stringify({ catalog: "home_cat", schemas: ["ecm_intake", "ecm_sales"] }),
+    }));
+    renderWithRouter(<RunDetail businessId="biz-1" runId="run-1" />);
+    expect(await screen.findByRole("heading", { name: "Run: Drop orphan schemas" })).toBeInTheDocument();
+    const card = await screen.findByTestId("run-schema-drops");
+    await waitFor(() => expect(within(card).getAllByTestId("run-schema-drop")).toHaveLength(2));
+    expect(card).toHaveTextContent("1 of 2 schemas dropped.");
+    expect(card).toHaveTextContent("[PERMISSION_DENIED] cannot drop");
+    expect(fetchMock.mock.calls.some(([u]) => String(u) === "/api/businesses/biz-1/runs/run-1/schema-drops")).toBe(true);
+    expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+  });
+});
+
+describe("RunDetail - warnings of a finished run", () => {
+  beforeEach(() => {
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const LEFT_BEHIND =
+    "v1 ECM is uninstalled from business_1, but these schemas could not be dropped and are still there: " +
+    "ecm_intake, ecm_sales. Their owner, or someone with the right privileges, can drop them.";
+
+  it("shows the warning of a completed uninstall", async () => {
+    stubAllFetch(
+      makeRun({
+        status: "completed",
+        intent: "uninstall",
+        progress_percent: 100,
+        warnings: [{ field_path: "(uninstall)", step_index: 0, message: LEFT_BEHIND, severity: "warning" }],
+      }),
+    );
+    renderWithRouter(<RunDetail businessId="biz-1" runId="run-1" />);
+    const card = await screen.findByTestId("run-warnings");
+    expect(within(card).getByTestId("run-warning")).toHaveTextContent(LEFT_BEHIND);
+    expect(screen.getByText("Done")).toBeInTheDocument();
+  });
+
+  it("shows the statement of a registry release that may not have run, with a copy button", async () => {
+    const RELEASE =
+      "v1 MVM is uninstalled from business_1, but the app may not have marked it as not installed in " +
+      "business_1's _metamodel.";
+    const SQL = "UPDATE `business_1`.`_metamodel`.`business` SET deploy_status = 'dry_run' WHERE version = '1'";
+    stubAllFetch(
+      makeRun({
+        status: "completed",
+        intent: "uninstall",
+        progress_percent: 100,
+        warnings: [
+          { field_path: "(uninstall)", step_index: 0, message: LEFT_BEHIND, severity: "warning" },
+          { field_path: "(uninstall)", step_index: 0, message: RELEASE, severity: "warning", sql: SQL },
+        ],
+      }),
+    );
+    renderWithRouter(<RunDetail businessId="biz-1" runId="run-1" />);
+    const card = await screen.findByTestId("run-warnings");
+    expect(within(card).getAllByTestId("run-warning").map((p) => p.textContent)).toEqual([LEFT_BEHIND, RELEASE]);
+    expect(within(card).getByText(SQL).tagName).toBe("PRE");
+    expect(within(card).getAllByRole("button", { name: "Copy SQL" })).toHaveLength(1);
+  });
+
+  it("shows no warning card when the run has none", async () => {
+    stubAllFetch(makeRun({ status: "completed", progress_percent: 100, warnings: [] }));
+    renderWithRouter(<RunDetail businessId="biz-1" runId="run-1" />);
+    await screen.findByText("Done");
+    expect(screen.queryByTestId("run-warnings")).not.toBeInTheDocument();
   });
 });

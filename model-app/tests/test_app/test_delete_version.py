@@ -1,17 +1,16 @@
 """Tests for ``DELETE /businesses/{business_id}/versions/{version_id}``.
 
-The route is operation_id ``deleteVersion``. Its primary semantic is
-"delete this version"; the legacy revert (uninstall → install previous)
-is a follow-up opt-in via ``?reinstall_previous=true``.
+The route is operation_id ``deleteVersion`` and goes through the one delete
+service (``_version_lifecycle.delete_version``).
 
 Covers:
-  - latest imported ECM v2 with no flag → 200, cascade rows gone,
-    no orchestrator dispatch
-  - latest deployed MVM v3 with reinstall_previous=true → version gone,
-    orchestrator dispatched with uninstall→install DAG
-  - reinstall_previous=true but no prior version → 400
-  - reinstall_previous=true on a version with no uc_catalog → 400
-  - non-latest in its scope → 400
+  - latest imported ECM v2 → 200, cascade rows gone, no run started
+  - a Dry Run draft or a replaced version that is not installed → 200,
+    wherever it sits in the scope
+  - a version with a newer one above it → 409 "Delete the newer versions
+    first"; an installed version → 409 ``installed``; an active run on the
+    business → 409; a refusal writes nothing
+  - ``reinstall_previous`` is gone: the route never starts a run
   - cross-scope sanity: deleting ECM v1 while MVM v1 exists succeeds
 """
 
@@ -149,7 +148,7 @@ def _count_structure_rows(engine, version_id: str) -> dict[str, int]:
 
 
 class TestDeleteVersionDefault:
-    """Default path: no ?reinstall_previous flag."""
+    """Deleting the latest version of a scope."""
 
     def test_delete_latest_imported_ecm_succeeds_no_orchestrator(
         self, fk_engine, fk_client
@@ -168,10 +167,9 @@ class TestDeleteVersionDefault:
         body = r.json()
         assert body["deleted_version"] == 2
         assert body["previous_version"] == 1
-        # run_id None + reinstall_dispatched False is the observable proof that
-        # no orchestrator DAG was dispatched on the default delete path.
-        assert body["run_id"] is None
-        assert body["reinstall_dispatched"] is False
+        assert "run_id" not in body
+        with Session(fk_engine) as s:
+            assert s.exec(select(Run).where(Run.business_id == biz_id)).all() == []
 
         # Cascade rows gone.
         rows = _count_structure_rows(fk_engine, v_ids[2])
@@ -206,7 +204,6 @@ class TestDeleteVersionDefault:
         body = r.json()
         assert body["deleted_version"] == 1
         assert body["previous_version"] is None
-        assert body["reinstall_dispatched"] is False
 
     def test_delete_non_latest_in_scope_rejected(
         self, engine, client_with_agent
@@ -215,8 +212,8 @@ class TestDeleteVersionDefault:
         r = client_with_agent.delete(
             f"/api/businesses/{biz_id}/versions/{v_ids[1]}"
         )
-        assert r.status_code == 400, r.text
-        assert "latest" in r.json()["detail"].lower()
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"] == "Delete the newer versions first (v2)"
 
         # Nothing was deleted.
         with Session(engine) as s:
@@ -281,103 +278,84 @@ class TestDeleteVersionDefault:
             assert run.version_id is None
 
 
-class TestDeleteVersionReinstallPrevious:
-    """Opt-in reinstall via ``?reinstall_previous=true``."""
+def _seed_ladder(engine) -> tuple[str, dict[int, str]]:
+    """v3 replaced, v4 superseded, v5 the installed head, v6 a Dry Run draft."""
+    from datetime import datetime, timezone
 
-    def test_reinstall_dispatches_orchestrator(
-        self, engine, client_with_agent, mock_tracker
-    ):
-        # MVM v3 deployed → expect uninstall→install DAG.
-        with Session(engine) as s:
-            b = Business(name="reinst", description="t", industry_alignment="Retail")
-            s.add(b)
-            s.flush()
-            biz_id = b.id
-            ids: dict[int, str] = {}
-            for n in (2, 3):
-                mv = ModelVersion(
-                    business_id=biz_id, version=n, status="completed",
-                    scope="mvm", uc_catalog="reinst_cat",
-                    deployment_status=("deployed" if n == 3 else "uninstalled"),
-                )
-                s.add(mv)
-                s.flush()
-                ids[n] = mv.id
-            s.commit()
-
-        r = client_with_agent.delete(
-            f"/api/businesses/{biz_id}/versions/{ids[3]}"
-            f"?reinstall_previous=true"
-        )
-        # Mock workspace will fail dispatch; orchestrator semantics let
-        # the route still return 200 with the failed-run payload — but
-        # the route DOES create a Run, attempt orchestrator.start, and
-        # call start_tracking if pending/running. We assert observable
-        # invariants: the row is gone, a Run was persisted, and the
-        # response shape carries reinstall_dispatched=true.
-        assert r.status_code == 200, r.text
-        body = r.json()
-        assert body["deleted_version"] == 3
-        assert body["previous_version"] == 2
-        assert body["reinstall_dispatched"] is True
-        assert body["run_id"]
-
-        with Session(engine) as s:
-            assert s.get(ModelVersion, ids[3]) is None
-            assert s.get(ModelVersion, ids[2]) is not None
-            run = s.get(Run, body["run_id"])
-            assert run is not None
-            # Orchestrator.start overwrites run.intent from dag.intent,
-            # which is "revert" for the uninstall→install DAG. Either
-            # label is acceptable — what we care about is that a Run was
-            # actually persisted and pointed at the reinstall target.
-            assert run.intent in ("revert", "reinstall-previous")
-            assert run.version_id == ids[2]
-
-    def test_reinstall_without_previous_rejected(
-        self, engine, client_with_agent
-    ):
-        """Only-version-of-its-scope + ``reinstall_previous=true`` → 400."""
-        with Session(engine) as s:
-            b = Business(name="solo", description="t", industry_alignment="Retail")
-            s.add(b)
-            s.flush()
+    with Session(engine) as s:
+        b = Business(name="ladder", description="t", industry_alignment="Retail")
+        s.add(b)
+        s.flush()
+        ids: dict[int, str] = {}
+        for n, status, deployment, extra in (
+            (3, "superseded", "uninstalled", {"replaced_at": datetime.now(timezone.utc)}),
+            (4, "superseded", "uninstalled", {}),
+            (5, "completed", "deployed", {}),
+            (6, "draft", "draft", {"dry_run": True}),
+        ):
             mv = ModelVersion(
-                business_id=b.id, version=1, status="completed", scope="ecm",
-                uc_catalog="cat", deployment_status="deployed",
+                business_id=b.id, version=n, status=status, scope="ecm",
+                uc_catalog="cat", files_catalog="cat", deployment_status=deployment, **extra,
             )
             s.add(mv)
+            s.flush()
+            ids[n] = mv.id
+        s.commit()
+        return b.id, ids
+
+
+class TestDeleteVersionRules:
+    """Base B6: drafts and replaced versions are deletable anywhere in the
+    scope; an active run blocks every delete."""
+
+    @pytest.mark.parametrize("n", [3, 6])
+    def test_replaced_or_draft_version_is_deletable(self, engine, client_with_agent, n):
+        biz_id, ids = _seed_ladder(engine)
+        r = client_with_agent.delete(f"/api/businesses/{biz_id}/versions/{ids[n]}")
+        assert r.status_code == 200, r.text
+        assert r.json()["deleted_version"] == n
+        with Session(engine) as s:
+            assert s.get(ModelVersion, ids[n]) is None
+            assert s.get(ModelVersion, ids[5]) is not None
+
+    def test_superseded_version_in_the_middle_is_refused(self, engine, client_with_agent):
+        biz_id, ids = _seed_ladder(engine)
+        r = client_with_agent.delete(f"/api/businesses/{biz_id}/versions/{ids[4]}")
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"] == "Delete the newer versions first (v5)"
+        with Session(engine) as s:
+            assert s.get(ModelVersion, ids[4]) is not None
+
+    def test_installed_replaced_version_is_refused(self, engine, client_with_agent):
+        biz_id, ids = _seed_ladder(engine)
+        with Session(engine) as s:
+            mv = s.get(ModelVersion, ids[3])
+            mv.deployment_status = "deployed"
+            s.add(mv)
             s.commit()
-            biz_id, vid = b.id, mv.id
+        r = client_with_agent.delete(f"/api/businesses/{biz_id}/versions/{ids[3]}")
+        assert r.status_code == 409, r.text
+        assert r.json()["detail"]["error"] == "installed"
+        assert r.json()["detail"]["catalogs"] == ["cat"]
 
-        r = client_with_agent.delete(
-            f"/api/businesses/{biz_id}/versions/{vid}"
-            f"?reinstall_previous=true"
-        )
-        assert r.status_code == 400
-        assert "previous" in r.json()["detail"].lower()
-
-        # Nothing was deleted.
+    def test_active_run_refuses_and_writes_nothing(self, engine, client_with_agent, mock_ws):
+        biz_id, ids = _seed_ladder(engine)
         with Session(engine) as s:
-            assert s.get(ModelVersion, vid) is not None
-
-    def test_reinstall_without_uc_catalog_rejected(
-        self, engine, client_with_agent
-    ):
-        """An import-only version (no uc_catalog) can't be the source of a
-        reinstall (we don't know what catalog to install the previous
-        version into) — 400."""
-        biz_id, v_ids = _seed_business_with_two_scoped_versions(
-            engine, scope="ecm", latest_imported=True,
-        )
-
-        r = client_with_agent.delete(
-            f"/api/businesses/{biz_id}/versions/{v_ids[2]}"
-            f"?reinstall_previous=true"
-        )
-        assert r.status_code == 400
-        assert "never installed" in r.json()["detail"].lower()
-
-        # Nothing was deleted.
+            s.add(Run(business_id=biz_id, intent="vibe-iterate", status="running"))
+            s.commit()
+        r = client_with_agent.delete(f"/api/businesses/{biz_id}/versions/{ids[6]}")
+        assert r.status_code == 409, r.text
+        assert "active run" in r.json()["detail"]
+        mock_ws.statement_execution.execute_statement.assert_not_called()
         with Session(engine) as s:
-            assert s.get(ModelVersion, v_ids[2]) is not None
+            assert s.get(ModelVersion, ids[6]) is not None
+
+    def test_reinstall_previous_starts_no_run(self, engine, client_with_agent):
+        biz_id, ids = _seed_ladder(engine)
+        r = client_with_agent.delete(
+            f"/api/businesses/{biz_id}/versions/{ids[6]}?reinstall_previous=true"
+        )
+        assert r.status_code == 200, r.text
+        assert "run_id" not in r.json()
+        with Session(engine) as s:
+            assert s.exec(select(Run).where(Run.business_id == biz_id)).all() == []

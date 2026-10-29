@@ -45,7 +45,7 @@ export function IntakeForm({ initial, initialSectorId = null, submitting, onDraf
       <label className="block space-y-1 text-sm font-medium">One-line description
         <Input value={v.one_liner} onChange={set("one_liner")} placeholder="What the company does, in a sentence" />
       </label>
-      <p className="text-xs text-muted-foreground">Optional — anything you enter here is kept as-is; Claude fills in the rest.</p>
+      <p className="text-xs text-muted-foreground">Optional. Anything you enter here is kept as-is; the model fills in the rest.</p>
       <div className="grid gap-4 md:grid-cols-3">
         <label className="space-y-1 text-sm font-medium">Domains you already use
           <Textarea rows={3} value={v.known_domains} onChange={set("known_domains")} placeholder="billing, asset management, …" />
@@ -61,7 +61,7 @@ export function IntakeForm({ initial, initialSectorId = null, submitting, onDraf
         <Textarea rows={6} value={v.pasted_doc} onChange={set("pasted_doc")} maxLength={60000} />
       </label>
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="submit" disabled={!ready || submitting}>{submitting ? "Starting…" : "Draft with Claude"}</Button>
+        <Button type="submit" disabled={!ready || submitting}>{submitting ? "Starting…" : "Draft with the model"}</Button>
         <span className="text-xs text-muted-foreground">or skip drafting:</span>
         <Button type="button" variant="outline" disabled={!ready || submitting} onClick={() => onSkip(v, sectorId, "blank")}>
           Start blank

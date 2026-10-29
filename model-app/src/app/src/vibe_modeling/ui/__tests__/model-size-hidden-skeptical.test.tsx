@@ -18,6 +18,7 @@
  * own model-size-hidden test (Skeptical Tester pattern, blind run).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -79,6 +80,8 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    // No base-model pre-fill: the form keeps its own values.
+    useGetRunDefaults: () => ({ data: undefined, isLoading: false, isError: false }),
     useGetBusinessSuspense: () => businessHook(),
     useListVersionsSuspense: () => versionsHook(),
     useListVibeInputs: (opts: any) => {
@@ -232,6 +235,8 @@ function findModelSizeWidget(): HTMLElement | null {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.runs.new"));
 
 describe("runs.new — Model Size combobox visibility (Fix C)", () => {
   it("renders the Model Size combobox when intent='vibe-iterate' (control case)", async () => {

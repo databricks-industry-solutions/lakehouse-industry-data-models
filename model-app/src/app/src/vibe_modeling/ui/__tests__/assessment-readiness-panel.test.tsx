@@ -4,8 +4,8 @@ import { render, screen, fireEvent, within } from "@testing-library/react";
 const { toastSuccess } = vi.hoisted(() => ({ toastSuccess: vi.fn() }));
 vi.mock("sonner", () => ({ toast: { success: toastSuccess, error: vi.fn() } }));
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({ children, to, search, ...rest }: any) => (
-    <a href={`${to}?tab=${search?.tab ?? ""}`} {...rest}>{children}</a>
+  Link: ({ children, to, search, hash, ...rest }: any) => (
+    <a href={`${to}?tab=${search?.tab ?? ""}${hash ? `#${hash}` : ""}`} {...rest}>{children}</a>
   ),
 }));
 
@@ -56,13 +56,13 @@ describe("ReadinessPanel", () => {
     await vi.waitFor(() => expect(toastSuccess).toHaveBeenCalledWith("Copied to clipboard"));
   });
 
-  it("links open_settings fixes to the assessment tab", () => {
+  it("links open_settings fixes to the assessment card in Settings → Platform", () => {
     const r = {
       global_checks: [{ key: "reader_configured", label: "Reader service principal", state: "blocked", detail: "Not set", fix_sql: "", fix_action: "open_settings" }],
       domains: [],
     };
     render(<ReadinessPanel readiness={r as any} />);
-    expect(screen.getByRole("link", { name: /open settings/i })).toHaveAttribute("href", "/settings?tab=assessment");
+    expect(screen.getByRole("link", { name: /open settings/i })).toHaveAttribute("href", "/settings?tab=platform#feature-assessment");
   });
 
   it("shows the admin-help block, not SQL, for checks the app's setup owns", () => {

@@ -19,10 +19,18 @@ export interface AgentCompatChange {
     tag: string;
 }
 export interface AgentCompatOut {
+    agent_owner?: "app" | "admin" | null;
+    bundled_agent_marker?: string | null;
     check_error?: string | null;
     checked_at?: string | null;
     has_breaking_change: boolean;
     install_offered?: boolean;
+    installed_agent_version?: string | null;
+    installed_check_error?: string | null;
+    installed_checked_at?: string | null;
+    installed_checked_path?: string | null;
+    installed_release_version?: string | null;
+    installed_vs_bundled?: "same" | "older" | "newer" | "unknown" | null;
     known_breaking_changes?: AgentCompatChange[];
     latest_known_upstream: string;
     latest_upstream_marker?: string | null;
@@ -33,13 +41,15 @@ export interface AgentCompatOut {
     pinned_version: string;
     repo_compare_url?: string;
     repo_url?: string;
+    scope_supported?: boolean | null;
     update_app_required?: boolean;
     verdict?: string;
 }
 export interface AgentConfigIn {
-    collect_vibe_run_statistics?: boolean;
+    collect_vibe_run_statistics?: boolean | null;
     max_concurrent_runs?: number;
     notebook_path: string;
+    runtime_budget_hours?: number | null;
 }
 export interface AgentConfigOut {
     collect_vibe_run_statistics?: boolean;
@@ -52,6 +62,9 @@ export interface AgentConfigOut {
     max_concurrent_runs?: number;
     metamodel_catalog?: string;
     notebook_path: string;
+    runtime_budget_hours?: number;
+    runtime_budget_max_hours?: number;
+    runtime_budget_min_hours?: number;
     updated_at: string;
     warehouse_id: string;
 }
@@ -210,12 +223,6 @@ export interface BulkNextVibeToFeedbackOut {
     failures?: NextVibeFeedbackFailureOut[];
     items: NextVibeToFeedbackOut[];
 }
-export interface BundledAgentInfoOut {
-    available: boolean;
-    file_name?: string;
-    pinned_tag?: string;
-    supported_tags?: string[];
-}
 export interface BusinessContextIn {
     context_json?: string;
     conventions_json?: string;
@@ -231,6 +238,11 @@ export interface BusinessContextOut {
     is_active: boolean;
     version_label: string;
 }
+export interface BusinessDeleteOut {
+    cascaded: boolean;
+    metamodel_cleanup?: MetamodelCleanupSummaryOut;
+    ok: boolean;
+}
 export interface BusinessDigest {
     agent_version?: string;
     business_name?: string;
@@ -241,7 +253,7 @@ export interface BusinessDigest {
     description?: string;
     industry_alignment?: string;
     industry_governing_body?: string;
-    industry_will_be_created?: boolean;
+    industry_id?: string | null;
     operational_systems_of_records?: string;
     orgnaization_divisions?: string;
 }
@@ -320,6 +332,19 @@ export interface CarryForwardResultOut {
     skipped_existing?: number;
     version_id: string;
 }
+export interface CatalogCapabilityOut {
+    create_schema?: boolean | null;
+    create_schema_fix?: string;
+    name: string;
+    use_metamodel?: boolean | null;
+    use_metamodel_fix?: string;
+}
+export interface CatalogOut {
+    can_create_schema?: boolean | null;
+    comment?: string;
+    name: string;
+    owner?: string;
+}
 export interface CatalogSchemaWarningOut {
     catalog: string;
     schema_count: number;
@@ -372,12 +397,15 @@ export interface ColumnMappingOut {
 }
 export interface CompileIn {
     input_ids?: string[];
+    vibe_scope_domains?: string[];
 }
 export interface CompileOut {
+    agent_markdown?: string;
     blocks?: CompiledBlockOut[];
     excluded_input_ids?: string[];
     excluded_reasons?: Record<string, string>;
     included_input_ids?: string[];
+    input_scope_domains?: Record<string, string | null>;
     markdown?: string;
 }
 export interface CompiledBlockOut {
@@ -417,10 +445,23 @@ export interface DecisionOptionOut {
 export interface DeleteVersionOut {
     deleted_version: number;
     message: string;
+    metamodel_cleanup?: MetamodelCleanupSummaryOut;
     metamodel_rows_cleaned?: boolean;
     previous_version?: number | null;
-    reinstall_dispatched?: boolean;
-    run_id?: string | null;
+    reopened_input_count?: number;
+}
+export interface DeployedUcSchemaOut {
+    columns?: Record<string, unknown>[];
+    foreign_keys?: Record<string, unknown>[];
+    primary_keys?: Record<string, unknown>[];
+    tables?: Record<string, unknown>[];
+    verification_error?: string | null;
+}
+export interface DeploymentCatalogCheckOut {
+    catalog: string;
+    error?: string | null;
+    exists: boolean;
+    verification_error?: string | null;
 }
 export interface DeploymentCatalogIn {
     deployment_catalog: string;
@@ -431,6 +472,11 @@ export const DeploymentStatus = {
     uninstalled: "uninstalled"
 } as const;
 export type DeploymentStatus = typeof DeploymentStatus[keyof typeof DeploymentStatus];
+export interface DeploymentVerificationOut {
+    summary: Record<string, number>;
+    tables: Record<string, Record<string, unknown>[]>;
+    verification_error?: string | null;
+}
 export interface DiagramDomainGroup {
     division?: string;
     domain: string;
@@ -576,6 +622,17 @@ export interface DownloadIndustryModelOut {
     version_id: string;
     warnings?: string[];
 }
+export interface DropOrphanSchemasIn {
+    catalog: string;
+    confirmed_issues?: string[];
+    schemas: string[];
+}
+export interface DropOrphanSchemasOut {
+    catalog: string;
+    metamodel_cleanup?: MetamodelCleanupSummaryOut;
+    run_id: string;
+    schemas?: OrphanSchemaDropOut[];
+}
 export interface EvolutionChangeOut {
     confidence_delta?: number | null;
     errors_delta?: number | null;
@@ -635,13 +692,10 @@ export interface EvolutionSizeOut {
     unlinked_id_count?: number | null;
 }
 export interface FeedbackContext {
-    column_mode?: string | null;
-    context_version?: number;
     domain_filter?: string | null;
-    hide_cross_domain?: boolean;
+    selected_attribute?: string | null;
     selected_edge_id?: string | null;
     selected_node_id?: string | null;
-    view_mode?: string;
 }
 export interface FieldMismatch {
     current_value: string;
@@ -694,7 +748,7 @@ export interface HandoffOut {
     user_scope_note: string;
 }
 export interface HandoffPrompt {
-    key: "continue" | "build" | "gold" | "validate" | "document";
+    key: "continue" | "build" | "validate" | "gold" | "build_gold" | "validate_gold" | "document";
     prompt: string;
     skill: string;
     title: string;
@@ -708,25 +762,34 @@ export interface ImportAnalyzeIn {
 }
 export interface ImportAnalyzeOut {
     action: string;
+    agent_output?: boolean;
     attribute_count?: number;
     business_digest?: BusinessDigest | null;
     business_digest_diff?: BusinessDigestDiff | null;
     compat_verdict?: string;
     detected_agent_tag?: string;
     domain_count?: number;
+    file_schema_prefix?: string | null;
     fk_count?: number;
+    import_schema_prefix?: string | null;
+    inferred_scope?: "ecm" | "mvm" | null;
     inferred_version: string;
     latest_supported_tag?: string;
     message: string;
     product_count?: number;
+    scope_settled?: boolean;
     valid: boolean;
     warnings?: string[];
 }
 export interface ImportCreateBusinessAndExecuteIn {
     business_name_override?: string | null;
     business_vibes_override?: string | null;
+    create_industry?: boolean;
+    databricks_run_id?: number | null;
     description_override?: string | null;
     industry_alignment_override?: string | null;
+    industry_id?: string | null;
+    scope?: "ecm" | "mvm" | null;
     volume_path: string;
 }
 export interface ImportCreateBusinessAndExecuteOut {
@@ -737,6 +800,7 @@ export interface ImportCreateBusinessAndExecuteOut {
     domains: number;
     fk_links: number;
     latest_supported_tag?: string;
+    linked_run_id?: string | null;
     products: number;
     version: number;
     version_id: string;
@@ -744,6 +808,8 @@ export interface ImportCreateBusinessAndExecuteOut {
 }
 export interface ImportExecuteIn {
     accept_business_mismatch?: boolean;
+    databricks_run_id?: number | null;
+    scope?: "ecm" | "mvm" | null;
     volume_path: string;
 }
 export interface ImportExecuteOut {
@@ -753,6 +819,7 @@ export interface ImportExecuteOut {
     domains: number;
     fk_links: number;
     latest_supported_tag?: string;
+    linked_run_id?: string | null;
     products: number;
     version: number;
     version_id: string;
@@ -785,10 +852,22 @@ export interface IndustryOut {
     short_name: string;
     updated_at: string;
 }
-export interface InstallBundledAgentOut {
-    overwritten: boolean;
-    path: string;
-    version: string;
+export interface IndustryScopePrefixRowOut {
+    action: "changed" | "unchanged" | "skipped" | "failed";
+    reason: string;
+    scope: string;
+    version: number;
+    version_id: string;
+    warnings?: string[];
+}
+export interface IndustryScopePrefixesIn {
+    apply?: boolean;
+}
+export interface IndustryScopePrefixesOut {
+    applied: boolean;
+    business_id: string;
+    business_name: string;
+    rows?: IndustryScopePrefixRowOut[];
 }
 export interface InstallSkillsIn {
     names?: string[];
@@ -801,6 +880,7 @@ export interface InstallSkillsOut {
     updated: string[];
 }
 export interface InstallationStatusOut {
+    also_installed_in?: string[];
     catalog_present: boolean;
     checked_at: string;
     deployment_catalog: string;
@@ -826,8 +906,10 @@ export type Intent = typeof Intent[keyof typeof Intent];
 export interface IssueOut {
     field_path: string;
     message: string;
-    severity: string;
+    severity: "warning" | "blocker" | "confirm" | "prepare";
     step_index: number;
+    subject?: string | null;
+    versions?: number[];
 }
 export interface KickstartIn {
     copy_inputs?: boolean;
@@ -839,6 +921,17 @@ export interface KickstartIn {
 export interface KickstartOut {
     business: BusinessOut;
 }
+export interface LinkRunIn {
+    databricks_run_id: number;
+}
+export interface LinkRunPreviewOut {
+    databricks_run_id: number;
+    evidence?: string[];
+    intent?: string | null;
+    linkable: boolean;
+    problems?: string[];
+    tier?: number | null;
+}
 export const MaterializationTiming = {
     at_rest: "at_rest",
     on_demand: "on_demand"
@@ -846,6 +939,23 @@ export const MaterializationTiming = {
 export type MaterializationTiming = typeof MaterializationTiming[keyof typeof MaterializationTiming];
 export interface MetamodelCatalogIn {
     metamodel_catalog: string;
+}
+export interface MetamodelCleanupOut {
+    attempts?: number;
+    business_segment: string;
+    catalog: string;
+    id: string;
+    last_error?: string | null;
+    reason: string;
+    scope: string;
+    status: string;
+    updated_at: string;
+    version: number;
+}
+export interface MetamodelCleanupSummaryOut {
+    done?: number;
+    failed?: number;
+    pending?: number;
 }
 export interface ModelArtifact {
     download_url?: string | null;
@@ -915,11 +1025,22 @@ export interface ModelVersionOut {
     context_id: string | null;
     created_at: string;
     deployment_status: DeploymentStatus;
+    draft_state?: "ready" | "older_base" | null;
+    dry_run?: boolean;
+    files_catalog?: string | null;
     id: string;
     import_source_path?: string | null;
     imported_at?: string | null;
+    is_head?: boolean | null;
+    is_imported?: boolean | null;
+    linked_run_id?: string | null;
+    promoted_at?: string | null;
+    promoted_by_run_id?: string | null;
     release_version?: string | null;
+    replaced_at?: string | null;
+    replaced_by_version_id?: string | null;
     scope?: string;
+    scope_fence_mode?: string | null;
     status: ModelStatus;
     sync_error_text?: string | null;
     sync_state?: string;
@@ -988,6 +1109,50 @@ export interface NextVibesOut {
     model_version_id: string;
     status?: string;
     summary?: string;
+}
+export interface OobBusinessOut {
+    business_id?: string | null;
+    business_segment: string;
+    candidate_business_ids?: string[];
+    status: "existing" | "new" | "ambiguous";
+    versions?: OobVersionOut[];
+}
+export interface OobImportOut {
+    created_business_ids?: string[];
+    imported_versions?: number;
+    warnings?: string[];
+}
+export interface OobSummaryOut {
+    businesses?: OobBusinessOut[];
+    catalog?: string;
+    checked_at?: string | null;
+    checking?: boolean;
+    skipped_reason?: string | null;
+}
+export interface OobVersionOut {
+    refused_reason?: string | null;
+    scope: string;
+    version: number;
+}
+export interface OrphanSchemaDropOut {
+    error?: string | null;
+    name: string;
+    status: string;
+    table_count?: number;
+}
+export interface OrphanSchemaOut {
+    blocked_reason?: string | null;
+    match?: "exact" | "inferred";
+    name: string;
+    owned_by_app?: boolean;
+    owner?: string;
+    table_count?: number | null;
+}
+export interface OrphanSchemasOut {
+    catalog: string;
+    confirm_subject?: string | null;
+    impact?: UninstallImpactOut | null;
+    schemas?: OrphanSchemaOut[];
 }
 export interface PendingDecisionOut {
     affected: DecisionAffectedOut[];
@@ -1162,7 +1327,47 @@ export interface RunArtifactOut {
     model_version_id?: string | null;
     run_id?: string | null;
 }
+export interface RunChangeDecisionIn {
+    decision: "accepted" | "rejected";
+    element_kind: "domain" | "product" | "attribute";
+    element_path: string;
+}
+export interface RunChangeDecisionsIn {
+    decisions: RunChangeDecisionIn[];
+}
+export interface RunChangeOut {
+    change_class: "asked" | "outside_scope" | "not_asked" | "unclear";
+    change_kind: "added" | "modified" | "removed";
+    decided_at?: string | null;
+    decided_by?: string | null;
+    decision?: "accepted" | "rejected" | null;
+    element_kind: "domain" | "product" | "attribute";
+    element_path: string;
+    feedback_input_id?: string | null;
+}
+export interface RunChangeReviewConfigOut {
+    enabled: boolean;
+}
+export interface RunChangesOut {
+    base_version_id?: string | null;
+    changes?: RunChangeOut[];
+    decisions_open?: boolean;
+    run_id: string;
+    version_id: string;
+}
+export interface RunDefaultFieldOut {
+    locked?: boolean;
+    locked_scoped?: boolean;
+    source: "base_file" | "base_run" | "default" | "unknown";
+    value?: string | null;
+}
+export interface RunDefaultsOut {
+    base_version_id: string;
+    fields: Record<string, RunDefaultFieldOut>;
+    file_read: boolean;
+}
 export type RunIn = {
+    also_delete_replaced?: boolean;
     boolean_format?: string | null;
     business_context_path?: string;
     business_context_text?: string;
@@ -1172,9 +1377,11 @@ export type RunIn = {
     catalog_suffix?: string | null;
     cataloging_style?: string | null;
     classification_levels?: string | null;
+    confirmed_issues?: string[];
     context_id?: string | null;
     date_format?: string | null;
     deployment_catalog?: string;
+    dry_run?: boolean;
     ecm_schema_prefix?: string | null;
     generate_samples?: boolean;
     history_tracking_columns?: string | null;
@@ -1188,6 +1395,7 @@ export type RunIn = {
     org_divisions?: string | null;
     parent_version_id?: string | null;
     primary_key_suffix?: string | null;
+    runtime_budget_hours?: number | null;
     sample_count?: number | null;
     schema_prefix?: string | null;
     schema_suffix?: string | null;
@@ -1199,6 +1407,8 @@ export type RunIn = {
     version_id?: string | null;
     version_int?: number | null;
     vibe_instructions?: string;
+    vibe_scope?: VibeScope;
+    vibe_scope_domains?: string[];
 } & {
 };
 export interface RunLineageOut {
@@ -1256,6 +1466,8 @@ export interface RunOut {
     intent?: string;
     last_jobs_api_state?: string;
     last_poll_error?: string;
+    link_evidence?: string | null;
+    linked_at?: string | null;
     parameters_json: string;
     progress_message: string;
     progress_percent: number;
@@ -1270,6 +1482,39 @@ export interface RunOut {
     warnings?: Record<string, unknown>[];
     watchdog_state?: WatchdogState;
     watchdog_warm_up_seconds_remaining?: number;
+}
+export interface RunReportItemOut {
+    consumed: boolean;
+    consumed_by_run_id?: string | null;
+    created_at: string;
+    input_id: string;
+    origin: VibeInputOrigin;
+    outcome_reason?: string | null;
+    outcome_status?: string | null;
+    outcome_target?: string | null;
+    priority: VibeInputPriority;
+    selected_for_run: boolean;
+    status: VibeInputStatus;
+    text: string;
+}
+export interface RunReportOut {
+    business_id: string;
+    consume_note?: "dry_run_pending_install" | "dry_run_installed" | "sync_failed" | "version_mismatch" | "malformed" | "no_outcomes_reported" | "pre_0_9_0" | "install_consumed" | null;
+    dry_run: boolean;
+    expected_version?: number | null;
+    fetched_version?: number | null;
+    has_agent_report: boolean;
+    has_input_outcomes: boolean;
+    intent: string;
+    items?: RunReportItemOut[];
+    lineage_base_version?: number | null;
+    lineage_head_at_write?: number | null;
+    lineage_stale?: boolean | null;
+    output_version_id?: string | null;
+    run_id: string;
+    run_status: string;
+    unmatched_outcome_count?: number;
+    version_mismatch: boolean;
 }
 export const RunStatus = {
     pending: "pending",
@@ -1434,11 +1679,24 @@ export interface TaxonomyConfigOut {
     max_concurrency: number;
     model_service: string;
     ready: boolean;
+    updated_at?: string | null;
+    updated_by?: string | null;
 }
 export interface TaxonomyDomain {
     name: string;
     schema_name?: string;
     subdomains?: TaxonomySubdomain[];
+}
+export interface TaxonomyDraftCreateIn {
+    company_name: string;
+    industry: string;
+    key_systems?: string;
+    known_domains?: string;
+    one_liner?: string;
+    pasted_doc?: string;
+    regulators?: string;
+    seed_sections?: Record<string, TaxonomySection>;
+    seed_tree?: TaxonomyTree | null;
 }
 export interface TaxonomyDraftCreated {
     draft_id: string;
@@ -1485,6 +1743,9 @@ export interface TaxonomyRelationship {
     source: string;
     targets: string[];
 }
+export interface TaxonomySavedWizardOut {
+    saved?: TaxonomyWizardStateOut | null;
+}
 export interface TaxonomySection {
     claims: TaxonomyClaim[];
 }
@@ -1502,6 +1763,60 @@ export interface TaxonomyTree {
     domains: TaxonomyDomain[];
     relationships?: TaxonomyRelationship[];
     shared_masters?: TaxonomySharedMaster[];
+}
+export interface TaxonomyWizardDiscardOut {
+    discarded: boolean;
+}
+export interface TaxonomyWizardStateIn {
+    intake: TaxonomyIntake;
+    revision: number;
+    sections?: Record<string, TaxonomySection>;
+    sector_id?: string | null;
+    step: number;
+    strictness?: "strict" | "guided";
+    tree?: TaxonomyTree | null;
+}
+export interface TaxonomyWizardStateOut {
+    expires_at: string;
+    intake: TaxonomyIntake;
+    revision: number;
+    sections: Record<string, TaxonomySection>;
+    sector_id?: string | null;
+    step: number;
+    strictness: "strict" | "guided";
+    tree?: TaxonomyTree | null;
+    updated_at: string;
+}
+export interface UninstallImpactOut {
+    catalog: string;
+    has_data?: "yes" | "no" | "unknown";
+    installed_catalogs?: string[];
+    reasons?: string[];
+    schemas?: UninstallImpactSchemaOut[];
+    truncated?: boolean;
+    version_id: string;
+}
+export interface UninstallImpactSchemaOut {
+    name: string;
+    objects_listed?: boolean;
+    other_versions?: UninstallImpactVersionOut[];
+    owner?: string;
+    shared?: boolean;
+    tables?: UninstallImpactTableOut[];
+    views?: string[];
+    volumes?: string[];
+}
+export interface UninstallImpactTableOut {
+    has_data?: boolean | null;
+    kind: string;
+    name: string;
+}
+export interface UninstallImpactVersionOut {
+    business_id: string;
+    business_name: string;
+    scope: string;
+    version: number;
+    version_id: string;
 }
 export interface UserPreferenceDeleteOut {
     deleted: boolean;
@@ -1538,6 +1853,10 @@ export interface VersionHistoryEntryOut {
 export interface VersionOut {
     version: string;
 }
+export interface VersionReportOut {
+    report?: RunReportOut | null;
+    version_id: string;
+}
 export interface VersionResolutionOut {
     new_target: number;
     original_target: number;
@@ -1550,6 +1869,7 @@ export interface VersionTreeOut {
     deployment_status?: string;
     id: string;
     is_base?: boolean;
+    parent_deleted?: boolean;
     scope?: string;
     status: string;
     version: number;
@@ -1560,6 +1880,7 @@ export interface VibeInputAnchorOut {
     attribute_name?: string | null;
     domain_id?: string | null;
     domain_name?: string | null;
+    fk_edge_id?: string | null;
     fk_label?: string | null;
     fk_link_id?: string | null;
     level: string;
@@ -1610,7 +1931,8 @@ export interface VibeInputIn {
 }
 export const VibeInputOrigin = {
     user: "user",
-    agent_next_vibe: "agent_next_vibe"
+    agent_next_vibe: "agent_next_vibe",
+    change_rejection: "change_rejection"
 } as const;
 export type VibeInputOrigin = typeof VibeInputOrigin[keyof typeof VibeInputOrigin];
 export interface VibeInputOut {
@@ -1620,6 +1942,7 @@ export interface VibeInputOut {
     category?: NextVibeCategory | null;
     confidence_score: number | null;
     consumed: boolean;
+    consumed_by_run_id?: string | null;
     created_at: string;
     deprecated_by: string | null;
     id: string;
@@ -1649,6 +1972,12 @@ export const VibeInputStatus = {
     deprecated: "deprecated"
 } as const;
 export type VibeInputStatus = typeof VibeInputStatus[keyof typeof VibeInputStatus];
+export const VibeScope = {
+    all_domains: "all_domains",
+    some_domains: "some_domains",
+    some_subdomains: "some_subdomains"
+} as const;
+export type VibeScope = typeof VibeScope[keyof typeof VibeScope];
 export interface VolumeBrowseEntry {
     is_dir: boolean;
     kind: string;
@@ -1677,59 +2006,7 @@ export const WatchdogState = {
     disarmed: "disarmed"
 } as const;
 export type WatchdogState = typeof WatchdogState[keyof typeof WatchdogState];
-export const getBundledAgentInfo = async (options?: RequestInit): Promise<{
-    data: BundledAgentInfoOut;
-}> =>{
-    const res = await fetch("/api/admin/bundled-agent", {
-        ...options,
-        method: "GET"
-    });
-    if (!res.ok) {
-        const body = await res.text();
-        let parsed: unknown;
-        try {
-            parsed = JSON.parse(body);
-        } catch  {
-            parsed = body;
-        }
-        throw new ApiError(res.status, res.statusText, parsed);
-    }
-    return {
-        data: await res.json()
-    };
-};
-export const getBundledAgentInfoKey = ()=>{
-    return [
-        "/api/admin/bundled-agent"
-    ] as const;
-};
-export function useGetBundledAgentInfo<TData = {
-    data: BundledAgentInfoOut;
-}>(options?: {
-    query?: Omit<UseQueryOptions<{
-        data: BundledAgentInfoOut;
-    }, ApiError, TData>, "queryKey" | "queryFn">;
-}) {
-    return useQuery({
-        queryKey: getBundledAgentInfoKey(),
-        queryFn: ()=>getBundledAgentInfo(),
-        ...options?.query
-    });
-}
-export function useGetBundledAgentInfoSuspense<TData = {
-    data: BundledAgentInfoOut;
-}>(options?: {
-    query?: Omit<UseSuspenseQueryOptions<{
-        data: BundledAgentInfoOut;
-    }, ApiError, TData>, "queryKey" | "queryFn">;
-}) {
-    return useSuspenseQuery({
-        queryKey: getBundledAgentInfoKey(),
-        queryFn: ()=>getBundledAgentInfo(),
-        ...options?.query
-    });
-}
-export interface InstallBundledAgentParams {
+export interface SwitchToBundledAgentParams {
     "X-Forwarded-Host"?: string | null;
     "X-Forwarded-Preferred-Username"?: string | null;
     "X-Forwarded-User"?: string | null;
@@ -1737,10 +2014,10 @@ export interface InstallBundledAgentParams {
     "X-Request-Id"?: string | null;
     "X-Forwarded-Access-Token"?: string | null;
 }
-export const installBundledAgent = async (params?: InstallBundledAgentParams, options?: RequestInit): Promise<{
-    data: InstallBundledAgentOut;
+export const switchToBundledAgent = async (params?: SwitchToBundledAgentParams, options?: RequestInit): Promise<{
+    data: AgentConfigOut;
 }> =>{
-    const res = await fetch("/api/admin/install-bundled-agent", {
+    const res = await fetch("/api/admin/agent/switch-to-bundled", {
         ...options,
         method: "POST",
         headers: {
@@ -1779,15 +2056,15 @@ export const installBundledAgent = async (params?: InstallBundledAgentParams, op
         data: await res.json()
     };
 };
-export function useInstallBundledAgent(options?: {
+export function useSwitchToBundledAgent(options?: {
     mutation?: UseMutationOptions<{
-        data: InstallBundledAgentOut;
+        data: AgentConfigOut;
     }, ApiError, {
-        params: InstallBundledAgentParams;
+        params: SwitchToBundledAgentParams;
     }>;
 }) {
     return useMutation({
-        mutationFn: (vars)=>installBundledAgent(vars.params),
+        mutationFn: (vars)=>switchToBundledAgent(vars.params),
         ...options?.mutation
     });
 }
@@ -3111,7 +3388,7 @@ export interface DeleteBusinessParams {
     "X-Forwarded-Access-Token"?: string | null;
 }
 export const deleteBusiness = async (params: DeleteBusinessParams, options?: RequestInit): Promise<{
-    data: Record<string, unknown>;
+    data: BusinessDeleteOut;
 }> =>{
     const searchParams = new URLSearchParams();
     if (params?.cascade != null) searchParams.set("cascade", String(params?.cascade));
@@ -3158,7 +3435,7 @@ export const deleteBusiness = async (params: DeleteBusinessParams, options?: Req
 };
 export function useDeleteBusiness(options?: {
     mutation?: UseMutationOptions<{
-        data: Record<string, unknown>;
+        data: BusinessDeleteOut;
     }, ApiError, {
         params: DeleteBusinessParams;
     }>;
@@ -3721,6 +3998,12 @@ export interface ListVibeInputsParams {
     attribute_id?: string | null;
     fk_link_id?: string | null;
     model_wide?: boolean | null;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const listVibeInputs = async (params: ListVibeInputsParams, options?: RequestInit): Promise<{
     data: VibeInputOut[];
@@ -3743,7 +4026,28 @@ export const listVibeInputs = async (params: ListVibeInputsParams, options?: Req
     const url = queryString ? `/api/businesses/${params.business_id}/inputs?${queryString}` : `/api/businesses/${params.business_id}/inputs`;
     const res = await fetch(url, {
         ...options,
-        method: "GET"
+        method: "GET",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
     });
     if (!res.ok) {
         const body = await res.text();
@@ -3861,6 +4165,12 @@ export function useCreateVibeInput(options?: {
 }
 export interface SetVibeInputSelectionParams {
     business_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const setVibeInputSelection = async (params: SetVibeInputSelectionParams, data: VibeInputSelectionIn, options?: RequestInit): Promise<{
     data: VibeInputOut[];
@@ -3870,6 +4180,24 @@ export const setVibeInputSelection = async (params: SetVibeInputSelectionParams,
         method: "POST",
         headers: {
             "Content-Type": "application/json",
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
             ...options?.headers
         },
         body: JSON.stringify(data)
@@ -3904,13 +4232,40 @@ export function useSetVibeInputSelection(options?: {
 export interface GetVibeInputParams {
     business_id: string;
     input_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const getVibeInput = async (params: GetVibeInputParams, options?: RequestInit): Promise<{
     data: VibeInputOut;
 }> =>{
     const res = await fetch(`/api/businesses/${params.business_id}/inputs/${params.input_id}`, {
         ...options,
-        method: "GET"
+        method: "GET",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
     });
     if (!res.ok) {
         const body = await res.text();
@@ -3963,6 +4318,12 @@ export function useGetVibeInputSuspense<TData = {
 export interface UpdateVibeInputParams {
     business_id: string;
     input_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const updateVibeInput = async (params: UpdateVibeInputParams, data: VibeInputPatchIn, options?: RequestInit): Promise<{
     data: VibeInputOut;
@@ -3972,6 +4333,24 @@ export const updateVibeInput = async (params: UpdateVibeInputParams, data: VibeI
         method: "PATCH",
         headers: {
             "Content-Type": "application/json",
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
             ...options?.headers
         },
         body: JSON.stringify(data)
@@ -4070,13 +4449,40 @@ export function useDeleteVibeInput(options?: {
 export interface ConsumeVibeInputParams {
     business_id: string;
     input_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const consumeVibeInput = async (params: ConsumeVibeInputParams, options?: RequestInit): Promise<{
     data: VibeInputOut;
 }> =>{
     const res = await fetch(`/api/businesses/${params.business_id}/inputs/${params.input_id}/consume`, {
         ...options,
-        method: "POST"
+        method: "POST",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
     });
     if (!res.ok) {
         const body = await res.text();
@@ -4107,13 +4513,40 @@ export function useConsumeVibeInput(options?: {
 export interface ListVibeInputLinksParams {
     business_id: string;
     input_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const listVibeInputLinks = async (params: ListVibeInputLinksParams, options?: RequestInit): Promise<{
     data: VibeInputContextLinkOut[];
 }> =>{
     const res = await fetch(`/api/businesses/${params.business_id}/inputs/${params.input_id}/links`, {
         ...options,
-        method: "GET"
+        method: "GET",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
     });
     if (!res.ok) {
         const body = await res.text();
@@ -4166,6 +4599,12 @@ export function useListVibeInputLinksSuspense<TData = {
 export interface AddVibeInputLinkParams {
     business_id: string;
     input_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const addVibeInputLink = async (params: AddVibeInputLinkParams, data: VibeInputContextLinkIn, options?: RequestInit): Promise<{
     data: VibeInputContextLinkOut;
@@ -4175,6 +4614,24 @@ export const addVibeInputLink = async (params: AddVibeInputLinkParams, data: Vib
         method: "POST",
         headers: {
             "Content-Type": "application/json",
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
             ...options?.headers
         },
         body: JSON.stringify(data)
@@ -4209,13 +4666,40 @@ export function useAddVibeInputLink(options?: {
 export interface RestoreVibeInputParams {
     business_id: string;
     input_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const restoreVibeInput = async (params: RestoreVibeInputParams, options?: RequestInit): Promise<{
     data: VibeInputOut;
 }> =>{
     const res = await fetch(`/api/businesses/${params.business_id}/inputs/${params.input_id}/restore`, {
         ...options,
-        method: "POST"
+        method: "POST",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
     });
     if (!res.ok) {
         const body = await res.text();
@@ -4246,13 +4730,40 @@ export function useRestoreVibeInput(options?: {
 export interface UnconsumeVibeInputParams {
     business_id: string;
     input_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const unconsumeVibeInput = async (params: UnconsumeVibeInputParams, options?: RequestInit): Promise<{
     data: VibeInputOut;
 }> =>{
     const res = await fetch(`/api/businesses/${params.business_id}/inputs/${params.input_id}/unconsume`, {
         ...options,
-        method: "POST"
+        method: "POST",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
     });
     if (!res.ok) {
         const body = await res.text();
@@ -4283,6 +4794,12 @@ export function useUnconsumeVibeInput(options?: {
 export interface GetReviewQueueParams {
     business_id: string;
     version_id?: string | null;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const getReviewQueue = async (params: GetReviewQueueParams, options?: RequestInit): Promise<{
     data: ReviewQueueOut;
@@ -4293,7 +4810,28 @@ export const getReviewQueue = async (params: GetReviewQueueParams, options?: Req
     const url = queryString ? `/api/businesses/${params.business_id}/links/review-queue?${queryString}` : `/api/businesses/${params.business_id}/links/review-queue`;
     const res = await fetch(url, {
         ...options,
-        method: "GET"
+        method: "GET",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
     });
     if (!res.ok) {
         const body = await res.text();
@@ -4410,13 +4948,40 @@ export function useAcceptReviewLink(options?: {
 export interface DismissReviewLinkParams {
     business_id: string;
     link_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const dismissReviewLink = async (params: DismissReviewLinkParams, options?: RequestInit): Promise<{
     data: VibeInputOut;
 }> =>{
     const res = await fetch(`/api/businesses/${params.business_id}/links/${params.link_id}/review/dismiss`, {
         ...options,
-        method: "POST"
+        method: "POST",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
     });
     if (!res.ok) {
         const body = await res.text();
@@ -4508,6 +5073,128 @@ export function useReanchorReviewLink(options?: {
 }) {
     return useMutation({
         mutationFn: (vars)=>reanchorReviewLink(vars.params, vars.data),
+        ...options?.mutation
+    });
+}
+export interface ListMetamodelCleanupsParams {
+    business_id: string;
+}
+export const listMetamodelCleanups = async (params: ListMetamodelCleanupsParams, options?: RequestInit): Promise<{
+    data: MetamodelCleanupOut[];
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/metamodel-cleanups`, {
+        ...options,
+        method: "GET"
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const listMetamodelCleanupsKey = (params?: ListMetamodelCleanupsParams)=>{
+    return [
+        "/api/businesses/{business_id}/metamodel-cleanups",
+        params
+    ] as const;
+};
+export function useListMetamodelCleanups<TData = {
+    data: MetamodelCleanupOut[];
+}>(options: {
+    params: ListMetamodelCleanupsParams;
+    query?: Omit<UseQueryOptions<{
+        data: MetamodelCleanupOut[];
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: listMetamodelCleanupsKey(options.params),
+        queryFn: ()=>listMetamodelCleanups(options.params),
+        ...options?.query
+    });
+}
+export function useListMetamodelCleanupsSuspense<TData = {
+    data: MetamodelCleanupOut[];
+}>(options: {
+    params: ListMetamodelCleanupsParams;
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: MetamodelCleanupOut[];
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: listMetamodelCleanupsKey(options.params),
+        queryFn: ()=>listMetamodelCleanups(options.params),
+        ...options?.query
+    });
+}
+export interface RetryMetamodelCleanupParams {
+    business_id: string;
+    cleanup_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const retryMetamodelCleanup = async (params: RetryMetamodelCleanupParams, options?: RequestInit): Promise<{
+    data: MetamodelCleanupOut;
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/metamodel-cleanups/${params.cleanup_id}/retry`, {
+        ...options,
+        method: "POST",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function useRetryMetamodelCleanup(options?: {
+    mutation?: UseMutationOptions<{
+        data: MetamodelCleanupOut;
+    }, ApiError, {
+        params: RetryMetamodelCleanupParams;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>retryMetamodelCleanup(vars.params),
         ...options?.mutation
     });
 }
@@ -4877,6 +5564,65 @@ export function useExportModelBundleSuspense<TData = {
         ...options?.query
     });
 }
+export interface GetRunDefaultsParams {
+    business_id: string;
+    model_version_id: string;
+}
+export const getRunDefaults = async (params: GetRunDefaultsParams, options?: RequestInit): Promise<{
+    data: RunDefaultsOut;
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/model-versions/${params.model_version_id}/run-defaults`, {
+        ...options,
+        method: "GET"
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const getRunDefaultsKey = (params?: GetRunDefaultsParams)=>{
+    return [
+        "/api/businesses/{business_id}/model-versions/{model_version_id}/run-defaults",
+        params
+    ] as const;
+};
+export function useGetRunDefaults<TData = {
+    data: RunDefaultsOut;
+}>(options: {
+    params: GetRunDefaultsParams;
+    query?: Omit<UseQueryOptions<{
+        data: RunDefaultsOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: getRunDefaultsKey(options.params),
+        queryFn: ()=>getRunDefaults(options.params),
+        ...options?.query
+    });
+}
+export function useGetRunDefaultsSuspense<TData = {
+    data: RunDefaultsOut;
+}>(options: {
+    params: GetRunDefaultsParams;
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: RunDefaultsOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: getRunDefaultsKey(options.params),
+        queryFn: ()=>getRunDefaults(options.params),
+        ...options?.query
+    });
+}
 export interface PublishModelVersionParams {
     business_id: string;
     version_id: string;
@@ -5011,6 +5757,227 @@ export function usePreviewPublishModelVersion(options?: {
         ...options?.mutation
     });
 }
+export interface ImportOobVersionsForBusinessParams {
+    business_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const importOobVersionsForBusiness = async (params: ImportOobVersionsForBusinessParams, options?: RequestInit): Promise<{
+    data: OobImportOut;
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/oob/import`, {
+        ...options,
+        method: "POST",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function useImportOobVersionsForBusiness(options?: {
+    mutation?: UseMutationOptions<{
+        data: OobImportOut;
+    }, ApiError, {
+        params: ImportOobVersionsForBusinessParams;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>importOobVersionsForBusiness(vars.params),
+        ...options?.mutation
+    });
+}
+export interface ListOrphanSchemasParams {
+    business_id: string;
+    catalog?: string | null;
+    schemas?: string[];
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const listOrphanSchemas = async (params: ListOrphanSchemasParams, options?: RequestInit): Promise<{
+    data: OrphanSchemasOut;
+}> =>{
+    const searchParams = new URLSearchParams();
+    if (params?.catalog != null) searchParams.set("catalog", String(params?.catalog));
+    if (params?.schemas != null) params?.schemas.forEach((v)=>searchParams.append("schemas", String(v)));
+    const queryString = searchParams.toString();
+    const url = queryString ? `/api/businesses/${params.business_id}/orphan-schemas?${queryString}` : `/api/businesses/${params.business_id}/orphan-schemas`;
+    const res = await fetch(url, {
+        ...options,
+        method: "GET",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const listOrphanSchemasKey = (params?: ListOrphanSchemasParams)=>{
+    return [
+        "/api/businesses/{business_id}/orphan-schemas",
+        params
+    ] as const;
+};
+export function useListOrphanSchemas<TData = {
+    data: OrphanSchemasOut;
+}>(options: {
+    params: ListOrphanSchemasParams;
+    query?: Omit<UseQueryOptions<{
+        data: OrphanSchemasOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: listOrphanSchemasKey(options.params),
+        queryFn: ()=>listOrphanSchemas(options.params),
+        ...options?.query
+    });
+}
+export function useListOrphanSchemasSuspense<TData = {
+    data: OrphanSchemasOut;
+}>(options: {
+    params: ListOrphanSchemasParams;
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: OrphanSchemasOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: listOrphanSchemasKey(options.params),
+        queryFn: ()=>listOrphanSchemas(options.params),
+        ...options?.query
+    });
+}
+export interface DropOrphanSchemasParams {
+    business_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const dropOrphanSchemas = async (params: DropOrphanSchemasParams, data: DropOrphanSchemasIn, options?: RequestInit): Promise<{
+    data: DropOrphanSchemasOut;
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/orphan-schemas/drop`, {
+        ...options,
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        },
+        body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function useDropOrphanSchemas(options?: {
+    mutation?: UseMutationOptions<{
+        data: DropOrphanSchemasOut;
+    }, ApiError, {
+        params: DropOrphanSchemasParams;
+        data: DropOrphanSchemasIn;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>dropOrphanSchemas(vars.params, vars.data),
+        ...options?.mutation
+    });
+}
 export interface ListRunsParams {
     business_id: string;
 }
@@ -5137,6 +6104,12 @@ export function useCreateRun(options?: {
 }
 export interface ValidateRunParams {
     business_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const validateRun = async (params: ValidateRunParams, data: RunIn, options?: RequestInit): Promise<{
     data: ValidateRunOut;
@@ -5146,6 +6119,24 @@ export const validateRun = async (params: ValidateRunParams, data: RunIn, option
         method: "POST",
         headers: {
             "Content-Type": "application/json",
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
             ...options?.headers
         },
         body: JSON.stringify(data)
@@ -5676,6 +6667,196 @@ export function useCancelRunWithRollback(options?: {
         ...options?.mutation
     });
 }
+export interface GetRunChangesParams {
+    business_id: string;
+    run_id: string;
+}
+export const getRunChanges = async (params: GetRunChangesParams, options?: RequestInit): Promise<{
+    data: RunChangesOut;
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/runs/${params.run_id}/changes`, {
+        ...options,
+        method: "GET"
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const getRunChangesKey = (params?: GetRunChangesParams)=>{
+    return [
+        "/api/businesses/{business_id}/runs/{run_id}/changes",
+        params
+    ] as const;
+};
+export function useGetRunChanges<TData = {
+    data: RunChangesOut;
+}>(options: {
+    params: GetRunChangesParams;
+    query?: Omit<UseQueryOptions<{
+        data: RunChangesOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: getRunChangesKey(options.params),
+        queryFn: ()=>getRunChanges(options.params),
+        ...options?.query
+    });
+}
+export function useGetRunChangesSuspense<TData = {
+    data: RunChangesOut;
+}>(options: {
+    params: GetRunChangesParams;
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: RunChangesOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: getRunChangesKey(options.params),
+        queryFn: ()=>getRunChanges(options.params),
+        ...options?.query
+    });
+}
+export interface SetRunChangeDecisionsParams {
+    business_id: string;
+    run_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const setRunChangeDecisions = async (params: SetRunChangeDecisionsParams, data: RunChangeDecisionsIn, options?: RequestInit): Promise<{
+    data: RunChangesOut;
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/runs/${params.run_id}/changes/decisions`, {
+        ...options,
+        method: "PUT",
+        headers: {
+            "Content-Type": "application/json",
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        },
+        body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function useSetRunChangeDecisions(options?: {
+    mutation?: UseMutationOptions<{
+        data: RunChangesOut;
+    }, ApiError, {
+        params: SetRunChangeDecisionsParams;
+        data: RunChangeDecisionsIn;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>setRunChangeDecisions(vars.params, vars.data),
+        ...options?.mutation
+    });
+}
+export interface AddRejectedChangesAsFeedbackParams {
+    business_id: string;
+    run_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const addRejectedChangesAsFeedback = async (params: AddRejectedChangesAsFeedbackParams, options?: RequestInit): Promise<{
+    data: RunChangesOut;
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/runs/${params.run_id}/changes/rejected-feedback`, {
+        ...options,
+        method: "POST",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function useAddRejectedChangesAsFeedback(options?: {
+    mutation?: UseMutationOptions<{
+        data: RunChangesOut;
+    }, ApiError, {
+        params: AddRejectedChangesAsFeedbackParams;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>addRejectedChangesAsFeedback(vars.params),
+        ...options?.mutation
+    });
+}
 export interface GetRunLineageParams {
     business_id: string;
     run_id: string;
@@ -5858,6 +7039,65 @@ export function useGetRunProgressSuspense<TData = {
         ...options?.query
     });
 }
+export interface GetRunReportParams {
+    business_id: string;
+    run_id: string;
+}
+export const getRunReport = async (params: GetRunReportParams, options?: RequestInit): Promise<{
+    data: RunReportOut;
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/runs/${params.run_id}/report`, {
+        ...options,
+        method: "GET"
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const getRunReportKey = (params?: GetRunReportParams)=>{
+    return [
+        "/api/businesses/{business_id}/runs/{run_id}/report",
+        params
+    ] as const;
+};
+export function useGetRunReport<TData = {
+    data: RunReportOut;
+}>(options: {
+    params: GetRunReportParams;
+    query?: Omit<UseQueryOptions<{
+        data: RunReportOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: getRunReportKey(options.params),
+        queryFn: ()=>getRunReport(options.params),
+        ...options?.query
+    });
+}
+export function useGetRunReportSuspense<TData = {
+    data: RunReportOut;
+}>(options: {
+    params: GetRunReportParams;
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: RunReportOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: getRunReportKey(options.params),
+        queryFn: ()=>getRunReport(options.params),
+        ...options?.query
+    });
+}
 export interface ResumeRunParams {
     business_id: string;
     run_id: string;
@@ -5984,6 +7224,65 @@ export function useRetryRun(options?: {
     return useMutation({
         mutationFn: (vars)=>retryRun(vars.params),
         ...options?.mutation
+    });
+}
+export interface ListRunSchemaDropsParams {
+    business_id: string;
+    run_id: string;
+}
+export const listRunSchemaDrops = async (params: ListRunSchemaDropsParams, options?: RequestInit): Promise<{
+    data: OrphanSchemaDropOut[];
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/runs/${params.run_id}/schema-drops`, {
+        ...options,
+        method: "GET"
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const listRunSchemaDropsKey = (params?: ListRunSchemaDropsParams)=>{
+    return [
+        "/api/businesses/{business_id}/runs/{run_id}/schema-drops",
+        params
+    ] as const;
+};
+export function useListRunSchemaDrops<TData = {
+    data: OrphanSchemaDropOut[];
+}>(options: {
+    params: ListRunSchemaDropsParams;
+    query?: Omit<UseQueryOptions<{
+        data: OrphanSchemaDropOut[];
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: listRunSchemaDropsKey(options.params),
+        queryFn: ()=>listRunSchemaDrops(options.params),
+        ...options?.query
+    });
+}
+export function useListRunSchemaDropsSuspense<TData = {
+    data: OrphanSchemaDropOut[];
+}>(options: {
+    params: ListRunSchemaDropsParams;
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: OrphanSchemaDropOut[];
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: listRunSchemaDropsKey(options.params),
+        queryFn: ()=>listRunSchemaDrops(options.params),
+        ...options?.query
     });
 }
 export interface SeedModelParams {
@@ -6114,10 +7413,11 @@ export interface ImportVersionFromVolumeParams {
     business_id: string;
     volume_path: string;
     new_version_number?: number | null;
-    scope?: string;
+    scope?: "ecm" | "mvm" | null;
     catalog?: string | null;
     base_version_id?: string | null;
     vibe_instructions?: string;
+    databricks_run_id?: number | null;
     "X-Forwarded-Host"?: string | null;
     "X-Forwarded-Preferred-Username"?: string | null;
     "X-Forwarded-User"?: string | null;
@@ -6135,6 +7435,7 @@ export const importVersionFromVolume = async (params: ImportVersionFromVolumePar
     if (params?.catalog != null) searchParams.set("catalog", String(params?.catalog));
     if (params?.base_version_id != null) searchParams.set("base_version_id", String(params?.base_version_id));
     if (params?.vibe_instructions != null) searchParams.set("vibe_instructions", String(params?.vibe_instructions));
+    if (params?.databricks_run_id != null) searchParams.set("databricks_run_id", String(params?.databricks_run_id));
     const queryString = searchParams.toString();
     const url = queryString ? `/api/businesses/${params.business_id}/versions/import-from-volume?${queryString}` : `/api/businesses/${params.business_id}/versions/import-from-volume`;
     const res = await fetch(url, {
@@ -6191,7 +7492,6 @@ export function useImportVersionFromVolume(options?: {
 export interface DeleteVersionParams {
     business_id: string;
     version_id: string;
-    reinstall_previous?: boolean;
     "X-Forwarded-Host"?: string | null;
     "X-Forwarded-Preferred-Username"?: string | null;
     "X-Forwarded-User"?: string | null;
@@ -6202,11 +7502,7 @@ export interface DeleteVersionParams {
 export const deleteVersion = async (params: DeleteVersionParams, options?: RequestInit): Promise<{
     data: DeleteVersionOut;
 }> =>{
-    const searchParams = new URLSearchParams();
-    if (params?.reinstall_previous != null) searchParams.set("reinstall_previous", String(params?.reinstall_previous));
-    const queryString = searchParams.toString();
-    const url = queryString ? `/api/businesses/${params.business_id}/versions/${params.version_id}?${queryString}` : `/api/businesses/${params.business_id}/versions/${params.version_id}`;
-    const res = await fetch(url, {
+    const res = await fetch(`/api/businesses/${params.business_id}/versions/${params.version_id}`, {
         ...options,
         method: "DELETE",
         headers: {
@@ -6262,7 +7558,7 @@ export interface CheckDeploymentCatalogParams {
     version_id: string;
 }
 export const checkDeploymentCatalog = async (params: CheckDeploymentCatalogParams, options?: RequestInit): Promise<{
-    data: Record<string, unknown>;
+    data: DeploymentCatalogCheckOut;
 }> =>{
     const res = await fetch(`/api/businesses/${params.business_id}/versions/${params.version_id}/deployment/catalog-check`, {
         ...options,
@@ -6289,11 +7585,11 @@ export const checkDeploymentCatalogKey = (params?: CheckDeploymentCatalogParams)
     ] as const;
 };
 export function useCheckDeploymentCatalog<TData = {
-    data: Record<string, unknown>;
+    data: DeploymentCatalogCheckOut;
 }>(options: {
     params: CheckDeploymentCatalogParams;
     query?: Omit<UseQueryOptions<{
-        data: Record<string, unknown>;
+        data: DeploymentCatalogCheckOut;
     }, ApiError, TData>, "queryKey" | "queryFn">;
 }) {
     return useQuery({
@@ -6303,11 +7599,11 @@ export function useCheckDeploymentCatalog<TData = {
     });
 }
 export function useCheckDeploymentCatalogSuspense<TData = {
-    data: Record<string, unknown>;
+    data: DeploymentCatalogCheckOut;
 }>(options: {
     params: CheckDeploymentCatalogParams;
     query?: Omit<UseSuspenseQueryOptions<{
-        data: Record<string, unknown>;
+        data: DeploymentCatalogCheckOut;
     }, ApiError, TData>, "queryKey" | "queryFn">;
 }) {
     return useSuspenseQuery({
@@ -6321,7 +7617,7 @@ export interface CompareDeploymentParams {
     version_id: string;
 }
 export const compareDeployment = async (params: CompareDeploymentParams, options?: RequestInit): Promise<{
-    data: Record<string, unknown>;
+    data: DeploymentVerificationOut;
 }> =>{
     const res = await fetch(`/api/businesses/${params.business_id}/versions/${params.version_id}/deployment/compare`, {
         ...options,
@@ -6348,11 +7644,11 @@ export const compareDeploymentKey = (params?: CompareDeploymentParams)=>{
     ] as const;
 };
 export function useCompareDeployment<TData = {
-    data: Record<string, unknown>;
+    data: DeploymentVerificationOut;
 }>(options: {
     params: CompareDeploymentParams;
     query?: Omit<UseQueryOptions<{
-        data: Record<string, unknown>;
+        data: DeploymentVerificationOut;
     }, ApiError, TData>, "queryKey" | "queryFn">;
 }) {
     return useQuery({
@@ -6362,11 +7658,11 @@ export function useCompareDeployment<TData = {
     });
 }
 export function useCompareDeploymentSuspense<TData = {
-    data: Record<string, unknown>;
+    data: DeploymentVerificationOut;
 }>(options: {
     params: CompareDeploymentParams;
     query?: Omit<UseSuspenseQueryOptions<{
-        data: Record<string, unknown>;
+        data: DeploymentVerificationOut;
     }, ApiError, TData>, "queryKey" | "queryFn">;
 }) {
     return useSuspenseQuery({
@@ -6380,7 +7676,7 @@ export interface GetDeployedUcSchemaParams {
     version_id: string;
 }
 export const getDeployedUcSchema = async (params: GetDeployedUcSchemaParams, options?: RequestInit): Promise<{
-    data: Record<string, unknown>;
+    data: DeployedUcSchemaOut;
 }> =>{
     const res = await fetch(`/api/businesses/${params.business_id}/versions/${params.version_id}/deployment/uc-schema`, {
         ...options,
@@ -6407,11 +7703,11 @@ export const getDeployedUcSchemaKey = (params?: GetDeployedUcSchemaParams)=>{
     ] as const;
 };
 export function useGetDeployedUcSchema<TData = {
-    data: Record<string, unknown>;
+    data: DeployedUcSchemaOut;
 }>(options: {
     params: GetDeployedUcSchemaParams;
     query?: Omit<UseQueryOptions<{
-        data: Record<string, unknown>;
+        data: DeployedUcSchemaOut;
     }, ApiError, TData>, "queryKey" | "queryFn">;
 }) {
     return useQuery({
@@ -6421,11 +7717,11 @@ export function useGetDeployedUcSchema<TData = {
     });
 }
 export function useGetDeployedUcSchemaSuspense<TData = {
-    data: Record<string, unknown>;
+    data: DeployedUcSchemaOut;
 }>(options: {
     params: GetDeployedUcSchemaParams;
     query?: Omit<UseSuspenseQueryOptions<{
-        data: Record<string, unknown>;
+        data: DeployedUcSchemaOut;
     }, ApiError, TData>, "queryKey" | "queryFn">;
 }) {
     return useSuspenseQuery({
@@ -6437,13 +7733,40 @@ export function useGetDeployedUcSchemaSuspense<TData = {
 export interface CarryForwardInputsParams {
     business_id: string;
     version_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const carryForwardInputs = async (params: CarryForwardInputsParams, options?: RequestInit): Promise<{
     data: CarryForwardResultOut;
 }> =>{
     const res = await fetch(`/api/businesses/${params.business_id}/versions/${params.version_id}/inputs/carry-forward`, {
         ...options,
-        method: "POST"
+        method: "POST",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
     });
     if (!res.ok) {
         const body = await res.text();
@@ -6474,6 +7797,12 @@ export function useCarryForwardInputs(options?: {
 export interface CompileVibeInputsParams {
     business_id: string;
     version_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const compileVibeInputs = async (params: CompileVibeInputsParams, data: CompileIn, options?: RequestInit): Promise<{
     data: CompileOut;
@@ -6483,6 +7812,24 @@ export const compileVibeInputs = async (params: CompileVibeInputsParams, data: C
         method: "POST",
         headers: {
             "Content-Type": "application/json",
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
             ...options?.headers
         },
         body: JSON.stringify(data)
@@ -6512,6 +7859,199 @@ export function useCompileVibeInputs(options?: {
     return useMutation({
         mutationFn: (vars)=>compileVibeInputs(vars.params, vars.data),
         ...options?.mutation
+    });
+}
+export interface LinkRunParams {
+    business_id: string;
+    version_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const linkRun = async (params: LinkRunParams, data: LinkRunIn, options?: RequestInit): Promise<{
+    data: RunOut;
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/versions/${params.version_id}/link-run`, {
+        ...options,
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        },
+        body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function useLinkRun(options?: {
+    mutation?: UseMutationOptions<{
+        data: RunOut;
+    }, ApiError, {
+        params: LinkRunParams;
+        data: LinkRunIn;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>linkRun(vars.params, vars.data),
+        ...options?.mutation
+    });
+}
+export interface PreviewLinkRunParams {
+    business_id: string;
+    version_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const previewLinkRun = async (params: PreviewLinkRunParams, data: LinkRunIn, options?: RequestInit): Promise<{
+    data: LinkRunPreviewOut;
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/versions/${params.version_id}/link-run/preview`, {
+        ...options,
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        },
+        body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function usePreviewLinkRun(options?: {
+    mutation?: UseMutationOptions<{
+        data: LinkRunPreviewOut;
+    }, ApiError, {
+        params: PreviewLinkRunParams;
+        data: LinkRunIn;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>previewLinkRun(vars.params, vars.data),
+        ...options?.mutation
+    });
+}
+export interface GetVersionReportParams {
+    business_id: string;
+    version_id: string;
+}
+export const getVersionReport = async (params: GetVersionReportParams, options?: RequestInit): Promise<{
+    data: VersionReportOut;
+}> =>{
+    const res = await fetch(`/api/businesses/${params.business_id}/versions/${params.version_id}/report`, {
+        ...options,
+        method: "GET"
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const getVersionReportKey = (params?: GetVersionReportParams)=>{
+    return [
+        "/api/businesses/{business_id}/versions/{version_id}/report",
+        params
+    ] as const;
+};
+export function useGetVersionReport<TData = {
+    data: VersionReportOut;
+}>(options: {
+    params: GetVersionReportParams;
+    query?: Omit<UseQueryOptions<{
+        data: VersionReportOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: getVersionReportKey(options.params),
+        queryFn: ()=>getVersionReport(options.params),
+        ...options?.query
+    });
+}
+export function useGetVersionReportSuspense<TData = {
+    data: VersionReportOut;
+}>(options: {
+    params: GetVersionReportParams;
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: VersionReportOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: getVersionReportKey(options.params),
+        queryFn: ()=>getVersionReport(options.params),
+        ...options?.query
     });
 }
 export interface ForceResyncVersionParams {
@@ -6640,6 +8180,99 @@ export function useSyncModelVersion(options?: {
     return useMutation({
         mutationFn: (vars)=>syncModelVersion(vars.params),
         ...options?.mutation
+    });
+}
+export interface GetUninstallImpactParams {
+    business_id: string;
+    version_id: string;
+    catalog?: string | null;
+    cataloging_style?: "One Catalog" | "Catalog per Division" | "Catalog per Domain" | null;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const getUninstallImpact = async (params: GetUninstallImpactParams, options?: RequestInit): Promise<{
+    data: UninstallImpactOut;
+}> =>{
+    const searchParams = new URLSearchParams();
+    if (params?.catalog != null) searchParams.set("catalog", String(params?.catalog));
+    if (params?.cataloging_style != null) searchParams.set("cataloging_style", String(params?.cataloging_style));
+    const queryString = searchParams.toString();
+    const url = queryString ? `/api/businesses/${params.business_id}/versions/${params.version_id}/uninstall-impact?${queryString}` : `/api/businesses/${params.business_id}/versions/${params.version_id}/uninstall-impact`;
+    const res = await fetch(url, {
+        ...options,
+        method: "GET",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const getUninstallImpactKey = (params?: GetUninstallImpactParams)=>{
+    return [
+        "/api/businesses/{business_id}/versions/{version_id}/uninstall-impact",
+        params
+    ] as const;
+};
+export function useGetUninstallImpact<TData = {
+    data: UninstallImpactOut;
+}>(options: {
+    params: GetUninstallImpactParams;
+    query?: Omit<UseQueryOptions<{
+        data: UninstallImpactOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: getUninstallImpactKey(options.params),
+        queryFn: ()=>getUninstallImpact(options.params),
+        ...options?.query
+    });
+}
+export function useGetUninstallImpactSuspense<TData = {
+    data: UninstallImpactOut;
+}>(options: {
+    params: GetUninstallImpactParams;
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: UninstallImpactOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: getUninstallImpactKey(options.params),
+        queryFn: ()=>getUninstallImpact(options.params),
+        ...options?.query
     });
 }
 export interface GetDiagramLayoutParams {
@@ -7458,13 +9091,40 @@ export interface ClearProductReviewParams {
     version_int: number;
     scope: string;
     product_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
 }
 export const clearProductReview = async (params: ClearProductReviewParams, options?: RequestInit): Promise<{
     data: Record<string, unknown>;
 }> =>{
     const res = await fetch(`/api/businesses/${params.business_id}/versions/${params.version_int}/${params.scope}/reviews/product/${params.product_id}`, {
         ...options,
-        method: "DELETE"
+        method: "DELETE",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
     });
     if (!res.ok) {
         const body = await res.text();
@@ -7689,7 +9349,7 @@ export function useGetStatisticsReportXlsxSuspense<TData = {
     });
 }
 export const listCatalogs = async (options?: RequestInit): Promise<{
-    data: unknown[];
+    data: CatalogOut[];
 }> =>{
     const res = await fetch("/api/catalogs", {
         ...options,
@@ -7715,10 +9375,10 @@ export const listCatalogsKey = ()=>{
     ] as const;
 };
 export function useListCatalogs<TData = {
-    data: unknown[];
+    data: CatalogOut[];
 }>(options?: {
     query?: Omit<UseQueryOptions<{
-        data: unknown[];
+        data: CatalogOut[];
     }, ApiError, TData>, "queryKey" | "queryFn">;
 }) {
     return useQuery({
@@ -7728,15 +9388,77 @@ export function useListCatalogs<TData = {
     });
 }
 export function useListCatalogsSuspense<TData = {
-    data: unknown[];
+    data: CatalogOut[];
 }>(options?: {
     query?: Omit<UseSuspenseQueryOptions<{
-        data: unknown[];
+        data: CatalogOut[];
     }, ApiError, TData>, "queryKey" | "queryFn">;
 }) {
     return useSuspenseQuery({
         queryKey: listCatalogsKey(),
         queryFn: ()=>listCatalogs(),
+        ...options?.query
+    });
+}
+export interface GetCatalogCapabilitiesParams {
+    names?: string[];
+}
+export const getCatalogCapabilities = async (params?: GetCatalogCapabilitiesParams, options?: RequestInit): Promise<{
+    data: CatalogCapabilityOut[];
+}> =>{
+    const searchParams = new URLSearchParams();
+    if (params?.names != null) params?.names.forEach((v)=>searchParams.append("names", String(v)));
+    const queryString = searchParams.toString();
+    const url = queryString ? `/api/catalogs/capabilities?${queryString}` : "/api/catalogs/capabilities";
+    const res = await fetch(url, {
+        ...options,
+        method: "GET"
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const getCatalogCapabilitiesKey = (params?: GetCatalogCapabilitiesParams)=>{
+    return [
+        "/api/catalogs/capabilities",
+        params
+    ] as const;
+};
+export function useGetCatalogCapabilities<TData = {
+    data: CatalogCapabilityOut[];
+}>(options?: {
+    params?: GetCatalogCapabilitiesParams;
+    query?: Omit<UseQueryOptions<{
+        data: CatalogCapabilityOut[];
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: getCatalogCapabilitiesKey(options?.params),
+        queryFn: ()=>getCatalogCapabilities(options?.params),
+        ...options?.query
+    });
+}
+export function useGetCatalogCapabilitiesSuspense<TData = {
+    data: CatalogCapabilityOut[];
+}>(options?: {
+    params?: GetCatalogCapabilitiesParams;
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: CatalogCapabilityOut[];
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: getCatalogCapabilitiesKey(options?.params),
+        queryFn: ()=>getCatalogCapabilities(options?.params),
         ...options?.query
     });
 }
@@ -8618,10 +10340,10 @@ export function useSetMetamodelCatalog(options?: {
         ...options?.mutation
     });
 }
-export const checkOobVersions = async (options?: RequestInit): Promise<{
-    data: Record<string, unknown>;
+export const getRunChangeReviewConfig = async (options?: RequestInit): Promise<{
+    data: RunChangeReviewConfigOut;
 }> =>{
-    const res = await fetch("/api/config/oob-check", {
+    const res = await fetch("/api/config/run-change-review", {
         ...options,
         method: "GET"
     });
@@ -8639,97 +10361,35 @@ export const checkOobVersions = async (options?: RequestInit): Promise<{
         data: await res.json()
     };
 };
-export const checkOobVersionsKey = ()=>{
+export const getRunChangeReviewConfigKey = ()=>{
     return [
-        "/api/config/oob-check"
+        "/api/config/run-change-review"
     ] as const;
 };
-export function useCheckOobVersions<TData = {
-    data: Record<string, unknown>;
+export function useGetRunChangeReviewConfig<TData = {
+    data: RunChangeReviewConfigOut;
 }>(options?: {
     query?: Omit<UseQueryOptions<{
-        data: Record<string, unknown>;
+        data: RunChangeReviewConfigOut;
     }, ApiError, TData>, "queryKey" | "queryFn">;
 }) {
     return useQuery({
-        queryKey: checkOobVersionsKey(),
-        queryFn: ()=>checkOobVersions(),
+        queryKey: getRunChangeReviewConfigKey(),
+        queryFn: ()=>getRunChangeReviewConfig(),
         ...options?.query
     });
 }
-export function useCheckOobVersionsSuspense<TData = {
-    data: Record<string, unknown>;
+export function useGetRunChangeReviewConfigSuspense<TData = {
+    data: RunChangeReviewConfigOut;
 }>(options?: {
     query?: Omit<UseSuspenseQueryOptions<{
-        data: Record<string, unknown>;
+        data: RunChangeReviewConfigOut;
     }, ApiError, TData>, "queryKey" | "queryFn">;
 }) {
     return useSuspenseQuery({
-        queryKey: checkOobVersionsKey(),
-        queryFn: ()=>checkOobVersions(),
+        queryKey: getRunChangeReviewConfigKey(),
+        queryFn: ()=>getRunChangeReviewConfig(),
         ...options?.query
-    });
-}
-export interface ImportOobVersionsParams {
-    "X-Forwarded-Host"?: string | null;
-    "X-Forwarded-Preferred-Username"?: string | null;
-    "X-Forwarded-User"?: string | null;
-    "X-Forwarded-Email"?: string | null;
-    "X-Request-Id"?: string | null;
-    "X-Forwarded-Access-Token"?: string | null;
-}
-export const importOobVersions = async (params?: ImportOobVersionsParams, options?: RequestInit): Promise<{
-    data: Record<string, unknown>;
-}> =>{
-    const res = await fetch("/api/config/oob-import", {
-        ...options,
-        method: "POST",
-        headers: {
-            ...(params?.["X-Forwarded-Host"] != null && {
-                "X-Forwarded-Host": params["X-Forwarded-Host"]
-            }),
-            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
-                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
-            }),
-            ...(params?.["X-Forwarded-User"] != null && {
-                "X-Forwarded-User": params["X-Forwarded-User"]
-            }),
-            ...(params?.["X-Forwarded-Email"] != null && {
-                "X-Forwarded-Email": params["X-Forwarded-Email"]
-            }),
-            ...(params?.["X-Request-Id"] != null && {
-                "X-Request-Id": params["X-Request-Id"]
-            }),
-            ...(params?.["X-Forwarded-Access-Token"] != null && {
-                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
-            }),
-            ...options?.headers
-        }
-    });
-    if (!res.ok) {
-        const body = await res.text();
-        let parsed: unknown;
-        try {
-            parsed = JSON.parse(body);
-        } catch  {
-            parsed = body;
-        }
-        throw new ApiError(res.status, res.statusText, parsed);
-    }
-    return {
-        data: await res.json()
-    };
-};
-export function useImportOobVersions(options?: {
-    mutation?: UseMutationOptions<{
-        data: Record<string, unknown>;
-    }, ApiError, {
-        params: ImportOobVersionsParams;
-    }>;
-}) {
-    return useMutation({
-        mutationFn: (vars)=>importOobVersions(vars.params),
-        ...options?.mutation
     });
 }
 export const getSourceAuthConfig = async (options?: RequestInit): Promise<{
@@ -9697,6 +11357,72 @@ export function useCreateIndustry(options?: {
         ...options?.mutation
     });
 }
+export interface ApplyIndustryScopePrefixesParams {
+    business_id: string;
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const applyIndustryScopePrefixes = async (params: ApplyIndustryScopePrefixesParams, data: IndustryScopePrefixesIn, options?: RequestInit): Promise<{
+    data: IndustryScopePrefixesOut;
+}> =>{
+    const res = await fetch(`/api/industries/${params.business_id}/scope-prefixes`, {
+        ...options,
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        },
+        body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function useApplyIndustryScopePrefixes(options?: {
+    mutation?: UseMutationOptions<{
+        data: IndustryScopePrefixesOut;
+    }, ApiError, {
+        params: ApplyIndustryScopePrefixesParams;
+        data: IndustryScopePrefixesIn;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>applyIndustryScopePrefixes(vars.params, vars.data),
+        ...options?.mutation
+    });
+}
 export interface UpdateIndustryParams {
     industry_id: string;
     "X-Forwarded-Host"?: string | null;
@@ -10243,6 +11969,214 @@ export function useListRunsForVersionSuspense<TData = {
     return useSuspenseQuery({
         queryKey: listRunsForVersionKey(options.params),
         queryFn: ()=>listRunsForVersion(options.params),
+        ...options?.query
+    });
+}
+export interface CheckOobNowParams {
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const checkOobNow = async (params?: CheckOobNowParams, options?: RequestInit): Promise<{
+    data: OobSummaryOut;
+}> =>{
+    const res = await fetch("/api/oob/check", {
+        ...options,
+        method: "POST",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function useCheckOobNow(options?: {
+    mutation?: UseMutationOptions<{
+        data: OobSummaryOut;
+    }, ApiError, {
+        params: CheckOobNowParams;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>checkOobNow(vars.params),
+        ...options?.mutation
+    });
+}
+export interface ImportOobNewBusinessesParams {
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const importOobNewBusinesses = async (params?: ImportOobNewBusinessesParams, options?: RequestInit): Promise<{
+    data: OobImportOut;
+}> =>{
+    const res = await fetch("/api/oob/import-new-businesses", {
+        ...options,
+        method: "POST",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function useImportOobNewBusinesses(options?: {
+    mutation?: UseMutationOptions<{
+        data: OobImportOut;
+    }, ApiError, {
+        params: ImportOobNewBusinessesParams;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>importOobNewBusinesses(vars.params),
+        ...options?.mutation
+    });
+}
+export interface GetOobSummaryParams {
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const getOobSummary = async (params?: GetOobSummaryParams, options?: RequestInit): Promise<{
+    data: OobSummaryOut;
+}> =>{
+    const res = await fetch("/api/oob/summary", {
+        ...options,
+        method: "GET",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const getOobSummaryKey = (params?: GetOobSummaryParams)=>{
+    return [
+        "/api/oob/summary",
+        params
+    ] as const;
+};
+export function useGetOobSummary<TData = {
+    data: OobSummaryOut;
+}>(options?: {
+    params?: GetOobSummaryParams;
+    query?: Omit<UseQueryOptions<{
+        data: OobSummaryOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: getOobSummaryKey(options?.params),
+        queryFn: ()=>getOobSummary(options?.params),
+        ...options?.query
+    });
+}
+export function useGetOobSummarySuspense<TData = {
+    data: OobSummaryOut;
+}>(options?: {
+    params?: GetOobSummaryParams;
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: OobSummaryOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: getOobSummaryKey(options?.params),
+        queryFn: ()=>getOobSummary(options?.params),
         ...options?.query
     });
 }
@@ -10880,7 +12814,7 @@ export interface CreateTaxonomyDraftParams {
     "X-Request-Id"?: string | null;
     "X-Forwarded-Access-Token"?: string | null;
 }
-export const createTaxonomyDraft = async (data: TaxonomyIntake, params?: CreateTaxonomyDraftParams, options?: RequestInit): Promise<{
+export const createTaxonomyDraft = async (data: TaxonomyDraftCreateIn, params?: CreateTaxonomyDraftParams, options?: RequestInit): Promise<{
     data: TaxonomyDraftCreated;
 }> =>{
     const res = await fetch("/api/taxonomy/drafts", {
@@ -10929,7 +12863,7 @@ export function useCreateTaxonomyDraft(options?: {
         data: TaxonomyDraftCreated;
     }, ApiError, {
         params: CreateTaxonomyDraftParams;
-        data: TaxonomyIntake;
+        data: TaxonomyDraftCreateIn;
     }>;
 }) {
     return useMutation({
@@ -11199,6 +13133,217 @@ export function useGetTaxonomyExampleSuspense<TData = {
         queryKey: getTaxonomyExampleKey(),
         queryFn: ()=>getTaxonomyExample(),
         ...options?.query
+    });
+}
+export interface GetSavedTaxonomyWizardParams {
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const getSavedTaxonomyWizard = async (params?: GetSavedTaxonomyWizardParams, options?: RequestInit): Promise<{
+    data: TaxonomySavedWizardOut;
+}> =>{
+    const res = await fetch("/api/taxonomy/saved", {
+        ...options,
+        method: "GET",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export const getSavedTaxonomyWizardKey = (params?: GetSavedTaxonomyWizardParams)=>{
+    return [
+        "/api/taxonomy/saved",
+        params
+    ] as const;
+};
+export function useGetSavedTaxonomyWizard<TData = {
+    data: TaxonomySavedWizardOut;
+}>(options?: {
+    params?: GetSavedTaxonomyWizardParams;
+    query?: Omit<UseQueryOptions<{
+        data: TaxonomySavedWizardOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useQuery({
+        queryKey: getSavedTaxonomyWizardKey(options?.params),
+        queryFn: ()=>getSavedTaxonomyWizard(options?.params),
+        ...options?.query
+    });
+}
+export function useGetSavedTaxonomyWizardSuspense<TData = {
+    data: TaxonomySavedWizardOut;
+}>(options?: {
+    params?: GetSavedTaxonomyWizardParams;
+    query?: Omit<UseSuspenseQueryOptions<{
+        data: TaxonomySavedWizardOut;
+    }, ApiError, TData>, "queryKey" | "queryFn">;
+}) {
+    return useSuspenseQuery({
+        queryKey: getSavedTaxonomyWizardKey(options?.params),
+        queryFn: ()=>getSavedTaxonomyWizard(options?.params),
+        ...options?.query
+    });
+}
+export interface SaveTaxonomyWizardParams {
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const saveTaxonomyWizard = async (data: TaxonomyWizardStateIn, params?: SaveTaxonomyWizardParams, options?: RequestInit): Promise<{
+    data: TaxonomyWizardStateOut;
+}> =>{
+    const res = await fetch("/api/taxonomy/saved", {
+        ...options,
+        method: "PUT",
+        headers: {
+            "Content-Type": "application/json",
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        },
+        body: JSON.stringify(data)
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function useSaveTaxonomyWizard(options?: {
+    mutation?: UseMutationOptions<{
+        data: TaxonomyWizardStateOut;
+    }, ApiError, {
+        params: SaveTaxonomyWizardParams;
+        data: TaxonomyWizardStateIn;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>saveTaxonomyWizard(vars.data, vars.params),
+        ...options?.mutation
+    });
+}
+export interface DiscardTaxonomyWizardParams {
+    "X-Forwarded-Host"?: string | null;
+    "X-Forwarded-Preferred-Username"?: string | null;
+    "X-Forwarded-User"?: string | null;
+    "X-Forwarded-Email"?: string | null;
+    "X-Request-Id"?: string | null;
+    "X-Forwarded-Access-Token"?: string | null;
+}
+export const discardTaxonomyWizard = async (params?: DiscardTaxonomyWizardParams, options?: RequestInit): Promise<{
+    data: TaxonomyWizardDiscardOut;
+}> =>{
+    const res = await fetch("/api/taxonomy/saved", {
+        ...options,
+        method: "DELETE",
+        headers: {
+            ...(params?.["X-Forwarded-Host"] != null && {
+                "X-Forwarded-Host": params["X-Forwarded-Host"]
+            }),
+            ...(params?.["X-Forwarded-Preferred-Username"] != null && {
+                "X-Forwarded-Preferred-Username": params["X-Forwarded-Preferred-Username"]
+            }),
+            ...(params?.["X-Forwarded-User"] != null && {
+                "X-Forwarded-User": params["X-Forwarded-User"]
+            }),
+            ...(params?.["X-Forwarded-Email"] != null && {
+                "X-Forwarded-Email": params["X-Forwarded-Email"]
+            }),
+            ...(params?.["X-Request-Id"] != null && {
+                "X-Request-Id": params["X-Request-Id"]
+            }),
+            ...(params?.["X-Forwarded-Access-Token"] != null && {
+                "X-Forwarded-Access-Token": params["X-Forwarded-Access-Token"]
+            }),
+            ...options?.headers
+        }
+    });
+    if (!res.ok) {
+        const body = await res.text();
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(body);
+        } catch  {
+            parsed = body;
+        }
+        throw new ApiError(res.status, res.statusText, parsed);
+    }
+    return {
+        data: await res.json()
+    };
+};
+export function useDiscardTaxonomyWizard(options?: {
+    mutation?: UseMutationOptions<{
+        data: TaxonomyWizardDiscardOut;
+    }, ApiError, {
+        params: DiscardTaxonomyWizardParams;
+    }>;
+}) {
+    return useMutation({
+        mutationFn: (vars)=>discardTaxonomyWizard(vars.params),
+        ...options?.mutation
     });
 }
 export interface GetCatalogSchemaWarningParams {

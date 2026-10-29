@@ -21,6 +21,9 @@ names (which get a leading ``_`` so the segment is a legal UC identifier).
 
 from __future__ import annotations
 
+import re
+from typing import NamedTuple, Optional
+
 from ._names import agent_business_segment
 
 # Short scope tokens the agent uses in folder names. The widget value
@@ -59,6 +62,14 @@ def metamodel_root_for_business(deployment_catalog: str, business_name: str) -> 
             "segment; cannot build a metamodel root path"
         )
     return f"/Volumes/{deployment_catalog}/_metamodel/vol_root/business/{biz}"
+
+
+def file_in_folder(file_path: str, folder: str) -> bool:
+    """Whether ``file_path`` sits directly in ``folder``, compared
+    case-insensitively and without a trailing slash. The one test for an
+    import whose file is already in the app's folder for the version (kept in
+    place, never copied, never deleted with the version)."""
+    return file_path.rsplit("/", 1)[0].rstrip("/").lower() == folder.rstrip("/").lower()
 
 
 def version_dir_in_volume(
@@ -141,6 +152,18 @@ def model_json_volume_path(
     return f"{version_dir_in_volume(deployment_catalog, business_name, version_int, scope)}/model.json"
 
 
+# The app's backup of a model.json it rewrote in place (the industry prefix
+# fix: ``model.json.pre090``). It stays next to the file it backs up; the
+# folder copier and the artifact indexer leave it out, and the agent's
+# ``*.json`` discovery ignores it (nb 50503-50520).
+MODEL_JSON_BACKUP_SUFFIX = ".pre090"
+
+
+def is_app_backup(path: str) -> bool:
+    """Whether ``path`` is a backup the app wrote (:data:`MODEL_JSON_BACKUP_SUFFIX`)."""
+    return str(path or "").endswith(MODEL_JSON_BACKUP_SUFFIX)
+
+
 def model_json_volume_candidates(
     deployment_catalog: str,
     business_name: str,
@@ -158,3 +181,32 @@ def model_json_volume_candidates(
             deployment_catalog, business_name, version_int, scope
         )
     ]
+
+
+class VersionDirKey(NamedTuple):
+    """What a version folder path says: its catalog, business segment,
+    version and short scope."""
+
+    catalog: str
+    business_segment: str
+    version: int
+    scope: str
+
+
+_VERSION_DIR_RE = re.compile(
+    r"^/Volumes/(?P<catalog>[^/]+)/_metamodel/vol_root/business/(?P<biz>[^/]+)/"
+    r"(?:v(?P<nested_v>\d+)/(?P<nested_s>ecm|mvm)|(?P<flat_s>ecm|mvm)_v(?P<flat_v>\d+))"
+    r"(?:/model\.json)?/?$"
+)
+
+
+def version_dir_key(path: Optional[str]) -> Optional[VersionDirKey]:
+    """The inverse of :func:`version_dir_candidates`: the key of a version
+    folder (nested or flat), or of the ``model.json`` at its top, or None for
+    any other path."""
+    m = _VERSION_DIR_RE.match(path or "")
+    if m is None:
+        return None
+    version = m.group("nested_v") or m.group("flat_v")
+    scope = m.group("nested_s") or m.group("flat_s")
+    return VersionDirKey(m.group("catalog"), m.group("biz"), int(version), scope)

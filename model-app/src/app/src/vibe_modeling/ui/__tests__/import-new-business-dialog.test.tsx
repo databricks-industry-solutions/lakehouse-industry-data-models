@@ -25,8 +25,26 @@ vi.mock("@/lib/api", async () => {
     analyzeImportRoot: vi.fn(),
     createBusinessAndExecuteImport: vi.fn(),
     getImportPreview: vi.fn(),
+    useListIndustries: vi.fn(() => ({ data: { data: INDUSTRIES } })),
   };
 });
+
+const industry = (id: string, name: string, short_name: string) => ({
+  id,
+  name,
+  short_name,
+  description: "",
+  notable_businesses: "",
+  display_order: 0,
+  is_active: true,
+  is_auto_created: false,
+});
+
+const INDUSTRIES = [
+  industry("ind-energy", "Energy - Utilities", "utilities"),
+  industry("hc-a", "Health Care", "healthcare"),
+  industry("hc-b", "Health-Care", "hc"),
+];
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn() },
@@ -112,6 +130,8 @@ describe("ImportNewBusinessDialog", () => {
         warnings: [],
         action: "import_as_is",
         inferred_version: "v1_ecm",
+        inferred_scope: "ecm",
+        scope_settled: true,
         business_digest: {
           business_name: "Quantum Co",
           industry_alignment: "Quantum Computing",
@@ -123,7 +143,6 @@ describe("ImportNewBusinessDialog", () => {
           common_business_jargons: "decoherence",
           operational_systems_of_records: "JIRA",
           industry_governing_body: "NIST",
-          industry_will_be_created: true,
         },
       },
     } as unknown as Awaited<ReturnType<typeof analyzeImportRoot>>);
@@ -136,6 +155,7 @@ describe("ImportNewBusinessDialog", () => {
         products: 7,
         attributes: 20,
         fk_links: 4,
+        warnings: ["Seeding the agent's registry (_metamodel) failed."],
       },
     } as unknown as Awaited<ReturnType<typeof createBusinessAndExecuteImport>>);
 
@@ -178,10 +198,11 @@ describe("ImportNewBusinessDialog", () => {
       "agent v27",
     );
 
-    // industry_will_be_created note rendered.
-    expect(
-      screen.getByTestId("industry-will-be-created-note"),
-    ).toBeInTheDocument();
+    // No catalog industry matches: the dialog says so and offers to add it.
+    expect(screen.getByTestId("industry-not-in-catalog")).toHaveTextContent(
+      '"Quantum Computing" is not in the industry catalog',
+    );
+    expect(screen.getByTestId("add-industry-checkbox")).not.toBeChecked();
 
     // Business context fields are NOT displayed in the dialog — they
     // belong to BusinessContext (per-run input), not Business identity.
@@ -206,8 +227,17 @@ describe("ImportNewBusinessDialog", () => {
         industry_alignment_override: "Quantum Computing",
         description_override: "A quantum business",
         business_vibes_override: "## Detailed\nAssembled draft of the business.",
+        industry_id: null,
+        create_industry: false,
+        scope: null,
       });
     });
+    // The response's warnings reach the user.
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith("Imported with warnings", {
+        description: "Seeding the agent's registry (_metamodel) failed.",
+      }),
+    );
   });
 
   it("disables submit when the digest has no business_name and the user clears the field", async () => {
@@ -222,6 +252,8 @@ describe("ImportNewBusinessDialog", () => {
         warnings: [],
         action: "import_as_is",
         inferred_version: "v1_ecm",
+        inferred_scope: "ecm",
+        scope_settled: true,
         business_digest: {
           business_name: "Acme",
           industry_alignment: "",
@@ -231,7 +263,6 @@ describe("ImportNewBusinessDialog", () => {
           common_business_jargons: "",
           operational_systems_of_records: "",
           industry_governing_body: "",
-          industry_will_be_created: false,
         },
       },
     } as unknown as Awaited<ReturnType<typeof analyzeImportRoot>>);
@@ -278,6 +309,8 @@ describe("ImportNewBusinessDialog", () => {
         warnings: [],
         action: "import_as_is",
         inferred_version: "v1_ecm",
+        inferred_scope: "ecm",
+        scope_settled: true,
         business_digest: {
           business_name: "NoDesc Co",
           industry_alignment: "Retail",
@@ -287,7 +320,6 @@ describe("ImportNewBusinessDialog", () => {
           common_business_jargons: "",
           operational_systems_of_records: "",
           industry_governing_body: "",
-          industry_will_be_created: false,
         },
       },
     } as unknown as Awaited<ReturnType<typeof analyzeImportRoot>>);
@@ -340,13 +372,14 @@ describe("ImportNewBusinessDialog", () => {
         warnings: [],
         action: "import_as_is",
         inferred_version: "v1_ecm",
+        inferred_scope: "ecm",
+        scope_settled: true,
         business_digest: {
           business_name: "Dup Co",
           industry_alignment: "Retail",
           description: "A business that already exists by name",
           business_vibes: "draft vibes",
           agent_version: "27",
-          industry_will_be_created: false,
         },
       },
     } as unknown as Awaited<ReturnType<typeof analyzeImportRoot>>);
@@ -418,13 +451,14 @@ describe("ImportNewBusinessDialog", () => {
         warnings: [],
         action: "import_as_is",
         inferred_version: "v1_ecm",
+        inferred_scope: "ecm",
+        scope_settled: true,
         business_digest: {
           business_name: "New Co",
           industry_alignment: "Retail",
           description: "A brand new business from import",
           business_vibes: "draft vibes",
           agent_version: "27",
-          industry_will_be_created: true,
         },
       },
     } as unknown as Awaited<ReturnType<typeof analyzeImportRoot>>);
@@ -498,6 +532,8 @@ describe("ImportNewBusinessDialog", () => {
         warnings: [],
         action: "import_as_is",
         inferred_version: "v1_ecm",
+        inferred_scope: "ecm",
+        scope_settled: true,
         business_digest: {
           business_name: "Acme",
           industry_alignment: "Retail",
@@ -507,7 +543,6 @@ describe("ImportNewBusinessDialog", () => {
           common_business_jargons: "",
           operational_systems_of_records: "",
           industry_governing_body: "",
-          industry_will_be_created: false,
         },
       },
     } as unknown as Awaited<ReturnType<typeof analyzeImportRoot>>);
@@ -549,6 +584,8 @@ describe("ImportNewBusinessDialog", () => {
         warnings: [],
         action: "import_as_is",
         inferred_version: "v1_ecm",
+        inferred_scope: "ecm",
+        scope_settled: true,
         business_digest: {
           business_name: "Acme",
           industry_alignment: "Retail",
@@ -558,7 +595,6 @@ describe("ImportNewBusinessDialog", () => {
           common_business_jargons: "",
           operational_systems_of_records: "",
           industry_governing_body: "",
-          industry_will_be_created: false,
         },
       },
     } as unknown as Awaited<ReturnType<typeof analyzeImportRoot>>);
@@ -600,5 +636,208 @@ describe("ImportNewBusinessDialog", () => {
     await act(async () => {
       resolveCreate({ data: { business_id: "b1", version_id: "v1", version: 1, domains: 1, products: 1, attributes: 1, fk_links: 0 } });
     });
+  });
+  function analyzed(industry_alignment: string, industry_id: string | null) {
+    mockedAnalyze.mockResolvedValue({
+      data: {
+        valid: true,
+        message: "ok",
+        domain_count: 1,
+        product_count: 1,
+        attribute_count: 1,
+        fk_count: 0,
+        warnings: [],
+        action: "import_as_is",
+        inferred_version: "v1_mvm",
+        inferred_scope: "ecm",
+        scope_settled: true,
+        business_digest: {
+          business_name: "Grid Co",
+          industry_alignment,
+          industry_id,
+          description: "A grid business",
+          business_vibes: "vibes",
+        },
+      },
+    } as unknown as Awaited<ReturnType<typeof analyzeImportRoot>>);
+    mockedCreate.mockResolvedValue({
+      data: { business_id: "biz-1", version_id: "v-1", version: 1, domains: 1, products: 1, attributes: 1, fk_links: 0 },
+    } as unknown as Awaited<ReturnType<typeof createBusinessAndExecuteImport>>);
+  }
+
+  async function openAndAnalyze() {
+    render(wrap(<ImportNewBusinessDialog trigger={<button type="button">Open</button>} />));
+    fireEvent.click(await screen.findByRole("button", { name: /^Open$/ }));
+    fireEvent.change(await screen.findByPlaceholderText(/\/Volumes\/catalog/), {
+      target: { value: "/Volumes/c/s/v/model.json" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Analyze$/i }));
+    });
+    await screen.findByDisplayValue("Grid Co");
+  }
+
+  it("pre-fills the catalog name of the industry the backend resolved", async () => {
+    analyzed("energy-utilities", "ind-energy");
+    await openAndAnalyze();
+
+    expect(screen.getByRole("combobox")).toHaveTextContent("Energy - Utilities");
+    expect(screen.queryByTestId("industry-not-in-catalog")).not.toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Create business and import/i }));
+    });
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
+    expect(mockedCreate.mock.calls[0][0]).toMatchObject({
+      industry_alignment_override: "Energy - Utilities",
+      industry_id: "ind-energy",
+      create_industry: false,
+    });
+  });
+
+  it("adds an unmatched industry to the catalog only when the box is checked", async () => {
+    analyzed("Quantum Computing", null);
+    await openAndAnalyze();
+
+    const box = screen.getByTestId("add-industry-checkbox");
+    expect(box).not.toBeChecked();
+    fireEvent.click(box);
+    expect(box).toBeChecked();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Create business and import/i }));
+    });
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
+    expect(mockedCreate.mock.calls[0][0]).toMatchObject({
+      industry_alignment_override: "Quantum Computing",
+      create_industry: true,
+    });
+  });
+  it("lists and checks the industry a typed slug resolves to", async () => {
+    analyzed("Quantum Computing", null);
+    await openAndAnalyze();
+
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.change(await screen.findByPlaceholderText(/Search or type an industry/), {
+      target: { value: "energy_utilities" },
+    });
+
+    const item = await screen.findByRole("option", { name: /Energy - Utilities/ });
+    expect(item.querySelector("svg")).toHaveClass("opacity-100");
+    expect(screen.queryByText(/No catalog industry matches/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("industry-not-in-catalog")).not.toBeInTheDocument();
+  });
+  async function typeIndustry(value: string) {
+    if (!screen.queryByPlaceholderText(/Search or type an industry/)) {
+      fireEvent.click(screen.getByRole("combobox"));
+    }
+    fireEvent.change(await screen.findByPlaceholderText(/Search or type an industry/), {
+      target: { value },
+    });
+  }
+
+  async function submit() {
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Create business and import/i }));
+    });
+    await waitFor(() => expect(mockedCreate).toHaveBeenCalledTimes(1));
+    return mockedCreate.mock.calls[0][0];
+  }
+
+  it("clearing the industry resets the add-to-catalog choice", async () => {
+    analyzed("Foo", null);
+    await openAndAnalyze();
+    fireEvent.click(screen.getByTestId("add-industry-checkbox"));
+    expect(screen.getByTestId("add-industry-checkbox")).toBeChecked();
+
+    await typeIndustry("");
+    expect(screen.queryByTestId("add-industry-checkbox")).not.toBeInTheDocument();
+    await typeIndustry("Foo");
+    expect(screen.getByTestId("add-industry-checkbox")).not.toBeChecked();
+    expect(await submit()).toMatchObject({ industry_alignment_override: "Foo", create_industry: false });
+  });
+
+  it("offers no add-to-catalog choice for an alignment without letters or digits", async () => {
+    analyzed("%_%", null);
+    await openAndAnalyze();
+    expect(screen.queryByTestId("industry-not-in-catalog")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("add-industry-checkbox")).not.toBeInTheDocument();
+    expect(await submit()).toMatchObject({ industry_alignment_override: "%_%", create_industry: false, industry_id: null });
+  });
+
+  it("asks the user to pick one of several industries an alignment matches", async () => {
+    analyzed("health care", null);
+    await openAndAnalyze();
+    const chooser = screen.getByTestId("industry-ambiguous");
+    expect(chooser).toHaveTextContent('"health care" matches 2 catalog industries');
+    expect(screen.queryByTestId("add-industry-checkbox")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Health-Care" }));
+    expect(screen.queryByTestId("industry-ambiguous")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox")).toHaveTextContent("Health-Care");
+    expect(await submit()).toMatchObject({
+      industry_alignment_override: "Health-Care",
+      industry_id: "hc-b",
+      create_industry: false,
+    });
+  });
+
+  it("sends the id the backend resolved even when its name alone is ambiguous", async () => {
+    analyzed("healthcare", "hc-a");
+    await openAndAnalyze();
+    expect(screen.getByRole("combobox")).toHaveTextContent("Health Care");
+    expect(screen.queryByTestId("industry-ambiguous")).not.toBeInTheDocument();
+    expect(await submit()).toMatchObject({ industry_alignment_override: "Health Care", industry_id: "hc-a" });
+  });
+
+  it("shows the backend's message when the create is refused", async () => {
+    analyzed("Foo", null);
+    mockedCreate.mockReset();
+    mockedCreate.mockRejectedValue(
+      new ApiError(400, "Bad Request", { detail: "'Foo' cannot name an industry: it has no letters or digits." }),
+    );
+    await openAndAnalyze();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Create business and import/i }));
+    });
+    expect(await screen.findByText("'Foo' cannot name an industry: it has no letters or digits.")).toBeInTheDocument();
+    expect(screen.queryByText(/HTTP 400/)).not.toBeInTheDocument();
+  });
+
+  it("shows the server's message when analyze is refused", async () => {
+    mockedAnalyze.mockRejectedValue(
+      new ApiError(400, "Bad Request", { detail: "No model.json at /Volumes/c/s/v/model.json." }),
+    );
+    render(wrap(<ImportNewBusinessDialog trigger={<button type="button">Open</button>} />));
+    fireEvent.click(await screen.findByRole("button", { name: /^Open$/ }));
+    fireEvent.change(await screen.findByPlaceholderText(/\/Volumes\/catalog/), {
+      target: { value: "/Volumes/c/s/v/model.json" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Analyze$/i }));
+    });
+    expect(await screen.findByText("No model.json at /Volumes/c/s/v/model.json.")).toBeInTheDocument();
+    expect(screen.queryByText(/HTTP 400/)).not.toBeInTheDocument();
+  });
+
+  it("shows the candidates' message on an ambiguous 409", async () => {
+    analyzed("Foo", null);
+    mockedCreate.mockReset();
+    mockedCreate.mockRejectedValue(
+      new ApiError(409, "Conflict", {
+        detail: {
+          error: "industry_ambiguous",
+          industries: [{ id: "a", name: "Foo" }, { id: "b", name: "FOO" }],
+          message: "'Foo' matches 2 catalog industries ('FOO', 'Foo'). Pick one of them.",
+        },
+      }),
+    );
+    await openAndAnalyze();
+    fireEvent.click(screen.getByTestId("add-industry-checkbox"));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Create business and import/i }));
+    });
+    expect(await screen.findByText(/matches 2 catalog industries \('FOO', 'Foo'\)/)).toBeInTheDocument();
+    expect(screen.getByTestId("add-industry-checkbox")).not.toBeChecked();
   });
 });

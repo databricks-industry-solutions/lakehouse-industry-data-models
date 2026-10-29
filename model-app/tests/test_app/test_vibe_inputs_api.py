@@ -195,6 +195,8 @@ def test_restore_system_deprecated_409(client, biz_version, engine):
         s.commit()
     r = client.post(f"/api/businesses/{bid}/inputs/{vi['id']}/restore")
     assert r.status_code == 409
+    assert "can't be restored" in r.json()["detail"]
+    assert "add it again as new feedback" in r.json()["detail"]
 
 
 def test_list_filters(client, biz_version, engine):
@@ -263,6 +265,25 @@ def test_unconsume_creates_one_link_to_head(client, biz_version, engine):
     r = client.post(f"/api/businesses/{bid}/inputs/{vi['id']}/unconsume")
     assert r.status_code == 200
     assert r.json()["consumed"] is False
+
+
+def test_unconsume_clears_the_consuming_run(client, biz_version, engine):
+    from vibe_modeling.backend.db_models import Run, VibeInput
+
+    bid, vid = biz_version
+    vi = _create(client, bid, vid)
+    with Session(engine) as s:
+        run = Run(business_id=bid, intent="vibe-iterate", status="completed")
+        s.add(run)
+        s.flush()
+        row = s.get(VibeInput, vi["id"])
+        row.consumed, row.consumed_by_run_id = True, run.id
+        s.add(row)
+        s.commit()
+    r = client.post(f"/api/businesses/{bid}/inputs/{vi['id']}/unconsume")
+    assert r.status_code == 200
+    assert r.json()["consumed"] is False
+    assert r.json()["consumed_by_run_id"] is None
 
 
 def test_unconsume_links_only_to_head_via_tiers(client, biz_version, engine):
@@ -385,6 +406,30 @@ def test_compile_endpoint_scopes_to_business(client, biz_version):
     assert body["included_input_ids"] == [a["id"]]
     assert "## Model-wide" in body["markdown"]
     assert "- (medium) rule a" in body["markdown"]
+
+
+def test_compile_endpoint_returns_each_items_scope_domain(client, biz_version, engine):
+    """The wire carries the scope domain per item, for a scoped call and an
+    unscoped one alike; a model-wide item maps to null."""
+    bid, vid = biz_version
+    with Session(engine) as s:
+        d = Domain(version_id=vid, name="Sales")
+        s.add(d)
+        s.commit()
+        d_id = d.id
+    anchored = _create(client, bid, vid, text="sales rule", domain_id=d_id)
+    model_wide = _create(client, bid, vid, text="global rule")
+    url = f"/api/businesses/{bid}/versions/{vid}/inputs/compile"
+    ids = [anchored["id"], model_wide["id"]]
+
+    unscoped = client.post(url, json={"input_ids": ids})
+    assert unscoped.status_code == 200, unscoped.text
+    assert unscoped.json()["input_scope_domains"] == {anchored["id"]: "Sales", model_wide["id"]: None}
+
+    scoped = client.post(url, json={"input_ids": ids, "vibe_scope_domains": ["Sales"]})
+    assert scoped.status_code == 200, scoped.text
+    assert scoped.json()["input_scope_domains"] == unscoped.json()["input_scope_domains"]
+    assert scoped.json()["included_input_ids"] == [anchored["id"]]
 
 
 # --- setVibeInputSelection (persisted run-selection) --------------------------
@@ -544,9 +589,87 @@ def test_create_origin_context_resolves_fk(client, biz_version, engine):
 def test_create_origin_context_model_wide(client, biz_version, engine):
     bid, vid = biz_version
     _seed_model(engine, vid)
-    vi = _create(client, bid, vid, origin_context={"view_mode": "er"})
+    vi = _create(client, bid, vid, origin_context={})
     lk = _link_of(engine, vi["id"])
     assert lk.domain_id is None and lk.product_id is None and lk.fk_link_id is None
+    assert lk.needs_link_review is False
+
+
+def _seed_attribute(engine, product_id, name="amount"):
+    from vibe_modeling.backend.db_models import Attribute
+    with Session(engine) as s:
+        a = Attribute(product_id=product_id, name=name, type="decimal")
+        s.add(a)
+        s.commit()
+        return a.id
+
+
+def test_create_origin_context_resolves_attribute(client, biz_version, engine):
+    bid, vid = biz_version
+    d_id, p_id, _ = _seed_model(engine, vid)
+    a_id = _seed_attribute(engine, p_id)
+    vi = _create(client, bid, vid, origin_context={
+        "selected_node_id": "Sales.Orders", "selected_attribute": "amount"})
+    lk = _link_of(engine, vi["id"])
+    assert (lk.domain_id, lk.product_id, lk.attribute_id) == (d_id, p_id, a_id)
+    assert lk.needs_link_review is False
+
+
+def test_create_origin_context_unknown_attribute_degrades_to_product(client, biz_version, engine):
+    bid, vid = biz_version
+    _, p_id, _ = _seed_model(engine, vid)
+    vi = _create(client, bid, vid, origin_context={
+        "selected_node_id": "Sales.Orders", "selected_attribute": "missing"})
+    lk = _link_of(engine, vi["id"])
+    assert lk.product_id == p_id
+    assert lk.attribute_id is None
+    assert lk.needs_link_review is True
+
+
+LEGACY_VIEW_STATE = {
+    "context_version": 1,
+    "view_mode": "relationships",
+    "column_mode": "all",
+    "hide_cross_domain": True,
+}
+
+
+def test_create_ignores_legacy_view_state(client, biz_version, engine):
+    """An old client still sending tab/view state is accepted; the view keys
+    are dropped and the anchor comes from the element names alone."""
+    bid, vid = biz_version
+    d_id, _, _ = _seed_model(engine, vid)
+    only_view = _create(client, bid, vid, text="global rule",
+                        origin_context=LEGACY_VIEW_STATE)
+    lk = _link_of(engine, only_view["id"])
+    assert (lk.domain_id, lk.product_id, lk.fk_link_id) == (None, None, None)
+    with_domain = _create(client, bid, vid, text="sales rule",
+                          origin_context={**LEGACY_VIEW_STATE, "domain_filter": "Sales"})
+    assert _link_of(engine, with_domain["id"]).domain_id == d_id
+
+
+def test_view_state_never_reaches_compiled_instructions(client, biz_version, engine):
+    """Neither the human preview nor the agent markdown (what a run sends as
+    its instructions) carries view state from the create payload."""
+    bid, vid = biz_version
+    _seed_model(engine, vid)
+    ids = [
+        _create(client, bid, vid, text="global rule",
+                origin_context=LEGACY_VIEW_STATE)["id"],
+        _create(client, bid, vid, text="orders rule",
+                origin_context={**LEGACY_VIEW_STATE, "selected_node_id": "Sales.Orders"})["id"],
+    ]
+    r = client.post(f"/api/businesses/{bid}/versions/{vid}/inputs/compile",
+                    json={"input_ids": ids})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["included_input_ids"] == ids
+    for doc in (body["markdown"], body["agent_markdown"]):
+        assert "global rule" in doc and "orders rule" in doc
+        lowered = doc.lower()
+        for leaked in ("relationships", "view", "column_mode", "hide_cross_domain"):
+            assert leaked not in lowered, (leaked, doc)
+    assert "[Sales.Orders]" in body["agent_markdown"]
 
 
 def test_create_origin_context_resolves_against_viewed_version(client, biz_version, engine):
@@ -581,3 +704,43 @@ def test_create_explicit_ids_take_precedence_over_context(client, biz_version, e
     lk = _link_of(engine, vi["id"])
     assert lk.domain_id == d_id
     assert lk.product_id is None
+
+
+def test_relationship_anchor_round_trips_as_feedback_context(client, biz_version, engine):
+    """A cross-domain relationship input exposes its diagram edge id, and new
+    feedback sent with that id as selected_edge_id anchors to the same FK (the
+    input-review page's Add-feedback)."""
+    from vibe_modeling.backend.db_models import ForeignKeyLink
+    bid, vid = biz_version
+    with Session(engine) as s:
+        fk = ForeignKeyLink(
+            version_id=vid, source_domain="Sales", source_product="Orders",
+            source_column="cust_id", target_domain="Party",
+            target_product="Customers", target_column="id",
+        )
+        s.add(fk)
+        s.commit()
+        fk_id = fk.id
+    rel = _create(client, bid, vid, text="relationship rule", fk_link_id=fk_id)
+
+    got = client.get(f"/api/businesses/{bid}/inputs/{rel['id']}")
+    assert got.status_code == 200, got.text
+    anchor = got.json()["anchor"]
+    assert anchor["domain_name"] is None
+    assert anchor["fk_edge_id"] == "fk:Sales.Orders.cust_id>Party.Customers.id"
+
+    again = _create(client, bid, vid, text="more on it",
+                    origin_context={"selected_edge_id": anchor["fk_edge_id"]})
+    lk = _link_of(engine, again["id"])
+    assert lk.fk_link_id == fk_id
+    assert lk.needs_link_review is False
+
+
+def test_fk_edge_id_parses_back_to_its_names():
+    from vibe_modeling.backend.fk import fk_edge_id, parse_fk_edge_id
+    edge = fk_edge_id("Sales.Orders", "cust_id", "Party.Customers", "id")
+    assert edge == "fk:Sales.Orders.cust_id>Party.Customers.id"
+    assert parse_fk_edge_id(edge) == ("Sales", "Orders", "cust_id", "Party", "Customers", "id")
+    assert parse_fk_edge_id("fk:Sales.Orders>Party.Customers") == (
+        "Sales", "Orders", None, "Party", "Customers", None)
+    assert parse_fk_edge_id("not-an-edge") is None

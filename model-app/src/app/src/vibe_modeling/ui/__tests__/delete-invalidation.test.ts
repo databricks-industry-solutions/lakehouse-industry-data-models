@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { invalidateEntityLists } from "@/lib/delete-invalidation";
-import { listVersionsKey, getExplorerVersionsKey, listSectorsKey } from "@/lib/api";
+import { listVersionsKey, getExplorerVersionsKey, listSectorsKey, listMetamodelCleanupsKey } from "@/lib/api";
 import { BUSINESSES_QUERY_PATH } from "@/lib/business-cache";
 
 function makeClient() {
@@ -36,6 +36,7 @@ describe("invalidateEntityLists", () => {
     expect(keys).toContainEqual({ predicate: expect.any(Function) });
     expect(keys).toContainEqual({ queryKey: listVersionsKey({ business_id: "biz-1" }) });
     expect(keys).toContainEqual({ queryKey: getExplorerVersionsKey({ business_id: "biz-1" }) });
+    expect(keys).toContainEqual({ queryKey: listMetamodelCleanupsKey({ business_id: "biz-1" }) });
   });
 
   it("version: throws without a businessId", () => {

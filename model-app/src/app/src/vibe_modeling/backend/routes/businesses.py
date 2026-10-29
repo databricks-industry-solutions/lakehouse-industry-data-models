@@ -11,43 +11,42 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from ..._metadata import api_prefix
 from ..agent_compat import (
-    SUPPORTED_TAGS,
-    classify_tag,
-    describe_incompatibility,
-    detect_tag_from_model_json,
     extract_version_provenance,
+    extract_vibe_scope_facts,
+    gate_model_json,
     latest_supported_tag,
 )
 from .._query_helpers import (
     BusinessNameConflict,
     ensure_business_name_available,
     next_version_for_scope,
-    resolve_lineage_parent,
+    resolve_model_json_parent,
 )
-from ..core import Dependencies, resolve_metamodel_catalog
+from ..core import Dependencies, resolve_import_registry_catalog
+from ..core._runs import lock_business_for_write
 from ..core._warehouse import get_warehouse_id
 from ..db_models import (
     Business,
     BusinessContext,
-    Industry,
     ModelVersion,
     Run,
     Sector,
 )
 from ..import_model import detect_schema, read_model_json_from_volume
-from ..model_sync import ModelSyncService, ingest_next_vibes
+from ..industry_resolve import resolve_industry_id
 from ..models import (
     BusinessContextIn,
     BusinessContextOut,
+    BusinessDeleteOut,
     BusinessDigestDiff,
     BusinessIn,
     BusinessKind,
@@ -57,39 +56,34 @@ from ..models import (
     ImportAnalyzeOut,
     ImportExecuteIn,
     ImportExecuteOut,
+    MetamodelCleanupSummaryOut,
+)
+from ..run_link import link_after_import
+from ..services.metamodel_registry import ensure_metamodel_or_refuse
+from ..services.dialog_import import (
+    ImportCopyFailed,
+    analysis_fields,
+    copy_import_files,
+    finish_dialog_import,
+    prepare_dialog_import,
+    resolve_scope,
+    sync_prepared,
+    undo_import,
+    version_fields,
 )
 from ..services.business_digest import (
     diff_business_digest,
     extract_business_digest,
 )
+from ..services.operations._version_lifecycle import (
+    VersionDeleteRefused,
+    delete_business as delete_business_rows,
+)
+from ._helpers import business_name_taken_error, resolve_warehouse_id
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix=api_prefix)
-
-
-def _resolve_industry_id(session: Session, industry_alignment: str) -> Optional[str]:
-    """Best-effort lookup of an ``Industry.id`` for free-text ``industry_alignment``.
-
-    Case-insensitive match against ``short_name`` first (matches the
-    canonical industry-catalog identifier — e.g. ``"digital-fashion-commerce"``
-    for the Zalando import) then falls back to ``name`` for hand-typed labels
-    like ``"Retail"``. Returns ``None`` when the text is empty or no industry
-    row matches; callers must accept ``None`` as a normal "user hasn't picked
-    an industry yet" state, not an error.
-    """
-    text = (industry_alignment or "").strip()
-    if not text:
-        return None
-    text_lower = text.lower()
-    row = session.exec(
-        select(Industry).where(Industry.short_name.ilike(text_lower))
-    ).first()
-    if row is None:
-        row = session.exec(
-            select(Industry).where(Industry.name.ilike(text_lower))
-        ).first()
-    return row.id if row else None
 
 
 def _validate_sector_id(session: Session, sector_id: Optional[str]) -> None:
@@ -170,31 +164,40 @@ def create_business(
     try:
         ensure_business_name_available(session, data.name)
     except BusinessNameConflict as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"error": "business_name_taken", "name": data.name, "message": str(exc)},
-        ) from exc
+        raise business_name_taken_error(data.name, str(exc)) from exc
     _validate_sector_id(session, data.sector_id)
     business = Business(
         name=data.name,
         description=data.description,
         business_vibes=data.business_vibes,
         industry_alignment=data.industry_alignment,
-        industry_id=_resolve_industry_id(session, data.industry_alignment),
+        industry_id=resolve_industry_id(session, data.industry_alignment),
         kind=data.kind,
         sector_id=data.sector_id,
         business_domains=data.business_domains,
         org_divisions=data.org_divisions,
     )
     session.add(business)
-    session.commit()
-    session.refresh(business)
+    try:
+        session.flush()
+    except IntegrityError as exc:
+        # Usually a concurrent create that took the name between the check
+        # above and this insert (``businesses.name`` is unique). Read the
+        # state again; any other integrity failure (a sector deleted since
+        # the validation) is not a name clash.
+        session.rollback()
+        try:
+            ensure_business_name_available(session, data.name)
+        except BusinessNameConflict as conflict:
+            raise business_name_taken_error(data.name, str(conflict)) from exc
+        raise
 
     # Seed a BusinessContext row from the create-time fields so the Explorer
     # context section has something to show before the first vibe run. The
     # agent overwrites this on the first run's sync via model.json's
     # `business_context` block; seeding it here avoids the empty-context
-    # surprise on a brand-new business page.
+    # surprise on a brand-new business page. The business and its seed commit
+    # together: a failed seed leaves no business behind to clash with the retry.
     seed_ctx = {
         "business_context": {
             "business_information": {
@@ -212,6 +215,7 @@ def create_business(
         is_active=True,
     ))
     session.commit()
+    session.refresh(business)
     return business
 
 
@@ -242,10 +246,7 @@ def update_business(
         try:
             ensure_business_name_available(session, data.name, exclude_id=business.id)
         except BusinessNameConflict as exc:
-            raise HTTPException(
-                status_code=409,
-                detail={"error": "business_name_taken", "name": data.name, "message": str(exc)},
-            ) from exc
+            raise business_name_taken_error(data.name, str(exc)) from exc
         business.name = data.name
     if "description" in data.model_fields_set:
         business.description = data.description
@@ -255,7 +256,7 @@ def update_business(
         business.industry_alignment = data.industry_alignment
         # ``industry_id`` is derived from the alignment text, so it must move in
         # lockstep; recompute it inside this branch only.
-        business.industry_id = _resolve_industry_id(session, data.industry_alignment)
+        business.industry_id = resolve_industry_id(session, data.industry_alignment)
     if "sector_id" in data.model_fields_set:
         _validate_sector_id(session, data.sector_id)
         business.sector_id = data.sector_id
@@ -272,29 +273,33 @@ def update_business(
 
 @router.delete(
     "/businesses/{business_id}",
-    response_model=dict,
+    response_model=BusinessDeleteOut,
     operation_id="deleteBusiness",
 )
 def delete_business(
     business_id: str,
     session: Dependencies.Session,
+    ws: Dependencies.Client,
+    config: Dependencies.Config,
     _role: Dependencies.BusinessAdminOnly,
     cascade: bool = False,
 ):
-    """Delete a business. By default rejects if the business has any model
-    versions or runs. Pass ?cascade=true (admin recovery flag) to remove it and
-    all dependent data.
+    """Delete a business (``_version_lifecycle.delete_business``). By default
+    rejects if the business has any model versions or runs. Pass
+    ?cascade=true to remove it and all dependent data.
 
-    The delete rides the DB ON DELETE rules: model versions and their element
-    tree, runs and their run-scoped rows, vibe inputs and their context/run
-    links, diagram caches, and business contexts all die via ``business_id`` /
-    ``version_id`` / ``run_id`` CASCADE; ``source_industry_id`` on any business
-    kickstarted from this one SET NULLs so kickstarted children survive with
-    their provenance cleared."""
-    from sqlalchemy.exc import IntegrityError, SQLAlchemyError
-
-    from ._helpers import _offending_relation
-
+    Refused with 409 (nothing changed) while the business has an active run
+    or another request holds it, and while any of its versions is installed
+    (``{"error": "installed", "catalogs", "versions", "message"}``: uninstall
+    them first). The delete rides the DB ON DELETE rules: model versions and
+    their element tree, runs and their run-scoped rows, vibe inputs and their
+    context/run links, diagram caches, and business contexts all die via
+    ``business_id`` / ``version_id`` / ``run_id`` CASCADE;
+    ``source_industry_id`` on any business kickstarted from this one SET
+    NULLs so kickstarted children survive with their provenance cleared. The
+    agent's ``_metamodel`` rows of every version are removed per catalog after
+    the commit, recorded in ``metamodel_cleanup``; an unfinished one is
+    retried by the boot sweep."""
     business = session.get(Business, business_id)
     if not business:
         raise HTTPException(status_code=404, detail="Business not found")
@@ -316,25 +321,16 @@ def delete_business(
             )
 
     try:
-        session.delete(business)
-        session.commit()
-    except IntegrityError as exc:
-        session.rollback()
-        rel = _offending_relation(exc)
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Could not delete business: it still has dependent records"
-                + (f" ({rel})" if rel else "")
-            ),
-        )
-    except SQLAlchemyError:
-        session.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="Could not delete business due to a database error",
-        )
-    return {"ok": True, "cascaded": cascade}
+        outcome = delete_business_rows(session, ws, resolve_warehouse_id(session, config), business_id)
+    except VersionDeleteRefused as refused:
+        raise HTTPException(status_code=refused.status_code, detail=refused.detail)
+    return BusinessDeleteOut(
+        ok=True,
+        cascaded=cascade,
+        metamodel_cleanup=MetamodelCleanupSummaryOut(
+            done=outcome.cleanup_done, pending=outcome.cleanup_pending, failed=outcome.cleanup_failed,
+        ),
+    )
 
 
 # --- Business Contexts ---
@@ -411,17 +407,13 @@ def analyze_import(
 
     analysis = detect_schema(model_json)
     from ..core._defaults import SUPPORTED_AGENT_VERSION
-    fallback_tag = SUPPORTED_AGENT_VERSION if analysis.valid else None
-    detected_tag = detect_tag_from_model_json(model_json, fallback=fallback_tag)
-    verdict = classify_tag(detected_tag)
+    gate = gate_model_json(model_json, fallback=SUPPORTED_AGENT_VERSION if analysis.valid else None)
+    detected_tag = gate.tag
     warnings = list(analysis.warnings)
-    if analysis.valid and verdict in ("breaking", "unknown"):
-        warnings.append(describe_incompatibility(detected_tag, verdict))
-    elif analysis.valid and verdict == "needs-adapter":
-        warnings.append(
-            f"Agent tag {detected_tag!r} requires an adapter; import will "
-            f"proceed with a runtime warning until an adapter ships."
-        )
+    if analysis.valid and gate.refused:
+        warnings.append(gate.refusal_message)
+    elif analysis.valid and gate.needs_adapter:
+        warnings.append(gate.adapter_warning)
     digest = extract_business_digest(model_json) if analysis.valid else None
     digest_diff: Optional[BusinessDigestDiff] = None
     if digest is not None:
@@ -429,6 +421,8 @@ def analyze_import(
             digest,
             current_name=biz.name,
             current_industry_alignment=biz.industry_alignment,
+            digest_industry_id=resolve_industry_id(session, digest.industry_alignment),
+            current_industry_id=biz.industry_id,
         )
         digest_diff = BusinessDigestDiff(
             digest=digest, mismatch_fields=mismatches,
@@ -445,10 +439,11 @@ def analyze_import(
         fk_count=analysis.fk_count,
         warnings=warnings,
         detected_agent_tag=detected_tag,
-        compat_verdict=verdict,
+        compat_verdict=gate.verdict,
         latest_supported_tag=latest_supported_tag(),
         business_digest=digest,
         business_digest_diff=digest_diff,
+        **(analysis_fields(model_json, data.volume_path) if analysis.valid else {}),
     )
 
 
@@ -469,7 +464,9 @@ def execute_import(
     """Import a previously-vibed model.json from a Volume as a new ModelVersion.
 
     The imported version is marked deployment_status='draft' — user runs the
-    install operation manually to push to UC.
+    install operation manually to push to UC. Refused with 409 (``run_active``
+    / ``business_busy``, ``core._runs.lock_business_for_write``) while a run
+    of the business is active, before anything is written.
     """
     from ._helpers import require_config
 
@@ -491,31 +488,14 @@ def execute_import(
         raise HTTPException(status_code=400, detail=analysis.message)
 
     from ..core._defaults import SUPPORTED_AGENT_VERSION
-    detected_tag = detect_tag_from_model_json(
-        model_json, fallback=SUPPORTED_AGENT_VERSION
-    )
-    verdict = classify_tag(detected_tag)
+    gate = gate_model_json(model_json, fallback=SUPPORTED_AGENT_VERSION)
+    detected_tag = gate.tag
     exec_warnings = list(analysis.warnings)
-    if verdict in ("breaking", "unknown"):
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "incompatible_agent_tag",
-                "detected_agent_tag": detected_tag,
-                "compat_verdict": verdict,
-                "latest_supported_tag": latest_supported_tag(),
-                "supported_tags": sorted(SUPPORTED_TAGS),
-                "message": describe_incompatibility(detected_tag, verdict),
-            },
-        )
-    if verdict == "needs-adapter":
-        adapter_warning = (
-            f"Agent tag {detected_tag!r} classified as needs-adapter; "
-            f"no adapter is implemented yet — importing with the compatible "
-            f"code path. Verify the resulting model before deploying."
-        )
-        logger.warning("import/execute: %s", adapter_warning)
-        exec_warnings.append(adapter_warning)
+    if gate.refused:
+        raise HTTPException(status_code=422, detail=gate.refusal_detail())
+    if gate.needs_adapter:
+        logger.warning("import/execute: %s", gate.adapter_warning)
+        exec_warnings.append(gate.adapter_warning)
 
     # Story-2: refuse the import when the model.json's business identity
     # disagrees with the target Business unless the user has explicitly
@@ -531,6 +511,8 @@ def execute_import(
             digest,
             current_name=biz.name,
             current_industry_alignment=biz.industry_alignment,
+            digest_industry_id=resolve_industry_id(session, digest.industry_alignment),
+            current_industry_id=biz.industry_id,
         )
         if mismatches:
             raise HTTPException(
@@ -549,118 +531,92 @@ def execute_import(
                 },
             )
 
-    # Infer scope from the "v<N>_<mvm|ecm>" version string if present.
-    version_str = str((analysis._model or {}).get("version", ""))
-    m = re.match(r"^v\d+_(mvm|ecm)$", version_str)
-    scope = m.group(1) if m else ""
+    # ECM or MVM: the file's version, else the user's choice, else the file's
+    # requirements, else its folder. Nothing is written before every check.
+    scope = resolve_scope(model_json, data.volume_path, data.scope)
+
+    # The import numbers the version and writes into its folder, which is the
+    # one a running vibe of this business produces: refuse while a run is
+    # active, and hold the business until the version row commits.
+    lock_business_for_write(session, business_id)
 
     # Per-scope ordinal: ECM and MVM number independently so the natural
     # key (business, version, scope) stays unique.
     new_version_num = next_version_for_scope(session, business_id, scope)
+    catalog = resolve_import_registry_catalog(session)
+    prepared = prepare_dialog_import(
+        ws,
+        model_json=model_json,
+        volume_path=data.volume_path,
+        scope=scope,
+        version=new_version_num,
+        catalog=catalog,
+        business_name=biz.name,
+        databricks_run_id=data.databricks_run_id,
+    )
 
-    # Lineage: explicit tag first, version-decrement heuristic second.
-    from .import_root import _extract_gfv_tag, _infer_lineage_parent_id
-    inner_payload = analysis._model or {}
-    gfv_tag = _extract_gfv_tag(inner_payload)
-    lineage_parent_id = None
-    if gfv_tag:
-        parent = resolve_lineage_parent(session, business_id, gfv_tag)
-        if parent is not None:
-            lineage_parent_id = parent.id
+    # Lineage: the parent the model.json names, version-decrement heuristic second.
+    from .import_root import _infer_lineage_parent_id
+    parent = resolve_model_json_parent(session, business_id, model_json)
+    lineage_parent_id = parent.id if parent is not None else None
     if lineage_parent_id is None:
         lineage_parent_id = _infer_lineage_parent_id(
             session, business_id, scope, new_version_num,
         )
 
-    # Import is a synchronous Volume → Lakebase sync — the model was
-    # vibed elsewhere and we're just landing it. Provenance lives on
-    # ModelVersion (import_source_path + imported_at); no Run row,
-    # no progress events, no orchestrator dispatch.
-    # Version provenance from the model.json envelope. Read from the outer
-    # ``model_json`` — ``analysis._model`` is the already-unwrapped inner model
-    # and no longer carries the top-level agent_version / release_version keys.
+    # Version provenance from the model.json envelope (the outer file: the
+    # top-level agent_version / release_version keys live there).
     agent_version, release_version = extract_version_provenance(model_json)
+    fence_mode, fence_base_version, fence_base_scope = extract_vibe_scope_facts(model_json)
+
+    # Every refusal is behind us: the app's folder needs its _metamodel schema
+    # and vol_root volume, which a catalog the agent never ran in lacks.
+    ensure_metamodel_or_refuse(ws, catalog)
 
     now_ts = datetime.now(timezone.utc)
     mv = ModelVersion(
         business_id=business_id,
-        version=new_version_num,
         status="completed",
         deployment_status="draft",  # Import does NOT write to UC; user installs manually
-        scope=scope,
         base_version_id=lineage_parent_id,
         completion_date=now_ts,
-        import_source_path=data.volume_path,
         imported_at=now_ts,
         agent_version=agent_version,
         release_version=release_version,
+        scope_fence_mode=fence_mode,
+        scope_base_version=fence_base_version,
+        scope_base_scope=fence_base_scope,
+        files_catalog=catalog,
+        **version_fields(prepared, volume_path=data.volume_path),
     )
     session.add(mv)
     session.flush()  # assigns mv.id
-
-    sync = ModelSyncService(session)
-    sync.sync_from_model_json(mv.id, analysis._model or {})
-
-    # Compute the Volume folder that holds model.json so we can index
-    # sibling artifacts (diagram/, docs/, ontology/, schemas/, metrics/,
-    # vibes/, top-level readme.md).
-    volume_root_path = data.volume_path.rsplit("/", 1)[0] if "/" in data.volume_path else ""
-    if volume_root_path:
-        # Index every artifact under the volume root as a RunArtifact row.
-        # No producing Run for imports — run_id stays NULL; the artifact
-        # tab keys off model_version_id.
-        try:
-            from ..services.artifact_indexer import index_artifacts_at_path
-            index_artifacts_at_path(
-                ws, session,
-                run_id=None,
-                model_version_id=mv.id,
-                volume_root_path=volume_root_path,
-            )
-        except Exception:
-            logger.exception(
-                "execute_import: artifact indexing failed for version %s "
-                "(non-fatal)", mv.id,
-            )
-
-        # Materialize structured agent next-vibe inputs when the import folder
-        # ships a next-vibes artifact. The raw file is already indexed as a
-        # RunArtifact by index_artifacts_at_path above, so we only materialize
-        # the structured rows here (shared load-then-materialize helper). Falls
-        # through silently when the file is absent - the common case for
-        # hand-curated imports.
-        ingest_next_vibes(
-            ws, session,
-            version_dir=volume_root_path,
-            version_id=mv.id,
-            business_id=mv.business_id,
-        )
-
-    # Persist the Lakebase ModelVersion + child rows BEFORE the
-    # external _metamodel.* Delta writes. The metamodel writer batches
-    # its INSERTs (chunked multi-row statements) so even a large model
-    # is a handful of warehouse round-trips, but it still targets an
-    # external system over a SQL warehouse. Commit here so the import
-    # survives a slow or failing metamodel write — write_metamodel does
-    # not touch this session, so nothing is lost by committing first.
+    sync_prepared(session, mv.id, prepared)
+    # Lakebase durable before the Volume copy and the external _metamodel
+    # write, neither of which holds a transaction.
     session.commit()
 
-    # Write the imported model's structure into the agent's
-    # ``_metamodel.{business,domain,product,attribute}`` Delta tables so
-    # subsequent vibe-iterate / shrink / enlarge runs can read this model
-    # as their input. Non-fatal, post-commit (external SQL warehouse, so a
-    # failure here cannot roll back the import). The single shared seed path.
-    from ..services.import_metamodel_writer import seed_metamodel_one
-    seed_metamodel_one(
-        ws,
-        catalog=resolve_metamodel_catalog(session),
-        warehouse_id=get_warehouse_id(session),
-        model_json=model_json,
+    try:
+        copy_import_files(ws, prepared)
+    except ImportCopyFailed as exc:
+        undo_import(session, ws, prepared, mv.id)
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    exec_warnings.extend(finish_dialog_import(
+        ws, session, prepared,
+        version_id=mv.id,
+        business_id=business_id,
         business_name=biz.name,
-        scope=scope,
-        version=new_version_num,
+        catalog=catalog,
+        warehouse_id=get_warehouse_id(session),
         log_prefix="execute_import",
-    )
+    ))
+
+    linked_run_id = None
+    if data.databricks_run_id is not None:
+        linked_run_id, link_warning = link_after_import(session, ws, biz, mv, data.databricks_run_id)
+        if link_warning:
+            exec_warnings.append(link_warning)
 
     # Invalidate stale layouts for prior versions and queue pre-computes
     # for the newly imported version so the first diagram view is fast.
@@ -716,6 +672,7 @@ def execute_import(
         fk_links=len(fks),
         warnings=exec_warnings,
         detected_agent_tag=detected_tag,
-        compat_verdict=verdict,
+        compat_verdict=gate.verdict,
         latest_supported_tag=latest_supported_tag(),
+        linked_run_id=linked_run_id,
     )

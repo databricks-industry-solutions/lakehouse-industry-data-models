@@ -12,6 +12,7 @@ import {
 } from "@/lib/api";
 import { selector } from "@/lib/selector";
 import { useDebouncedValue } from "@/lib/hooks";
+import { useRunChangeReviewEnabled } from "@/lib/features";
 import { SectionTree } from "@/components/vibe-inputs/section-tree";
 import { InputMarkdownEditorDialog } from "@/components/vibe-inputs/input-markdown-editor-dialog";
 import {
@@ -49,6 +50,7 @@ const EMPTY_SELECTION: ReadonlySet<string> = new Set();
 export function FeedbackList({ businessId, version, scope, versionId }: FeedbackListProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const reviewEnabled = useRunChangeReviewEnabled();
   const [editorInput, setEditorInput] = useState<VibeInputOut | null>(null);
   const [filters, setFilters] = useState<InputFilters>(DEFAULT_FILTERS);
   const debouncedQ = useDebouncedValue(filters.q, 250);
@@ -63,7 +65,9 @@ export function FeedbackList({ businessId, version, scope, versionId }: Feedback
     ...selector(),
   });
 
-  // Active inputs only - deprecated == soft-deleted, hidden by default.
+  // Active inputs only - deprecated == soft-deleted. This tab is the review
+  // surface for live feedback, so it has no Deprecated state; the Deprecated
+  // list with Restore is on the inputs surface, where the delete dialog points.
   const feedback = useMemo(
     () => allInputs.filter((i) => i.status !== "deprecated"),
     [allInputs],
@@ -139,8 +143,10 @@ export function FeedbackList({ businessId, version, scope, versionId }: Feedback
         shown={filtered.length}
         total={feedback.length}
         showSelected={false}
+        showDeprecated={false}
         domains={domainOptions}
         noun="inputs"
+        offerRejectedOrigin={reviewEnabled}
       />
       {filtered.length === 0 ? (
         <div className="py-12 text-center text-sm text-muted-foreground">

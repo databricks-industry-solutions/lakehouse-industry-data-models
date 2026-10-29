@@ -18,6 +18,9 @@ matched env names are exactly the ones the app reads via
     assessment skill install flag, default ``false``)
   - ``VIBE_MODELING_ASSESS_READER_SP``    (reader service principal
     application id seeded into AssessConfig, optional)
+  - ``VIBE_MODELING_RUN_TAGS_DEFAULT``    (``true``/``false``; seed of
+    Settings -> Agent -> "Annotate jobs with run tags", default ``true``;
+    ``install.sh --no-run-tags`` renders ``false``)
 
 The render is line-oriented (no full YAML parser): for each known env
 ``name`` we rewrite the next ``value:`` line. Unrelated content — comments,
@@ -60,6 +63,7 @@ ENV_TARGETS = (
     "VIBE_MODELING_TAXONOMY_MODEL_SERVICE",
     "VIBE_MODELING_ASSESSMENT_ENABLED",
     "VIBE_MODELING_ASSESS_READER_SP",
+    "VIBE_MODELING_RUN_TAGS_DEFAULT",
 )
 
 # The bundle targets in ``databricks.yml`` (a test keeps this in step), and the
@@ -114,6 +118,47 @@ def render(source: str, values: dict[str, str]) -> str:
         out.append(line)
 
     return "".join(out)
+
+
+def _scalar(raw: str) -> str | None:
+    """A ``value:`` scalar as text: double-quoted (JSON string syntax, what ``render`` writes), single-quoted
+    (``''`` is a quote) or bare, with a trailing ``# comment`` dropped; None for no value at all (``""`` is
+    an empty text) or one this reader does not understand."""
+    raw = raw.strip()
+    if raw.startswith('"'):
+        try:
+            value, end = json.JSONDecoder().raw_decode(raw)
+        except ValueError:
+            return None
+        rest = raw[end:].strip()
+        return value if isinstance(value, str) and (not rest or rest.startswith("#")) else None
+    if raw.startswith("'"):
+        m = re.match(r"'((?:[^']|'')*)'\s*(#.*)?$", raw)
+        return m.group(1).replace("''", "'") if m else None
+    value = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
+    return value or None
+
+
+def read_env(text: str) -> dict[str, str]:
+    """The value each ``ENV_TARGETS`` entry of an ``app.yml`` sets, the inverse of ``render``: the line after
+    the ``name:`` line must be its ``value:``. An entry set by ``valueFrom``, with no value, or not in the file is
+    absent; other env entries are never read."""
+    out: dict[str, str] = {}
+    pending: str | None = None
+    for raw in text.splitlines():
+        line = raw.rstrip("\r")
+        if pending is not None:
+            value_match = _VALUE_RE.match(line)
+            target, pending = pending, None
+            if value_match:
+                value = _scalar(value_match.group(2))
+                if value is not None:
+                    out[target] = value
+                continue
+        name_match = _NAME_RE.match(line)
+        if name_match and name_match.group(2) in ENV_TARGETS:
+            pending = name_match.group(2)
+    return out
 
 
 def render_bundle_scopes(assessment: bool) -> str | None:
@@ -184,6 +229,12 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Reader service principal application id (a UUID, not the display name) seeded into AssessConfig (optional)",
     )
     p.add_argument(
+        "--run-tags",
+        choices=("true", "false"),
+        default="true",
+        help="Initial value of Settings -> Agent -> 'Annotate jobs with run tags' (default: true)",
+    )
+    p.add_argument(
         "--bundle-scopes-out",
         default="",
         help="Also write (assessment on) or delete (off) the databricks.yml include fragment for the App's "
@@ -209,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
         "VIBE_MODELING_TAXONOMY_MODEL_SERVICE": args.taxonomy_model_service,
         "VIBE_MODELING_ASSESSMENT_ENABLED": args.assessment,
         "VIBE_MODELING_ASSESS_READER_SP": args.assess_reader_sp,
+        "VIBE_MODELING_RUN_TAGS_DEFAULT": args.run_tags,
     }
     rendered = render(source, values)
 

@@ -1,4 +1,4 @@
-import { Suspense, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { QueryErrorResetBoundary } from "@tanstack/react-query";
 import { ErrorBoundary } from "react-error-boundary";
@@ -30,12 +30,16 @@ export function StatisticsTab({
   scope: modelScope,
   businessId,
   versionInt,
+  onDomainChange,
 }: {
   model: ModelSummaryOut;
   /** The model's scope from the route ("ecm" | "mvm"). */
   scope: string;
   businessId: string;
   versionInt: number;
+  /** Reports the domain the report pane is bound to (null for the full
+   *  model), so the page's Add-feedback can capture it. */
+  onDomainChange?: (domain: string | null) => void;
 }) {
   const [scope, setScope] = useState<Scope>("model");
 
@@ -56,6 +60,9 @@ export function StatisticsTab({
   }));
 
   const activeDomain = isModelScope(scope) ? null : scope.domain;
+  useEffect(() => {
+    onDomainChange?.(activeDomain);
+  }, [activeDomain, onDomainChange]);
   // The model summary's domain rows carry the DB ids + per-subdomain ids +
   // product counts the breakdown's domain/subdomain cascade controls key on.
   const activeDomainSummary = activeDomain

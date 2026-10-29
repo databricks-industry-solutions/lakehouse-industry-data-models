@@ -12,16 +12,25 @@ from __future__ import annotations
 import base64
 import json
 import re
+import threading
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 from databricks.sdk.service.workspace import ExportFormat
 from fastapi import HTTPException
 from sqlalchemy import func
-from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import select
 
+from .._query_helpers import name_taken_message
+from ..core._errors import CONFIG_REQUIREMENTS, config_missing_error
+from ..core._intents import INTENT_KICKSTART_FROM_INDUSTRY
+from ..core._json import json_object
+from ..core._settings_seed import get_or_create_settings_row
 from ..core._time import as_utc
+from ..services.operations._deployment_widgets import CATALOG_NAME_PATTERN
+from ..services.operations._protocol import RUN_WARNINGS_KEY
 from ..db_models import (
     AgentConfig,
     ModelVersion,
@@ -79,11 +88,14 @@ def params_json_omit_deployment_catalog_for_multi_catalog(
     return params
 
 
-# Intent labels whose runs are pure audit records of a version (zero DAG /
-# RunOperation rows): their meaning IS the version they record, so they are
-# deleted WITH that version rather than detached. A named constant so adding a
-# future audit intent is a one-line, visible decision (locked by a test).
-AUDIT_INTENTS = frozenset({"download-industry", "kickstart-from-industry"})
+# Intent labels of app-only runs (zero DAG / RunOperation rows, no agent job):
+# a kickstart and an industry download record a version, so they are deleted
+# WITH that version rather than detached; an orphan-schema drop records no
+# version (``version_id`` NULL), so the version GC never selects it. Cancel
+# only marks such a run cancelled. A named constant so adding a future audit
+# intent is a one-line, visible decision (locked by a test and
+# ``tests/fixtures/setup_run_intents.json``).
+AUDIT_INTENTS = frozenset({"download-industry", INTENT_KICKSTART_FROM_INDUSTRY, "uninstall-orphan-schemas"})
 
 
 def gc_runs_for_deleted_version(session, candidate_run_ids: set[str]) -> None:
@@ -151,28 +163,6 @@ def delete_model_version(session, mv: ModelVersion) -> None:
     gc_runs_for_deleted_version(session, candidate_run_ids)
 
 
-_OFFENDING_RELATION_RE = re.compile(
-    r'(?:constraint|table)\s+"([^"]+)"', re.IGNORECASE
-)
-
-
-def _offending_relation(exc: SQLAlchemyError) -> str | None:
-    """Parse the offending constraint/table name from a DB error.
-
-    Reads ``str(exc.orig)`` (the driver-level error) and returns just the
-    bare relation name (e.g. ``subdomains`` or ``subdomains_domain_id_fkey``)
-    from a ``constraint "<name>"`` / ``table "<name>"`` clause. Returns
-    ``None`` when the driver text doesn't carry a recognisable name. Never
-    returns the full driver text — the caller embeds only this bare name in
-    the 409 detail, and the global ``sanitize_error_message`` still runs as
-    defense-in-depth.
-    """
-    orig = getattr(exc, "orig", None)
-    text = str(orig) if orig is not None else str(exc)
-    m = _OFFENDING_RELATION_RE.search(text)
-    return m.group(1) if m else None
-
-
 # --- Agent config / warehouse resolution -----------------------------------
 
 
@@ -199,23 +189,60 @@ def _get_or_create_agent_config(session, config) -> AgentConfig:
     rows with empty github fields are handled at the OUTPUT layer, which falls
     back to the same defaults (see ``get_github_config`` and
     ``build_github_connector``).
+
+    The run-tags setting (``collect_vibe_run_statistics``) is seeded from
+    ``AppConfig.run_tags_default`` here only; ``v_0_9_0_2`` applied the same
+    install default once to rows that existed before it.
     """
     from ..sources.github import DEFAULT_REPO_NAME, DEFAULT_REPO_OWNER
 
-    cfg = session.exec(select(AgentConfig).limit(1)).first()
-    if cfg is not None:
-        return cfg
-    cfg = AgentConfig(
-        deployment_catalog=config.deployment_catalog,
-        warehouse_id=config.warehouse_id,
-        github_repo_owner=DEFAULT_REPO_OWNER,
-        github_repo_name=DEFAULT_REPO_NAME,
-        taxonomy_model_service=config.taxonomy_install_default_model_service,
+    return get_or_create_settings_row(session, AgentConfig, {
+        "deployment_catalog": config.deployment_catalog,
+        "warehouse_id": config.warehouse_id,
+        "github_repo_owner": DEFAULT_REPO_OWNER,
+        "github_repo_name": DEFAULT_REPO_NAME,
+        "taxonomy_model_service": config.taxonomy_install_default_model_service,
+        "collect_vibe_run_statistics": config.run_tags_default,
+    })
+
+
+_CATALOG_NAME_RE = re.compile(CATALOG_NAME_PATTERN)
+
+
+CATALOG_NAME_RULE = "a letter, then letters, digits and underscores"
+
+
+def is_catalog_name(catalog: str) -> bool:
+    """Whether ``catalog`` is a Unity Catalog name an agent dispatch accepts
+    (``CATALOG_NAME_PATTERN``, lower case, at most 255 characters)."""
+    return len(catalog) <= 255 and bool(_CATALOG_NAME_RE.match(catalog))
+
+
+def require_catalog_name(catalog: str) -> str:
+    """``catalog`` when :func:`is_catalog_name`, else 422 with a message. For
+    routes that scan or change a catalog the user names."""
+    if not is_catalog_name(catalog):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": f"The catalog must be a Unity Catalog name: {CATALOG_NAME_RULE}.",
+                "catalog": catalog[:255],
+            },
+        )
+    return catalog
+
+
+def scan_rate_limited(retry_after_s: int, what: str) -> HTTPException:
+    """429 for a caller over the impact-scan limit
+    (``services.uninstall_impact.ScanRateLimited``), with ``Retry-After``."""
+    return HTTPException(
+        status_code=429,
+        detail={
+            "message": f"Too many {what} in the last minute. Try again in {retry_after_s} s.",
+            "retry_after_s": retry_after_s,
+        },
+        headers={"Retry-After": str(retry_after_s)},
     )
-    session.add(cfg)
-    session.commit()
-    session.refresh(cfg)
-    return cfg
 
 
 def resolve_warehouse_id(session, config) -> str:
@@ -242,59 +269,6 @@ def resolve_warehouse_id(session, config) -> str:
 
 
 # --- require_config: shared preflight for operations that need config -------
-
-# One entry per requirement key. ``label`` + ``settings_url`` drive the FE
-# config-missing deep-link; ``field_path`` keys the run-form blocker so the
-# validate/create preflight can surface the same shape it always has.
-_CONFIG_REQUIREMENTS: dict[str, dict[str, str]] = {
-    "agent_job": {
-        "label": "Agent notebook & job",
-        "settings_url": "/settings?tab=agent",
-        "field_path": "(agent_config.notebook_path)",
-        "message": (
-            "Agent is not configured. Set the notebook path in "
-            "Settings → Agent before running this operation."
-        ),
-    },
-    "metamodel_catalog": {
-        "label": "Metamodel catalog",
-        "settings_url": "/settings?tab=platform",
-        "field_path": "(agent_config.deployment_catalog)",
-        "message": (
-            "No metamodel catalog is configured. The agent writes its "
-            "`_metamodel` schema and `vol_root` Volume there. Set one in "
-            "Settings → Platform."
-        ),
-    },
-    "warehouse": {
-        "label": "SQL warehouse",
-        "settings_url": "/settings?tab=platform",
-        "field_path": "(agent_config.warehouse_id)",
-        "message": (
-            "No SQL warehouse is configured. Progress polling and model sync "
-            "need it. Set one in Settings → Platform."
-        ),
-    },
-    "taxonomy_llm": {
-        "label": "Domain Taxonomy Builder model service",
-        "settings_url": "/settings?tab=platform",
-        "field_path": "(agent_config.taxonomy_model_service)",
-        "message": (
-            "No model service is configured for the Domain Taxonomy Builder. "
-            "An admin must choose one in Settings → Platform."
-        ),
-    },
-    "source_repo": {
-        "label": "Industry-models source repo",
-        "settings_url": "/settings?tab=sources",
-        "field_path": "(agent_config.github_repo_owner)",
-        "message": (
-            "No industry-models source repository is configured. Set the "
-            "owner/name in Settings → Sources."
-        ),
-    },
-}
-
 
 def _missing_config_keys(session, config, needs) -> list[str]:
     """Return the subset of ``needs`` that is NOT satisfied by current config.
@@ -354,7 +328,7 @@ def require_config(session, config, needs, *, mode: str):
       sentence). Used by operations that must hard-fail BEFORE creating
       anything (kickstart / download / import).
     - ``mode="collect"`` returns ``list[IssueOut]`` blockers in the exact
-      shape ``_collect_run_preflight_blockers`` emits, so run-shaped
+      shape the run pre-flight (``preflight.run_preflight``) emits, so run-shaped
       operations converge on that one mechanism instead of forking a parallel
       check. Returns ``[]`` when nothing is missing.
 
@@ -365,9 +339,9 @@ def require_config(session, config, needs, *, mode: str):
     if mode == "collect":
         return [
             IssueOut(
-                field_path=_CONFIG_REQUIREMENTS[k]["field_path"],
+                field_path=CONFIG_REQUIREMENTS[k]["field_path"],
                 step_index=-1,
-                message=_CONFIG_REQUIREMENTS[k]["message"],
+                message=CONFIG_REQUIREMENTS[k]["message"],
                 severity="blocker",
             )
             for k in missing
@@ -375,34 +349,19 @@ def require_config(session, config, needs, *, mode: str):
     if mode == "raise":
         if not missing:
             return None
-        labels = [_CONFIG_REQUIREMENTS[k]["label"] for k in missing]
-        message = (
-            "Missing required configuration: "
-            + ", ".join(labels)
-            + ". Configure it in Settings, then retry."
-        )
-        raise config_missing_error(missing, message)
+        raise config_missing_error(missing)
     raise ValueError(f"require_config: unknown mode {mode!r}")
 
 
-def config_missing_error(keys: str | list[str], message: str) -> HTTPException:
-    """The structured 422 ``config_missing`` error for ``keys`` with a custom
-    ``message`` (the UI shows ``message``). ``require_config`` builds its
-    error here too, so the payload shape has one definition."""
-    keys = [keys] if isinstance(keys, str) else list(keys)
+def business_name_taken_error(name: str, message: str | None = None) -> HTTPException:
+    """The structured 409 ``business_name_taken`` error every business and
+    industry create, rename, kickstart and download answers a name clash with."""
     return HTTPException(
-        status_code=422,
+        status_code=409,
         detail={
-            "error": "config_missing",
-            "missing": [
-                {
-                    "key": k,
-                    "label": _CONFIG_REQUIREMENTS[k]["label"],
-                    "settings_url": _CONFIG_REQUIREMENTS[k]["settings_url"],
-                }
-                for k in keys
-            ],
-            "message": message,
+            "error": "business_name_taken",
+            "name": name,
+            "message": message or name_taken_message(name),
         },
     )
 
@@ -463,17 +422,19 @@ def _build_dbx_job_url(ws, job_id) -> str:
     return build_job_run_url(ws, job_id)
 
 
-def _build_dbx_run_url(databricks_run_id, ws, session) -> str | None:
+def _build_dbx_run_url(databricks_run_id, ws, session, *, app_job: bool = True) -> str | None:
     """The agent run's URL under the stored agent job, or None without a run.
 
     Used for both the Run-level link and per-RunOperation links. Each
     Phase of a multi-phase Run dispatches its own job run, so per-Phase
-    URLs use the Phase's own ``databricks_run_id``.
+    URLs use the Phase's own ``databricks_run_id``. ``app_job=False`` (a run
+    recorded by linking, ``Run.linked_at``, which may belong to another job)
+    builds the job-less ``/jobs/runs/<run_id>`` link.
     """
     if not databricks_run_id or ws is None:
         return None
     job_id = None
-    if session is not None:
+    if app_job and session is not None:
         try:
             cfg = session.exec(select(AgentConfig).limit(1)).first()
         except Exception:
@@ -507,11 +468,12 @@ def _build_run_out(
 
     ``warnings`` (Phase 4 / spec §2.4 + §8) is the validator's warning
     list — empty by default on the legacy path so the field stays
-    present in every ``RunOut`` regardless of which branch built it.
+    present in every ``RunOut`` regardless of which branch built it. The
+    warnings its succeeded steps reported (:data:`RUN_WARNINGS_KEY`) follow.
     """
     from ..progress_tracker import WATCHDOG_WARM_UP_SECONDS  # avoid import cycle at module top
     d = {c.name: getattr(run, c.name) for c in run.__table__.columns}
-    url = _build_dbx_run_url(run.databricks_run_id, ws, session)
+    url = _build_dbx_run_url(run.databricks_run_id, ws, session, app_job=run.linked_at is None)
     if url:
         d["run_page_url"] = url
 
@@ -561,9 +523,42 @@ def _build_run_out(
         d["watchdog_state"] = "disarmed"
         d["watchdog_warm_up_seconds_remaining"] = 0
 
-    d["warnings"] = list(warnings) if warnings else []
+    d["warnings"] = [*(warnings or []), *_collect_operation_warnings(run, session)]
     d["version_resolutions"] = _collect_version_resolutions(run, session)
     return RunOut(**d)
+
+
+def _collect_operation_warnings(run: Run, session) -> list[dict]:
+    """The warnings the run's succeeded steps recorded in their rollback
+    state (:data:`RUN_WARNINGS_KEY`), as ``IssueOut`` dicts. An entry is a
+    text, or ``{"message", "sql"}`` when the warning comes with a statement
+    to run by hand, kept under ``sql``. Empty for a run nothing warned
+    about."""
+    if session is None or not run.id:
+        return []
+    rows = session.exec(
+        select(RunOperation)
+        .where(RunOperation.run_id == run.id)
+        .where(RunOperation.status == "succeeded")
+        .order_by(RunOperation.step_index)
+    ).all()
+    out: list[dict] = []
+    for row in rows:
+        entries = json_object(row.rollback_state_json).get(RUN_WARNINGS_KEY)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            text = entry.get("message") if isinstance(entry, dict) else entry
+            if not isinstance(text, str) or not text:
+                continue
+            issue = IssueOut(
+                field_path=f"({row.operation_name})", step_index=row.step_index, message=text, severity="warning",
+            ).model_dump()
+            sql = entry.get("sql") if isinstance(entry, dict) else None
+            if isinstance(sql, str) and sql:
+                issue["sql"] = sql
+            out.append(issue)
+    return out
 
 
 def _collect_version_resolutions(run: Run, session) -> list[VersionResolutionOut]:
@@ -792,35 +787,94 @@ def _detect_notebook_version(ws, notebook_path: str) -> str | None:
     return _detect_notebook_identity(ws, notebook_path)[1]
 
 
-def _preflight_notebook_access(ws, notebook_path: str) -> None:
-    """Check that the app service principal can read the configured notebook.
+NOTEBOOK_ACCESS_TTL_SECONDS = 60.0
+_notebook_access: dict[str, tuple[float, str | None]] = {}
+_notebook_access_lock = threading.Lock()
 
-    Raises HTTPException(400) with a clear message if the SP cannot see the path —
-    the common failure mode is a notebook under a user's `/Workspace/Users/<email>/`
-    tree that the SP has not been granted access to. Catching this at config-save
-    time avoids kicking off a job that will fail with a cryptic permission error.
+
+@dataclass(frozen=True)
+class NotebookAccess:
+    """One read of the agent notebook by the app service principal.
+
+    ``refused``: the path does not exist or the app can't read it (the run
+    is refused). ``unchecked``: the read failed for another reason (a
+    timeout, a 5xx), so nothing is known. Both None: the app can read it.
     """
+
+    refused: str | None = None
+    unchecked: str | None = None
+
+
+def _sp_label(ws) -> str:
+    try:
+        return ws.config.client_id or "<unknown>"
+    except Exception:
+        return "<unknown>"
+
+
+def notebook_access(ws, notebook_path: str, *, fresh: bool = False) -> NotebookAccess:
+    """Whether the app service principal can read the agent notebook.
+
+    One read of ``ws.workspace.get_status``. Only ``NotFound`` and
+    ``PermissionDenied`` refuse; a readable path and a refusal are kept
+    ``NOTEBOOK_ACCESS_TTL_SECONDS`` per path, so the run pre-flight (validate
+    on every form change, then create) reads the workspace at most once a
+    minute. Any other error is ``unchecked`` and is not kept, so the next
+    check reads again. ``fresh`` reads now and replaces what is kept.
+    """
+    from databricks.sdk.errors import NotFound, PermissionDenied
+
+    from ..error_sanitization import sanitize_error_message
+
+    now = time.monotonic()
+    if not fresh:
+        with _notebook_access_lock:
+            kept = _notebook_access.get(notebook_path)
+        if kept is not None and kept[0] > now:
+            return NotebookAccess(refused=kept[1])
     try:
         ws.workspace.get_status(notebook_path)
-    except Exception as e:
-        try:
-            sp_id = ws.config.client_id or "<unknown>"
-        except Exception:
-            sp_id = "<unknown>"
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"The app service principal '{sp_id}' cannot access the notebook "
-                f"'{notebook_path}'. Either the path is wrong, or the SP needs "
-                f"'Can Read' + 'Can Run' permission on the notebook (or a parent "
-                f"workspace folder). Original error: {e}"
-            ),
-        ) from e
+        refused = None
+    except (NotFound, PermissionDenied) as e:
+        refused = (
+            f"The app service principal '{_sp_label(ws)}' cannot access the agent "
+            f"notebook at the configured path. Either the path is wrong, or the SP needs "
+            f"'Can Read' + 'Can Run' permission on the notebook (or a parent "
+            f"workspace folder). Original error: {sanitize_error_message(str(e))}"
+        )
+    except Exception as e:  # noqa: BLE001 - not a refusal: nothing is known
+        return NotebookAccess(unchecked=(
+            "Couldn't check that the app service principal can read the agent notebook "
+            f"({sanitize_error_message(str(e))}). The run checks again when it starts."
+        ))
+    with _notebook_access_lock:
+        _notebook_access[notebook_path] = (now + NOTEBOOK_ACCESS_TTL_SECONDS, refused)
+    return NotebookAccess(refused=refused)
 
 
-def _preflight_notebook_version(ws, notebook_path: str) -> None:
+def clear_notebook_access_cache() -> None:
+    with _notebook_access_lock:
+        _notebook_access.clear()
+
+
+def _preflight_notebook_access(ws, notebook_path: str) -> None:
+    """Check, now, that the app service principal can read the notebook.
+
+    Raises HTTPException(400) with a clear message if the SP cannot see the path
+    (the common failure mode is a notebook under a user's `/Workspace/Users/<email>/`
+    tree that the SP has not been granted access to), or when the read fails:
+    a config save stores only a path it could read. The run pre-flight reads
+    the same check through its cache (:func:`notebook_access`).
+    """
+    access = notebook_access(ws, notebook_path, fresh=True)
+    if access.refused is not None or access.unchecked is not None:
+        raise HTTPException(status_code=400, detail=access.refused or access.unchecked)
+
+
+def _check_notebook_release(release: str | None) -> None:
     """Fail the save if the notebook's public release version doesn't match the
-    pinned ``SUPPORTED_AGENT_VERSION``.
+    pinned ``SUPPORTED_AGENT_VERSION``, for an identity the caller already
+    read (``PUT /config/agent`` exports the notebook once).
 
     Compatibility is gated on the release version, which tracks the app-agent
     interface. The agent-logic marker (``__AGENT_VERSION__``) is a per-fix build
@@ -829,7 +883,6 @@ def _preflight_notebook_version(ws, notebook_path: str) -> None:
     notebook with no version marker at all is advisory-only (no hard block).
     """
     from ..core._defaults import SUPPORTED_AGENT_VERSION
-    release = _detect_notebook_identity(ws, notebook_path)[0]
     if release is None:
         return  # no marker — advisory only, not a hard block
     if release.lstrip("v") != SUPPORTED_AGENT_VERSION.lstrip("v"):
@@ -963,11 +1016,15 @@ __all__ = [
     "_detect_notebook_version",
     "_detect_notebook_identity",
     "_preflight_notebook_access",
-    "_preflight_notebook_version",
+    "notebook_access",
+    "NotebookAccess",
+    "clear_notebook_access_cache",
+    "_check_notebook_release",
     "_next_vibes_from_inputs",
     "_validate_next_vibe_ids",
     "delete_model_version",
     "gc_runs_for_deleted_version",
     "AUDIT_INTENTS",
-    "_offending_relation",
+    "require_catalog_name",
+    "scan_rate_limited",
 ]

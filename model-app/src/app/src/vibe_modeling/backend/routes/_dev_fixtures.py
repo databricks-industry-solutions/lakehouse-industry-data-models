@@ -22,7 +22,7 @@ from sqlmodel import select
 
 from ..._metadata import api_prefix
 from .._query_helpers import resolve_model_version
-from ..core import Dependencies
+from ..core import Dependencies, resolve_metamodel_catalog
 from ..db_models import Business, ModelVersion
 from ..model_sync import ModelSyncService
 
@@ -70,6 +70,7 @@ def seed_model(
         deployment_status="draft",
         scope=scope,
         confidence_score=0.85 if scope == "ecm" else 0.78,
+        files_catalog=resolve_metamodel_catalog(session) or None,
         created_at=datetime.now(timezone.utc),
     )
     session.add(mv)

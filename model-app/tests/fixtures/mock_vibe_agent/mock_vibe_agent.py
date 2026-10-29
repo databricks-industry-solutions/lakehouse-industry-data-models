@@ -53,9 +53,6 @@ dbutils.widgets.dropdown("cataloging_style", "One Catalog", [
 ], "09a Cataloging Style")
 dbutils.widgets.text("catalog_prefix", "", "09b Catalog Prefix")
 dbutils.widgets.text("catalog_suffix", "", "09c Catalog Suffix")
-dbutils.widgets.dropdown("generate_samples", "0", [
-    "0", "5", "10", "15", "20", "25", "50", "100",
-], "10 Generate Samples")
 dbutils.widgets.text("context_file", "", "11 Context File")
 dbutils.widgets.dropdown("naming_convention", "snake_case", [
     "snake_case", "camelCase", "PascalCase", "SCREAMING_CASE",
@@ -75,8 +72,8 @@ dbutils.widgets.dropdown("date_format", "yyyy-MM-dd", [
 dbutils.widgets.dropdown("timestamp_format", "yyyy-MM-dd'T'HH:mm:ss.SSSXXX", [
     "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
     "yyyy-MM-dd HH:mm:ss",
-    "yyyy/MM/dd HH:mm:ss",
-    "dd-MM-yyyy HH:mm:ss",
+    "yyyy-MM-dd'T'HH:mm:ss",
+    "yyyy-MM-dd HH:mm:ss.SSS",
 ], "20 Timestamp Format")
 dbutils.widgets.text(
     "classification_levels",
@@ -119,7 +116,6 @@ W = {
     "cataloging_style": dbutils.widgets.get("cataloging_style"),
     "catalog_prefix": dbutils.widgets.get("catalog_prefix"),
     "catalog_suffix": dbutils.widgets.get("catalog_suffix"),
-    "generate_samples": dbutils.widgets.get("generate_samples"),
     "context_file": dbutils.widgets.get("context_file"),
     "naming_convention": dbutils.widgets.get("naming_convention"),
     "primary_key_suffix": dbutils.widgets.get("primary_key_suffix"),

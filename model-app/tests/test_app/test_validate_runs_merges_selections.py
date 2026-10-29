@@ -16,8 +16,8 @@ empty payload — the live form and the hard submit agree on accept/reject.
 
 The bulk of the public-contract coverage targets ``vibe-new-ecm-mvm``
 because that's the intent whose ``validate_dag_request`` factory is wired
-today; vibe-iterate's symmetry is exercised at the helper level via
-``_resolve_and_link_legacy_selections``.
+today; vibe-iterate's symmetry is exercised at the helper level through
+the shared pre-flight entry point, ``preflight.run_preflight``.
 """
 from __future__ import annotations
 
@@ -34,12 +34,18 @@ from vibe_modeling.backend.models import (  # noqa: E402
     Intent,
     RunIn,
 )
-try:  # pragma: no cover — pre-fix branches don't have the helper
-    from vibe_modeling.backend.router import (  # noqa: E402
-        _resolve_and_link_legacy_selections,
+from vibe_modeling.backend.services.orchestrator.preflight import run_preflight  # noqa: E402
+
+
+def _run_validate_preflight(business_id, data, session) -> None:
+    """What both endpoints do to ``data`` before the DAG: the pre-flight."""
+    from vibe_modeling.backend.db_models import AgentConfig, Business
+
+    run_preflight(
+        business_id, data, business=session.get(Business, business_id),
+        agent_config=session.exec(select(AgentConfig)).first(), session=session,
+        ws=None, config=None, user=None, create=False,
     )
-except ImportError:  # pragma: no cover
-    _resolve_and_link_legacy_selections = None  # type: ignore[assignment]
 
 
 # --------------------------------------------------------------------------- #
@@ -143,20 +149,13 @@ def _has_min_length_blocker(blockers: list[dict]) -> bool:
 # Helper-level coverage for vibe-iterate                                      #
 # --------------------------------------------------------------------------- #
 #
-# ``validate_dag_request`` doesn't have a ``vibe-iterate`` factory branch
-# today (only ``new-base-model`` and ``vibe-new-ecm-mvm`` are wired). The
-# route handler calls ``_resolve_and_link_legacy_selections`` for every
-# intent in ``_FEEDBACK_NEXT_VIBE_INTENTS`` — so the symmetric behaviour for
-# vibe-iterate is exercised at the helper level here.
+# Both endpoints run ``run_preflight``, which compiles the selected inputs
+# into ``data.vibe_instructions`` before the DAG is built, so the symmetric
+# behaviour for vibe-iterate is exercised at that level here.
 
 
-@pytest.mark.skipif(
-    _resolve_and_link_legacy_selections is None,
-    reason="pre-fix branches don't have the selection helper",
-)
 class TestVibeIterateSelectionHelper:
-    """Direct exercise of ``_resolve_and_link_legacy_selections``
-    for the ``vibe-iterate`` intent."""
+    """The pre-flight's selection handling for the ``vibe-iterate`` intent."""
 
     def test_selected_input_ids_compiled_into_instructions(
         self, engine, parent_ecm_with_next_vibes,
@@ -184,7 +183,7 @@ class TestVibeIterateSelectionHelper:
             input_ids=[input_id],
         )
         with Session(engine) as session:
-            _resolve_and_link_legacy_selections(biz_id, data, session)
+            _run_validate_preflight(biz_id, data, session)
         assert data.vibe_instructions.strip(), (
             f"compile produced empty instructions: {data.vibe_instructions!r}"
         )
@@ -198,7 +197,7 @@ class TestVibeIterateSelectionHelper:
             vibe_instructions="",
         )
         with Session(engine) as session:
-            _resolve_and_link_legacy_selections(seed_business, data, session)
+            _run_validate_preflight(seed_business, data, session)
         assert data.vibe_instructions == "", (
             f"helper should not synthesize text from nothing; got "
             f"{data.vibe_instructions!r}"
@@ -214,7 +213,7 @@ class TestVibeIterateSelectionHelper:
             vibe_instructions=original,
         )
         with Session(engine) as session:
-            _resolve_and_link_legacy_selections(seed_business, data, session)
+            _run_validate_preflight(seed_business, data, session)
         assert data.vibe_instructions == original, (
             f"helper mutated instructions when nothing was selected; got "
             f"{data.vibe_instructions!r}"
@@ -320,14 +319,14 @@ class TestValidateRunFoldsForVibeNewEcmMvm:
             f"blockers={blockers}"
         )
 
-    def test_unknown_next_vibe_id_returns_400(
+    def test_unknown_next_vibe_id_is_a_blocker_with_creates_400_text(
         self,
         client_with_agent,
         engine,
         parent_ecm_with_next_vibes,
     ):
-        """Unknown next_vibe_id surfaces as 400 with the same detail
-        the create endpoint returns — no silent drop on validate."""
+        """Unknown next_vibe_id surfaces as a validate blocker with the text
+        of create's 400: no silent drop on validate."""
         biz_id, parent_vid = parent_ecm_with_next_vibes
         body = _vibe_new_ecm_mvm_body(
             parent_version_id=parent_vid,
@@ -335,6 +334,9 @@ class TestValidateRunFoldsForVibeNewEcmMvm:
             next_vibe_ids=["nv-999"],
         )
         resp = client_with_agent.post(f"/api/businesses/{biz_id}/runs/validate", json=body)
-        assert resp.status_code == 400, resp.text
-        assert "next_vibe" in resp.text.lower()
-        assert "nv-999" in resp.text
+        assert resp.status_code == 200, resp.text
+        [blocker] = [b for b in resp.json()["blockers"] if b["field_path"] == "next_vibe_ids"]
+        assert "nv-999" in blocker["message"]
+        created = client_with_agent.post(f"/api/businesses/{biz_id}/runs", json=body)
+        assert created.status_code == 400, created.text
+        assert created.json()["detail"] == blocker["message"]

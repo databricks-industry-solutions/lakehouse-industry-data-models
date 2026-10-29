@@ -1,0 +1,469 @@
+{
+  "agent_version": "5.3.3",
+  "business_columns": [
+    "business",
+    "version",
+    "model_scope",
+    "industry_alignment",
+    "description",
+    "catalog",
+    "location",
+    "core_business_processes",
+    "orgnaization_divisions",
+    "data_domains",
+    "common_business_jargons",
+    "operational_systems_of_records",
+    "industry_governing_body",
+    "vibe_modelling_instructions",
+    "model_conventions",
+    "completion_date",
+    "session_id",
+    "processing_status",
+    "completed_percent",
+    "session_started_at",
+    "last_updated_at",
+    "session_json",
+    "results_json"
+  ],
+  "business_rows": {
+    "installed": {
+      "keys_passed": [
+        "business",
+        "version",
+        "model_scope",
+        "industry_alignment",
+        "description",
+        "catalog",
+        "location",
+        "core_business_processes",
+        "orgnaization_divisions",
+        "data_domains",
+        "common_business_jargons",
+        "operational_systems_of_records",
+        "industry_governing_body",
+        "vibe_modelling_instructions",
+        "model_conventions",
+        "completion_date",
+        "completed_percent",
+        "processing_status"
+      ],
+      "values": {
+        "business": "Acme_Co",
+        "catalog": "drift_cat",
+        "common_business_jargons": "SKU",
+        "completed_percent": "100.0",
+        "completion_date": "2026-05-08 02:27:55",
+        "core_business_processes": "Order to cash",
+        "data_domains": "Customer, Sales",
+        "description": "Acme Co sells goods.",
+        "industry_alignment": "Retail",
+        "industry_governing_body": "None",
+        "last_updated_at": null,
+        "location": "/Volumes/drift_cat/_metamodel/vol_root/business/acme_co/v1/mvm",
+        "model_conventions": "{\"data_asset_naming_convention\": \"snake_case\"}",
+        "model_scope": "mvm",
+        "operational_systems_of_records": "ERP",
+        "orgnaization_divisions": "Operations, Business and Corporate",
+        "processing_status": "done",
+        "results_json": null,
+        "session_id": null,
+        "session_json": null,
+        "session_started_at": null,
+        "version": "1",
+        "vibe_modelling_instructions": ""
+      }
+    },
+    "run_start": {
+      "keys_passed": [
+        "business",
+        "version",
+        "model_scope",
+        "industry_alignment",
+        "description",
+        "catalog",
+        "location",
+        "core_business_processes",
+        "orgnaization_divisions",
+        "data_domains",
+        "common_business_jargons",
+        "operational_systems_of_records",
+        "industry_governing_body",
+        "vibe_modelling_instructions",
+        "model_conventions",
+        "completed_percent",
+        "processing_status"
+      ],
+      "values": {
+        "business": "Acme_Co",
+        "catalog": "drift_cat",
+        "common_business_jargons": "SKU",
+        "completed_percent": "0.0",
+        "completion_date": null,
+        "core_business_processes": "Order to cash",
+        "data_domains": "Customer, Sales",
+        "description": "Acme Co sells goods.",
+        "industry_alignment": "Retail",
+        "industry_governing_body": "None",
+        "last_updated_at": null,
+        "location": "/Volumes/drift_cat/_metamodel/vol_root/business/acme_co/v1/mvm",
+        "model_conventions": "{\"data_asset_naming_convention\": \"snake_case\"}",
+        "model_scope": "mvm",
+        "operational_systems_of_records": "ERP",
+        "orgnaization_divisions": "Operations, Business and Corporate",
+        "processing_status": "pending",
+        "results_json": null,
+        "session_id": null,
+        "session_json": null,
+        "session_started_at": null,
+        "version": "1",
+        "vibe_modelling_instructions": ""
+      }
+    }
+  },
+  "emulated_sources": {
+    "VibeWriter._finalize_session": "c43185ba7311ee046c3a3b77d9ac885e31dbd581b5bd0021fbb6586501e2c994",
+    "VibeWriter._update_session_ready": "5977988c42213ed6b396cf53ae4209265981d8cb956859ae2894b18630269f02",
+    "VibeWriter.initialize_session": "a844c451c2dde513d43eb415250cfeebafc2f0799e85fe22a7ae3bafa08dbe58",
+    "_ensure_metamodel_registry": "faff221f4327355cb7423a3296cb2bc73e2695a6e49e16c1480a74eadc6f6eb9",
+    "_register_model_json_in_metamodel": "8e09ce6640247339461ae2cf90b1cb4609d1b060d2011f5f0297e7b0f267a7ab",
+    "_registry_other_deployments": "f86ae933e5bad4bf9d7c38744d1d4e31a1bca826417ec279ca97888cb7d66760",
+    "_set_metamodel_deploy_status": "54562c74c5501f968b09666640685c22fc24be67a5c4e038763b40993ac3ec23"
+  },
+  "installer_columns": {
+    "attribute": [
+      "business",
+      "version",
+      "model_scope",
+      "domain",
+      "product",
+      "attribute",
+      "column_name",
+      "type",
+      "tags",
+      "value_regex",
+      "foreign_key_to",
+      "business_glossary_term",
+      "description",
+      "reference"
+    ],
+    "domain": [
+      "business",
+      "version",
+      "model_scope",
+      "domain",
+      "division",
+      "description",
+      "database_name",
+      "catalog",
+      "reference",
+      "tags"
+    ],
+    "product": [
+      "business",
+      "version",
+      "model_scope",
+      "domain",
+      "subdomain",
+      "product",
+      "description",
+      "type",
+      "division",
+      "function",
+      "data_type",
+      "source_domains",
+      "association_edges",
+      "primary_key",
+      "reference",
+      "table_name",
+      "sample_path",
+      "tags"
+    ]
+  },
+  "installer_rows": {
+    "attribute": [
+      {
+        "attribute": "customer_id",
+        "business": "Acme_Co",
+        "business_glossary_term": "",
+        "column_name": "customer_id",
+        "description": "Key.",
+        "domain": "Customer",
+        "foreign_key_to": "",
+        "model_scope": "mvm",
+        "product": "Customer Master",
+        "reference": "",
+        "tags": "",
+        "type": "bigint",
+        "value_regex": "",
+        "version": "1"
+      }
+    ],
+    "domain": [
+      {
+        "business": "Acme_Co",
+        "catalog": "drift_cat",
+        "database_name": "customer",
+        "description": "Customers.",
+        "division": "business",
+        "domain": "Customer",
+        "model_scope": "mvm",
+        "reference": "",
+        "tags": "",
+        "version": "1"
+      }
+    ],
+    "product": [
+      {
+        "association_edges": "",
+        "business": "Acme_Co",
+        "data_type": "",
+        "description": "One row per customer.",
+        "division": "business",
+        "domain": "Customer",
+        "function": "",
+        "model_scope": "mvm",
+        "primary_key": "customer_id",
+        "product": "Customer Master",
+        "reference": "",
+        "sample_path": "",
+        "source_domains": "",
+        "subdomain": "core",
+        "table_name": "customer_master",
+        "tags": "",
+        "type": "master",
+        "version": "1"
+      }
+    ]
+  },
+  "migration_columns": [
+    "session_id",
+    "processing_status",
+    "completed_percent",
+    "session_started_at",
+    "last_updated_at",
+    "session_json",
+    "results_json",
+    "deploy_status"
+  ],
+  "model_json_keys": {
+    "attribute": {
+      "always": [
+        "name",
+        "column_name",
+        "type",
+        "business_glossary_term",
+        "description",
+        "value_regex",
+        "tags",
+        "foreign_key_to",
+        "references"
+      ],
+      "when_present": [
+        "steward"
+      ]
+    },
+    "domain": {
+      "always": [
+        "name",
+        "division",
+        "description",
+        "database_name",
+        "references",
+        "tags",
+        "products"
+      ],
+      "when_present": []
+    },
+    "model": {
+      "always": [
+        "type",
+        "name",
+        "version",
+        "description",
+        "industry_alignment",
+        "location",
+        "core_business_processes",
+        "orgnaization_divisions",
+        "data_domains",
+        "common_business_jargons",
+        "operational_systems_of_records",
+        "industry_governing_body",
+        "model_conventions",
+        "domains"
+      ],
+      "when_present": []
+    },
+    "product": {
+      "always": [
+        "name",
+        "table_name",
+        "primary_key",
+        "subdomain",
+        "description",
+        "type",
+        "division",
+        "function",
+        "data_type",
+        "source_domains",
+        "association_edges",
+        "reference",
+        "tags",
+        "steward",
+        "attributes"
+      ],
+      "when_present": []
+    },
+    "root": {
+      "always": [
+        "agent_version",
+        "release_version",
+        "lineage",
+        "model_requirements",
+        "vreq_adherence_pct",
+        "native_quality_pct",
+        "vov_quality_pct",
+        "_vibe_session_metadata",
+        "model"
+      ],
+      "when_present": [
+        "_vibe_scope",
+        "entity_changes",
+        "input_outcomes"
+      ]
+    }
+  },
+  "notebook_sha256": "002c2753fb9e0b278ee3da175ae7ec0f37e89666e98ffc33429acdd1f155f792",
+  "origin": {
+    "insert_builder": {
+      "cell": 116,
+      "name": "VibeWriter._build_insert_sql"
+    },
+    "installed_row": {
+      "cell": 118
+    },
+    "installer": {
+      "cell": 118,
+      "record_columns_cell": 118
+    },
+    "migration_columns": {
+      "cell": 118
+    },
+    "model_json_writer": {
+      "cell": 192
+    },
+    "run_merge_columns": {
+      "cell": 194
+    },
+    "run_start_row": {
+      "cell": 124
+    },
+    "tables": {
+      "cell": 86,
+      "names": [
+        "TABLE_BUSINESS_SCHEMA",
+        "TABLE_DOMAIN_SCHEMA",
+        "TABLE_PRODUCT_SCHEMA",
+        "TABLE_ATTRIBUTE_SCHEMA"
+      ]
+    }
+  },
+  "other_table_columns": {
+    "attribute": [
+      "business",
+      "version",
+      "model_scope",
+      "domain",
+      "product",
+      "attribute",
+      "column_name",
+      "type",
+      "tags",
+      "value_regex",
+      "foreign_key_to",
+      "business_glossary_term",
+      "description",
+      "reference"
+    ],
+    "domain": [
+      "business",
+      "version",
+      "model_scope",
+      "domain",
+      "division",
+      "description",
+      "database_name",
+      "catalog",
+      "reference",
+      "tags"
+    ],
+    "product": [
+      "business",
+      "version",
+      "model_scope",
+      "domain",
+      "subdomain",
+      "product",
+      "description",
+      "type",
+      "division",
+      "function",
+      "data_type",
+      "source_domains",
+      "association_edges",
+      "primary_key",
+      "reference",
+      "table_name",
+      "sample_path",
+      "tags"
+    ]
+  },
+  "release_version": "0.8.0",
+  "run_merge_columns": {
+    "attribute": [
+      "business",
+      "version",
+      "model_scope",
+      "domain",
+      "product",
+      "attribute",
+      "column_name",
+      "type",
+      "tags",
+      "value_regex",
+      "foreign_key_to",
+      "business_glossary_term",
+      "description",
+      "reference"
+    ],
+    "domain": [
+      "business",
+      "version",
+      "model_scope",
+      "domain",
+      "division",
+      "description",
+      "database_name",
+      "reference"
+    ],
+    "product": [
+      "business",
+      "version",
+      "model_scope",
+      "domain",
+      "subdomain",
+      "product",
+      "description",
+      "type",
+      "division",
+      "function",
+      "data_type",
+      "source_domains",
+      "association_edges",
+      "primary_key",
+      "reference",
+      "table_name",
+      "sample_path",
+      "tags"
+    ]
+  }
+}

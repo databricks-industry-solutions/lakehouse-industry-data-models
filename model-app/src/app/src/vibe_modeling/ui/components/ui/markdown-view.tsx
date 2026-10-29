@@ -4,6 +4,9 @@ import remarkGfm from "remark-gfm";
 import rehypeSlug from "rehype-slug";
 import { cn } from "@/lib/utils";
 
+/** Inline code spans: shared by MarkdownView and plain agent text (`components/assessment/agent-text.tsx`). Never below the 11px of block code. */
+export const INLINE_CODE_CLASS = "bg-muted/70 rounded-sm px-1 py-0.5 font-mono text-[max(0.9em,11px)]";
+
 /**
  * The single styled Markdown renderer for the app (GFM tables/strikethrough +
  * slugged headings + a consistent component map). Extracted from the Artifacts
@@ -49,7 +52,7 @@ const MARKDOWN_COMPONENTS = {
         {children}
       </code>
     ) : (
-      <code className="bg-muted/70 rounded-sm px-1 py-0.5 font-mono text-[11px]" {...props}>
+      <code className={INLINE_CODE_CLASS} {...props}>
         {children}
       </code>
     );

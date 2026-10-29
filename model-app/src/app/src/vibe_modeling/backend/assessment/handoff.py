@@ -25,8 +25,10 @@ from .schemas import HandoffPrompt, NextStepOut, SkillStatus
 logger = logging.getLogger(__name__)
 
 MAX_FILES = 2000
-EXPECTED_HANDOFFS = [".pipeline/handoffs/ (build handoff docs — created by the Continue step)",
-                     "docs/design/ (S2T report, Gap Registry)", "conventions.yml"]
+EXPECTED_HANDOFFS = ["docs/design/ (S2T report, Gap Registry)",
+                     "docs/design/business_requirements.md + etl_detailed_spec.md (the build inputs, written by the "
+                     "Continue step)",
+                     "conventions.yml"]
 USER_SCOPE_NOTE = ("Skills are looked up in your user folder (/Workspace/Users/<you>/.assistant/skills) first, then "
                    "workspace-wide (/Workspace/.assistant/skills). Installing them in your own folder keeps them yours.")
 
@@ -62,28 +64,49 @@ def render_decisions_md(decisions) -> str:
     return "\n".join(lines)
 
 
-def build_prompts(root: str, output_model: str = "normalized") -> list[HandoffPrompt]:
-    """Genie Code prompts in run order; a hybrid model adds the Mode B gold step between Build and Validate."""
+def _prompt_steps(root: str, output_model: str) -> list[tuple[str, str, str, str]]:
+    """``(key, title, skill, prompt)`` per Genie Code prompt, in run order; the one list of hand-off steps.
+
+    Build inputs live in ``docs/design/``: Phase 6 of the assessment writes ``business_requirements.md`` and
+    ``etl_detailed_spec.md`` there, and the ETL skill reads them plus the gold design from there. A hybrid model
+    builds and validates each layer in turn (the validation and documentation skills expect one validation run
+    per layer): silver first, then Mode B gold derivation, the gold build and the gold validation.
+    """
+    hybrid = output_model == "hybrid"
+    layer = " against the silver layer" if hybrid else ""
     steps = [
         ("continue", "Continue the assessment", "domain-model-assessment",
          f"Run my $domain-model-assessment skill at {root} (load $autonomous-validation alongside it). "
          "Phases 0–4 are done — read docs/design/. Run Phase 5 (iteration loop) using the answers in "
          "docs/inputs/decisions.md, then Phase 6 to generate the build handoff docs."),
-        ("build", "Build", "etl-development-framework",
+        ("build", "Build silver" if hybrid else "Build", "etl-development-framework",
          f"Run my $etl-development-framework skill at {root} (load $autonomous-validation alongside it) "
-         "using the handoff docs in .pipeline/handoffs/."),
+         "using the build handoff docs in docs/design/ (business_requirements.md, etl_detailed_spec.md)."),
+        ("validate", "Validate silver" if hybrid else "Validate", "domain-model-validation",
+         f"Run my $domain-model-validation skill at {root} (load $autonomous-validation alongside it){layer}."),
     ]
-    if output_model == "hybrid":
-        steps.append(("gold", "Derive gold", "domain-model-assessment",
-                      "Silver is built and populated — run Mode B (gold derivation) of my $domain-model-assessment "
-                      f"skill at {root} (load $autonomous-validation alongside it), then generate the gold handoff "
-                      "for $etl-development-framework."))
-    steps += [
-        ("validate", "Validate", "domain-model-validation",
-         f"Run my $domain-model-validation skill at {root} (load $autonomous-validation alongside it)."),
-        ("document", "Document", "domain-documentation", f"Run my $domain-documentation skill at {root}."),
-    ]
-    return [HandoffPrompt(key=k, title=f"{i}. {t}", skill=sk, prompt=p) for i, (k, t, sk, p) in enumerate(steps, 1)]
+    if hybrid:
+        steps += [
+            ("gold", "Derive gold", "domain-model-assessment",
+             "Silver is built and populated — run Mode B (gold derivation) of my $domain-model-assessment "
+             f"skill at {root} (load $autonomous-validation alongside it), then write the gold handoff "
+             "for $etl-development-framework to docs/design/."),
+            ("build_gold", "Build gold", "etl-development-framework",
+             f"Run my $etl-development-framework skill at {root} (load $autonomous-validation alongside it) "
+             "to build the gold layer from the gold design in docs/design/ (gold_requirements.md, or the "
+             "gold_layer_assessment.md written by the Derive gold step)."),
+            ("validate_gold", "Validate gold", "domain-model-validation",
+             f"Run my $domain-model-validation skill at {root} (load $autonomous-validation alongside it) "
+             "against the gold layer."),
+        ]
+    steps.append(("document", "Document", "domain-documentation", f"Run my $domain-documentation skill at {root}."))
+    return steps
+
+
+def build_prompts(root: str, output_model: str = "normalized") -> list[HandoffPrompt]:
+    """Genie Code prompts in run order, numbered (four; seven for a hybrid model)."""
+    return [HandoffPrompt(key=k, title=f"{i}. {t}", skill=sk, prompt=p)
+            for i, (k, t, sk, p) in enumerate(_prompt_steps(root, output_model), 1)]
 
 
 def render_readme(*, business: str, domain: str, model_version: int, batch_id: str, dr: AssessDomainRun,
@@ -102,6 +125,9 @@ def render_readme(*, business: str, domain: str, model_version: int, batch_id: s
 
 def _plural(n: int, noun: str) -> str:
     return f"{n} {noun}" + ("" if n == 1 else "s")
+
+
+_PROMPT_COUNT_WORDS = {4: "four", 7: "seven"}
 
 
 def build_next_steps(*, verdict: str | None, open_blocking: int, open_total: int, before_build_vibes: int,
@@ -128,12 +154,9 @@ def build_next_steps(*, verdict: str | None, open_blocking: int, open_total: int
         steps.append(("Install the Genie Code skills", "Some of the six skills are missing or out of date."))
     steps.append(("Copy the assessment to your workspace",
                   "Done." if copied else "Copies conventions.yml and docs/ to a workspace folder."))
-    if output_model == "hybrid":
-        steps.append(("In Genie Code, run Continue → Build → Derive gold → Validate → Document",
-                      "Paste the five prompts in order."))
-    else:
-        steps.append(("In Genie Code, run Continue → Build → Validate → Document",
-                      "Paste the four prompts in order."))
+    titles = [t for _, t, _, _ in _prompt_steps("", output_model)]
+    steps.append((f"In Genie Code, run {' → '.join(titles)}",
+                  f"Paste the {_PROMPT_COUNT_WORDS[len(titles)]} prompts in order."))
     copy_title = "Copy the assessment to your workspace"
     return [NextStepOut(order=i, title=t, detail=d, done=copied and t == copy_title)
             for i, (t, d) in enumerate(steps, 1)]

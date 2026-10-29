@@ -5,33 +5,23 @@ import sys
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "app", "src"))
+sys.path.insert(0, os.path.dirname(__file__))
 
 import pytest
 
 from vibe_modeling.backend import progress_schema
+from vibe_modeling.backend.core._sql import SqlStatementError
 from vibe_modeling.backend.progress_schema import (
     detect_result_json_type,
     ensure_progress_schema,
 )
 
+from _sql_fakes import response, ws_returning  # noqa: E402
+
 
 def _mk_exec_result(rows: list[list] | None, *, error_message: str | None = None):
-    """Build a fake `execute_statement` result object."""
-    result = MagicMock()
-    if error_message is not None:
-        result.status = MagicMock()
-        result.status.error = MagicMock()
-        result.status.error.message = error_message
-        result.result = None
-        return result
-    result.status = MagicMock()
-    result.status.error = None
-    if rows is None:
-        result.result = None
-    else:
-        result.result = MagicMock()
-        result.result.data_array = rows
-    return result
+    """A SUCCEEDED statement response with ``rows``, or a FAILED one with ``error_message``."""
+    return response(rows, error=error_message)
 
 
 @pytest.fixture(autouse=True)
@@ -62,12 +52,29 @@ class TestDetectResultJsonType:
         ws.statement_execution.execute_statement.return_value = _mk_exec_result([])
         assert detect_result_json_type(ws, "wh-1", "my_cat") == "MISSING"
 
-    def test_returns_missing_on_sql_error(self):
+    def test_sql_error_raises(self):
+        """A failed probe is not a schema answer: it raises instead of reading as MISSING."""
         ws = MagicMock()
         ws.statement_execution.execute_statement.return_value = _mk_exec_result(
             None, error_message="boom"
         )
-        assert detect_result_json_type(ws, "wh-1", "my_cat") == "MISSING"
+        with pytest.raises(SqlStatementError):
+            detect_result_json_type(ws, "wh-1", "my_cat")
+
+    def test_unfinished_probe_raises(self):
+        """Fails fast: no polls after the 30 s server wait; cancelled, then TIMEOUT."""
+        ws = ws_returning(response(state="PENDING", statement_id="s1"))
+        with pytest.raises(SqlStatementError) as ei:
+            detect_result_json_type(ws, "wh-1", "my_cat")
+        assert ei.value.state == "TIMEOUT"
+        ws.statement_execution.cancel_execution.assert_called_once_with("s1")
+        assert ws.statement_execution.get_statement.call_count == 1
+
+    def test_probe_keeps_its_30s_wait(self):
+        ws = MagicMock()
+        ws.statement_execution.execute_statement.return_value = _mk_exec_result([["VARIANT"]])
+        detect_result_json_type(ws, "wh-1", "my_cat")
+        assert ws.statement_execution.execute_statement.call_args.kwargs["wait_timeout"] == "30s"
 
     def test_queries_information_schema(self):
         """The detector must target information_schema.columns."""
@@ -127,6 +134,19 @@ class TestEnsureProgressSchemaStringDrop:
         assert "_vibe_progress" in drop_sql
         assert "my_cat" in drop_sql
 
+    def test_unfinished_drop_is_a_failure_and_not_cached(self):
+        ws = MagicMock()
+        ws.statement_execution.execute_statement.side_effect = [
+            _mk_exec_result([["STRING"]]),
+            response(state="PENDING", statement_id="drop-1"),
+            _mk_exec_result([["STRING"]]),
+            _mk_exec_result([]),
+        ]
+        ensure_progress_schema(ws, "wh-1", "my_cat")
+        ws.statement_execution.cancel_execution.assert_called_once_with("drop-1")
+        ensure_progress_schema(ws, "wh-1", "my_cat")
+        assert ws.statement_execution.execute_statement.call_count == 4
+
     def test_string_drop_failure_swallowed(self):
         """If DROP raises, no exception propagates — best-effort."""
         ws = MagicMock()
@@ -137,6 +157,39 @@ class TestEnsureProgressSchemaStringDrop:
         ]
         # Must not raise.
         ensure_progress_schema(ws, "wh-1", "my_cat")
+
+
+class TestEnsureProgressSchemaProbeFailure:
+    @pytest.mark.parametrize("probe", [
+        _mk_exec_result(None, error_message="[INSUFFICIENT_PERMISSIONS] denied"),
+        response(state="RUNNING", statement_id="s1"),
+        RuntimeError("warehouse unreachable"),
+    ])
+    def test_failed_probe_never_drops_and_does_not_cache(self, probe):
+        """The DROP runs only on a confirmed STRING column; a failed probe is retried next launch."""
+        ws = MagicMock()
+        ws.statement_execution.execute_statement.side_effect = [
+            probe,
+            _mk_exec_result([["VARIANT"]]),
+        ]
+        ensure_progress_schema(ws, "wh-1", "my_cat")
+        calls = ws.statement_execution.execute_statement.call_args_list
+        assert len(calls) == 1
+        assert all("DROP" not in c.kwargs.get("statement", "") for c in calls)
+
+        ensure_progress_schema(ws, "wh-1", "my_cat")
+        calls = ws.statement_execution.execute_statement.call_args_list
+        assert len(calls) == 2
+        assert all("DROP" not in c.kwargs.get("statement", "") for c in calls)
+
+    def test_failed_probe_is_logged(self, caplog):
+        ws = MagicMock()
+        ws.statement_execution.execute_statement.return_value = _mk_exec_result(
+            None, error_message="denied"
+        )
+        with caplog.at_level("WARNING", logger="vibe_modeling.backend.progress_schema"):
+            ensure_progress_schema(ws, "wh-1", "my_cat")
+        assert any("probe failed" in r.getMessage() for r in caplog.records)
 
 
 class TestEnsureProgressSchemaStrategies:

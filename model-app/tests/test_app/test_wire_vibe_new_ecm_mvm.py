@@ -729,3 +729,63 @@ class TestRunOperationsAfterCreate:
 # ---------------------------------------------------------------------------
 
 
+
+
+# ---------------------------------------------------------------------------
+# Section 7: the form's pre-filled conventions reach both steps and the audit
+# ---------------------------------------------------------------------------
+
+
+class TestConventionsReachBothSteps:
+    """T2 J7 A2: the base ECM has SCREAMING_CASE, Int (0/1), dd/MM/yyyy and
+    the tag suffix _wt. The form pre-fills them and sends every field, blanks
+    included; both steps carry them and ``parameters_json`` lists every
+    non-empty one."""
+
+    BASE_CONVENTIONS = {
+        "naming_convention": "SCREAMING_CASE",
+        "primary_key_suffix": "_id",
+        "schema_suffix": "",
+        "tag_prefix": "dbx_",
+        "tag_suffix": "_wt",
+        "table_id_type": "BIGINT",
+        "boolean_format": "Int (0/1)",
+        "date_format": "dd/MM/yyyy",
+        "timestamp_format": "yyyy-MM-dd HH:mm:ss",
+        "classification_levels": "",
+        "catalog_prefix": "",
+        "catalog_suffix": "",
+        "org_divisions": "Operations, Business and Corporate",
+        "housekeeping_columns": "No",
+        "history_tracking_columns": "No",
+    }
+
+    def test_vibe_new_ecm_mvm_carries_the_base_conventions(
+        self, client_with_agent, mock_ws, parent_ecm_version, engine
+    ):
+        biz_id, parent_vid = parent_ecm_version
+        _ws_with_run_now(mock_ws, run_id=30303)
+        body = _make_body(
+            business_id=biz_id,
+            parent_version_id=parent_vid,
+            extra=self.BASE_CONVENTIONS,
+        )
+        resp = client_with_agent.post(f"/api/businesses/{biz_id}/runs", json=body)
+        assert resp.status_code == 200, resp.text
+        run_id = resp.json()["id"]
+
+        with Session(engine) as session:
+            stored = json.loads(session.get(Run, run_id).parameters_json)
+        for field, value in self.BASE_CONVENTIONS.items():
+            if value:
+                assert stored[field] == value, field
+            else:
+                assert field not in stored, field
+
+        vibe_step, shrink_step = _runops_for(engine, run_id)
+        for step in (vibe_step, shrink_step):
+            params = json.loads(step.params_json)
+            for field, value in self.BASE_CONVENTIONS.items():
+                assert params[field] == value, (step.operation_name, field)
+        assert json.loads(vibe_step.params_json)["schema_prefix"] == "ecm_"
+        assert json.loads(shrink_step.params_json)["schema_prefix"] == "mvm_"

@@ -29,7 +29,7 @@ from typing import Optional
 
 from ....core._names import sanitize_catalog_segment
 from ....db_models import AgentConfig, Business, BusinessContext
-from ....models import Intent, RunIn
+from ....models import RUN_CONVENTION_FIELDS, Intent, RunIn
 from ..dag import Dag, OperationStep
 from ....core import resolve_run_target_catalog
 from ._unified import (
@@ -75,7 +75,6 @@ def _vibe_iterate_params(
         "schema_prefix": ecm_prefix,
         "vibe_instructions": (getattr(req, "vibe_instructions", "") or ""),
         "industry_alignment": getattr(business, "industry_alignment", "") or "",
-        "generate_samples": bool(getattr(req, "generate_samples", False)),
     }
 
     # Inline business context override — flows to the agent's
@@ -89,24 +88,7 @@ def _vibe_iterate_params(
 
     # Optional convention overrides — forward only when explicitly set
     # so Pydantic defaults govern unset fields.
-    for field in (
-        "naming_convention",
-        "primary_key_suffix",
-        "schema_suffix",
-        "tag_prefix",
-        "tag_suffix",
-        "table_id_type",
-        "boolean_format",
-        "date_format",
-        "timestamp_format",
-        "catalog_prefix",
-        "catalog_suffix",
-        "org_divisions",
-        "business_domains",
-        "classification_levels",
-        "housekeeping_columns",
-        "history_tracking_columns",
-    ):
+    for field in RUN_CONVENTION_FIELDS:
         v = getattr(req, field, None)
         if v is not None:
             out[field] = v

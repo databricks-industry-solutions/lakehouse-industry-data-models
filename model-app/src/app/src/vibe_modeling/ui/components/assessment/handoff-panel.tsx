@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -28,10 +28,12 @@ const SKILL_BADGE: Record<SkillStatus["state"], { label: string; variant: "secon
   unknown: { label: "Unknown", variant: "outline" },
 };
 const SKILL_LOCATION = { user: "in your folder", workspace: "workspace-wide", none: "" } as const;
+const FOLDER_PLACEHOLDER = "/Workspace/Users/<your email>/vibe-assess";
 
-/** Hand-off tab: copy conventions.yml + docs + decisions to a workspace folder, then run the hand-off prompts in order (four, or five for hybrid models). */
+/** Hand-off tab: copy conventions.yml + docs + decisions to a workspace folder, then run the hand-off prompts in order (four, or seven for hybrid models). */
 export function HandoffPanel({ domainRunId }: { domainRunId: string }) {
   const queryClient = useQueryClient();
+  const folderId = useId();
   const { data } = useGetAssessmentHandoffSuspense({
     params: { domain_run_id: domainRunId },
     ...selector<HandoffOut>(),
@@ -138,15 +140,26 @@ export function HandoffPanel({ domainRunId }: { domainRunId: string }) {
         Copies conventions.yml, the design docs and your decision answers into a workspace folder. Next vibes are
         read-only and are not imported automatically — add the ones you want as vibe inputs for your next modeling iteration.
       </p>
-      <div className="flex items-center gap-2">
-        <Input value={path} onChange={(e) => setPath(e.target.value)} aria-label="Workspace folder" />
-        <Button onClick={copy} disabled={pending || !path.trim()}>
-          Copy to workspace
-        </Button>
+      <div className="space-y-1">
+        <label htmlFor={folderId} className="font-medium">
+          Workspace folder
+        </label>
+        <div className="flex items-center gap-2">
+          <Input
+            id={folderId}
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            placeholder={FOLDER_PLACEHOLDER}
+            className="font-mono"
+          />
+          <Button onClick={copy} disabled={pending || !path.trim()}>
+            Copy to workspace
+          </Button>
+        </div>
       </div>
       {copyHelp && <AdminHelpBlock help={copyHelp} testId="handoff-admin-help" live />}
       {copied && copied.path && (
-        <p className="flex items-center gap-2">
+        <p className="flex flex-wrap items-center gap-x-2 break-all">
           Copied to {copied.path} at {formatDateTime(copied.created_at as string)}
           <a
             href={copied.folder_url}
@@ -160,10 +173,11 @@ export function HandoffPanel({ domainRunId }: { domainRunId: string }) {
       )}
       <div className="space-y-2">
         <h3 className="font-medium">Run these prompts in order</h3>
-        {data.prompts.map((p, i) => (
+        {data.prompts.map((p) => (
           <div key={p.key} className="space-y-1">
+            {/* The backend numbers the titles (the hand-off README uses them too). */}
             <p className="text-xs text-muted-foreground">
-              {i + 1}. {p.title} ({p.skill})
+              {p.title} ({p.skill})
             </p>
             <CopyBlock text={p.prompt} label={`Copy ${p.title}`} />
           </div>

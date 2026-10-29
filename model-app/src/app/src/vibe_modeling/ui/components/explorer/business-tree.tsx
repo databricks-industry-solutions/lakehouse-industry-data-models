@@ -3,6 +3,7 @@ import { Link, useParams } from "@tanstack/react-router";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { versionBrandLabel } from "@/lib/version-label";
 import {
   useGetExplorerVersions,
   useGetModelSummary,
@@ -128,6 +129,7 @@ function VersionItem({
     scope?: string;
     status: string;
     is_base?: boolean;
+    parent_deleted?: boolean;
     confidence_score?: number | null;
   };
   isActive: boolean;
@@ -181,7 +183,7 @@ function VersionItem({
             variant={v.is_base ? "default" : "secondary"}
             className="text-[10px] px-1 py-0 shrink-0"
           >
-            {v.is_base ? "Base" : "Vibed"}
+            {versionBrandLabel(v)}
           </Badge>
         </Link>
       </div>

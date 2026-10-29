@@ -165,7 +165,7 @@ describe("AssessmentWizard", () => {
   it("shows the admin-help block for a launch the backend refused or failed", async () => {
     const { ApiError } = await import("@/lib/api");
     api.launchAssessment.mockRejectedValue(
-      new ApiError(502, "Bad Gateway", {
+      new ApiError(409, "Conflict", {
         detail: { error: "admin_help", message: "Launch failed: assets unreadable", job_url: "https://ws/jobs/7" },
       }),
     );

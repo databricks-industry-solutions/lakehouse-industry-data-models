@@ -169,6 +169,13 @@ describe("FeedbackList", () => {
     expect(screen.queryByLabelText(/Filter by selection/i)).not.toBeInTheDocument();
   });
 
+  it("does not offer the Deprecated state, which this active-only list could not show", () => {
+    render(withQuery(<FeedbackList {...baseProps} />));
+    fireEvent.click(screen.getByLabelText(/Filter by state/i));
+    expect(screen.getByRole("option", { name: "Active" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Deprecated" })).not.toBeInTheDocument();
+  });
+
   it("domain filter narrows the list and offers model-wide", () => {
     feedbackData = FEEDBACK_MULTI_DOMAIN;
     render(withQuery(<FeedbackList {...baseProps} />));

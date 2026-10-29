@@ -25,7 +25,15 @@ from typing import Optional
 from sqlmodel import Session, select
 
 from ..db_models import Attribute, Domain, ForeignKeyLink, Product, Subdomain
+from ..fk import fk_edge_id, parse_fk_edge_id, product_fqn
 from ..models import FeedbackContext
+
+# An FK's natural key: (source_domain, source_product, source_column,
+# target_domain, target_product, target_column), the ForeignKeyLink columns.
+# source_column is the source attribute's NAME (what model sync stores). A
+# column may be None when the caller doesn't know it; then only the four
+# names match (see _resolve_fk).
+FkKey = tuple[str, str, Optional[str], str, str, Optional[str]]
 
 
 @dataclass
@@ -49,7 +57,10 @@ class _Coords:
 
     domain_name: Optional[str] = None
     product_name: Optional[str] = None
-    fk_parts: Optional[tuple[str, str, str, str]] = None  # (srcD, srcP, tgtD, tgtP)
+    attribute_name: Optional[str] = None
+    # A diagram edge (parse_fk_edge_id): an FkKey shape whose source column is
+    # the attribute's column_name, translated to its name before matching.
+    fk_edge: Optional[FkKey] = None
     intended_model_wide: bool = False
 
 
@@ -59,27 +70,20 @@ def _coords_from_feedback_context(ctx: FeedbackContext) -> _Coords:
     if ctx.selected_node_id:
         parts = ctx.selected_node_id.split(".", 1)
         if len(parts) == 2:
-            return _Coords(domain_name=parts[0], product_name=parts[1])
+            return _Coords(
+                domain_name=parts[0],
+                product_name=parts[1],
+                attribute_name=ctx.selected_attribute or None,
+            )
         return _Coords(domain_name=parts[0])
     if ctx.selected_edge_id:
-        fk_parts = _parse_edge_id(ctx.selected_edge_id)
-        if fk_parts is not None:
-            return _Coords(fk_parts=fk_parts)
+        fk_edge = parse_fk_edge_id(ctx.selected_edge_id)
+        if fk_edge is not None:
+            return _Coords(fk_edge=fk_edge)
         return _Coords(intended_model_wide=False)  # unparseable edge → model-wide fallback
     if ctx.domain_filter:
         return _Coords(domain_name=ctx.domain_filter)
     return _Coords(intended_model_wide=True)
-
-
-def _parse_edge_id(edge_id: str) -> Optional[tuple[str, str, str, str]]:
-    """Parse ``fk:{srcD}.{srcP}.{col}>{tgtD}.{tgtP}.{col}`` → name 4-tuple."""
-    try:
-        src_part, tgt_part = edge_id.replace("fk:", "", 1).split(">", 1)
-        src_bits = src_part.split(".")
-        tgt_bits = tgt_part.split(".")
-        return (src_bits[0], src_bits[1], tgt_bits[0], tgt_bits[1])
-    except (ValueError, IndexError):
-        return None
 
 
 def _resolve_domain(session: Session, version_id: str, name: str) -> Optional[str]:
@@ -108,16 +112,110 @@ def _resolve_product(session: Session, version_id: str, domain_id: str, name: st
     ).first()
 
 
-def _resolve_fk(session: Session, version_id: str,
-                parts: tuple[str, str, str, str]) -> Optional[str]:
-    src_d, src_p, tgt_d, tgt_p = parts
-    return session.exec(
+def _resolve_fk(
+    session: Session,
+    version_id: str,
+    key: FkKey,
+    maps: Optional["AnchorMaps"] = None,
+) -> Optional[str]:
+    """The one FK in ``version_id`` with natural key ``key``.
+
+    With both columns known, only the exact six-name match counts: a product
+    pair can carry several FKs (child / parent / root to the same table). With
+    a column unknown, the four names must match exactly one FK; several give
+    None, so the caller degrades with ``needs_link_review`` instead of picking
+    one."""
+    src_d, src_p, src_c, tgt_d, tgt_p, tgt_c = key
+    if src_c is not None and tgt_c is not None:
+        if maps is not None:
+            return maps.fk_links.get(key)
+        return session.exec(
+            select(ForeignKeyLink.id).where(
+                ForeignKeyLink.version_id == version_id,
+                ForeignKeyLink.source_domain == src_d,
+                ForeignKeyLink.source_product == src_p,
+                ForeignKeyLink.source_column == src_c,
+                ForeignKeyLink.target_domain == tgt_d,
+                ForeignKeyLink.target_product == tgt_p,
+                ForeignKeyLink.target_column == tgt_c,
+            ).order_by(ForeignKeyLink.id)
+        ).first()
+    ids = session.exec(
         select(ForeignKeyLink.id).where(
             ForeignKeyLink.version_id == version_id,
             ForeignKeyLink.source_domain == src_d,
             ForeignKeyLink.source_product == src_p,
             ForeignKeyLink.target_domain == tgt_d,
             ForeignKeyLink.target_product == tgt_p,
+        )
+    ).all()
+    return ids[0] if len(ids) == 1 else None
+
+
+def _fk_key_from_edge(session: Session, version_id: str, edge: FkKey) -> FkKey:
+    """Translate a diagram edge's source column (the attribute's
+    ``column_name``) to the attribute name ForeignKeyLink stores. Kept as is
+    when no attribute has that column_name."""
+    src_d, src_p, src_c, tgt_d, tgt_p, tgt_c = edge
+    if src_c is None:
+        return edge
+    dom = _resolve_domain(session, version_id, src_d)
+    if dom is None:
+        return edge
+    prod = _resolve_product(session, version_id, dom, src_p)
+    if prod is None:
+        return edge
+    name = session.exec(
+        select(Attribute.name).where(
+            Attribute.product_id == prod, Attribute.column_name == src_c,
+        ).order_by(Attribute.id)
+    ).first()
+    return (src_d, src_p, name or src_c, tgt_d, tgt_p, tgt_c)
+
+
+def fk_link_edge_ids(session: Session, fks: list[ForeignKeyLink]) -> dict[str, str]:
+    """``{fk_link_id: diagram edge id}`` for ``fks``, the id the diagram gives
+    the same relationship (source column = the source attribute's
+    ``column_name``). One query for all of them."""
+    if not fks:
+        return {}
+    versions = {fk.version_id for fk in fks}
+    names = {fk.source_column for fk in fks}
+    column_names: dict[tuple[str, str, str, str], str] = {}
+    for version_id, d_name, p_name, a_name, col in session.exec(
+        select(Product.version_id, Domain.name, Product.name, Attribute.name, Attribute.column_name)
+        .join(Product, Product.id == Attribute.product_id)
+        .join(Domain, Domain.id == Product.domain_id)
+        .where(Product.version_id.in_(versions), Attribute.name.in_(names))
+    ):
+        if col:
+            column_names.setdefault((version_id, d_name, p_name, a_name), col)
+    return {
+        fk.id: fk_edge_id(
+            product_fqn(fk.source_domain, fk.source_product),
+            column_names.get(
+                (fk.version_id, fk.source_domain, fk.source_product, fk.source_column),
+                fk.source_column,
+            ),
+            product_fqn(fk.target_domain, fk.target_product),
+            fk.target_column,
+        )
+        for fk in fks
+    }
+
+
+def _resolve_attribute(
+    session: Session,
+    product_id: str,
+    name: str,
+    maps: Optional["AnchorMaps"] = None,
+) -> Optional[str]:
+    if maps is not None:
+        return maps.attributes.get((product_id, name))
+    return session.exec(
+        select(Attribute.id).where(
+            Attribute.product_id == product_id,
+            Attribute.name == name,
         )
     ).first()
 
@@ -148,18 +246,15 @@ def _resolve_coords(
     # a fallback (intended fk → resolved product/domain), so track it.
     fk_fallback = False
 
-    if coords.fk_parts is not None:
-        fk_id = (
-            maps.fk_links.get(coords.fk_parts)
-            if maps is not None
-            else _resolve_fk(session, version_id, coords.fk_parts)
-        )
+    if coords.fk_edge is not None:
+        key = _fk_key_from_edge(session, version_id, coords.fk_edge)
+        fk_id = _resolve_fk(session, version_id, key, maps)
         if fk_id is not None:
             return _AnchorFKs(fk_link_id=fk_id)
         # Fall through to the SOURCE side product/domain — this is a fallback.
         fk_fallback = True
-        domain_name = coords.fk_parts[0]
-        product_name = coords.fk_parts[1]
+        domain_name = coords.fk_edge[0]
+        product_name = coords.fk_edge[1]
 
     if product_name is not None:
         if domain_name is None:
@@ -179,9 +274,15 @@ def _resolve_coords(
                 prod = maps.products_by_table_name.get((dom, product_name))
         else:
             prod = _resolve_product(session, version_id, dom, product_name)
-        if prod is not None:
-            return _AnchorFKs(domain_id=dom, product_id=prod, needs_link_review=fk_fallback)
-        return _AnchorFKs(domain_id=dom, needs_link_review=True)  # fallback → domain
+        if prod is None:
+            return _AnchorFKs(domain_id=dom, needs_link_review=True)  # fallback → domain
+        if coords.attribute_name:
+            attr = _resolve_attribute(session, prod, coords.attribute_name, maps)
+            if attr is None:
+                # fallback → product
+                return _AnchorFKs(domain_id=dom, product_id=prod, needs_link_review=True)
+            return _AnchorFKs(domain_id=dom, product_id=prod, attribute_id=attr)
+        return _AnchorFKs(domain_id=dom, product_id=prod, needs_link_review=fk_fallback)
 
     if domain_name is not None:
         dom = (
@@ -211,9 +312,9 @@ def resolve_feedback_anchor(session: Session, version_id: str,
 # version's elements while the ``ModelVersion`` row survives
 # (``model_sync._delete_existing``). Both capture each context link's anchor by
 # element NAME(s) from the OLD rows, then resolve those names against the NEW
-# same-version rows. This carries the attribute + subdomain axes that
-# ``_resolve_coords`` (product-level) deliberately does not, while reusing its
-# element-level primitives (``_resolve_domain``/``_resolve_fk``).
+# same-version rows. This carries the subdomain axis that ``_resolve_coords``
+# (live capture) deliberately does not, while reusing its element-level
+# primitives (``_resolve_domain``/``_resolve_fk``/``_resolve_attribute``).
 
 
 @dataclass
@@ -224,7 +325,7 @@ class NamedAnchor:
     subdomain_name: Optional[str] = None
     product_name: Optional[str] = None
     attribute_name: Optional[str] = None
-    fk_parts: Optional[tuple[str, str, str, str]] = None
+    fk_parts: Optional[FkKey] = None
 
     def is_model_wide(self) -> bool:
         return not any((
@@ -250,7 +351,7 @@ def capture_named_anchor(
     ``maps`` behaves identically to ``session.get`` returning ``None`` (the
     row is gone) - the resolved name stays unset."""
     domain_name = subdomain_name = product_name = attribute_name = None
-    fk_parts: Optional[tuple[str, str, str, str]] = None
+    fk_parts: Optional[FkKey] = None
 
     if link.domain_id:
         if maps is not None:
@@ -317,8 +418,8 @@ def capture_named_anchor(
             fk = session.get(ForeignKeyLink, link.fk_link_id)
             if fk:
                 fk_parts = (
-                    fk.source_domain, fk.source_product,
-                    fk.target_domain, fk.target_product,
+                    fk.source_domain, fk.source_product, fk.source_column,
+                    fk.target_domain, fk.target_product, fk.target_column,
                 )
 
     return NamedAnchor(
@@ -352,8 +453,8 @@ class IdNameMaps:
     products: dict[str, tuple[str, Optional[str], Optional[str]]] = field(default_factory=dict)
     # attribute_id -> (name, product_id)
     attributes: dict[str, tuple[str, str]] = field(default_factory=dict)
-    # fk_link_id -> (source_domain, source_product, target_domain, target_product)
-    fk_links: dict[str, tuple[str, str, str, str]] = field(default_factory=dict)
+    # fk_link_id -> its FkKey (six names)
+    fk_links: dict[str, FkKey] = field(default_factory=dict)
 
 
 def prefetch_id_name_maps(session: Session, version_id: str) -> IdNameMaps:
@@ -380,13 +481,14 @@ def prefetch_id_name_maps(session: Session, version_id: str) -> IdNameMaps:
         .where(Product.version_id == version_id)
     ):
         maps.attributes[id_] = (name, product_id)
-    for id_, src_d, src_p, tgt_d, tgt_p in session.exec(
+    for id_, src_d, src_p, src_c, tgt_d, tgt_p, tgt_c in session.exec(
         select(
             ForeignKeyLink.id, ForeignKeyLink.source_domain, ForeignKeyLink.source_product,
-            ForeignKeyLink.target_domain, ForeignKeyLink.target_product,
+            ForeignKeyLink.source_column, ForeignKeyLink.target_domain,
+            ForeignKeyLink.target_product, ForeignKeyLink.target_column,
         ).where(ForeignKeyLink.version_id == version_id)
     ):
-        maps.fk_links[id_] = (src_d, src_p, tgt_d, tgt_p)
+        maps.fk_links[id_] = (src_d, src_p, src_c, tgt_d, tgt_p, tgt_c)
     return maps
 
 
@@ -413,7 +515,8 @@ class AnchorMaps:
     # table_name fallback for the maps-backed path of _resolve_coords.
     products_by_table_name: dict[tuple[str, str], str] = field(default_factory=dict)
     attributes: dict[tuple[str, str], str] = field(default_factory=dict)
-    fk_links: dict[tuple[str, str, str, str], str] = field(default_factory=dict)
+    # FkKey (six names) -> id, for _resolve_fk's exact match.
+    fk_links: dict[FkKey, str] = field(default_factory=dict)
 
 
 def prefetch_anchor_maps(session: Session, version_id: str) -> AnchorMaps:
@@ -454,14 +557,15 @@ def prefetch_anchor_maps(session: Session, version_id: str) -> AnchorMaps:
         .where(Product.version_id == version_id)
     ):
         maps.attributes[(product_id, name)] = id_
-    for src_d, src_p, tgt_d, tgt_p, id_ in session.exec(
+    for src_d, src_p, src_c, tgt_d, tgt_p, tgt_c, id_ in session.exec(
         select(
             ForeignKeyLink.source_domain, ForeignKeyLink.source_product,
-            ForeignKeyLink.target_domain, ForeignKeyLink.target_product,
+            ForeignKeyLink.source_column, ForeignKeyLink.target_domain,
+            ForeignKeyLink.target_product, ForeignKeyLink.target_column,
             ForeignKeyLink.id,
-        ).where(ForeignKeyLink.version_id == version_id)
+        ).where(ForeignKeyLink.version_id == version_id).order_by(ForeignKeyLink.id)
     ):
-        maps.fk_links[(src_d, src_p, tgt_d, tgt_p)] = id_
+        maps.fk_links.setdefault((src_d, src_p, src_c, tgt_d, tgt_p, tgt_c), id_)
     return maps
 
 
@@ -491,11 +595,7 @@ def resolve_named_anchor(
     review = False
 
     if named.fk_parts is not None:
-        fk_id = (
-            maps.fk_links.get(named.fk_parts)
-            if maps is not None
-            else _resolve_fk(session, version_id, named.fk_parts)
-        )
+        fk_id = _resolve_fk(session, version_id, named.fk_parts, maps)
         if fk_id is not None:
             return _AnchorFKs(fk_link_id=fk_id)
         review = True
@@ -547,15 +647,7 @@ def resolve_named_anchor(
 
     attr_id = None
     if named.attribute_name and prod_id:
-        if maps is not None:
-            attr_id = maps.attributes.get((prod_id, named.attribute_name))
-        else:
-            attr_id = session.exec(
-                select(Attribute.id).where(
-                    Attribute.product_id == prod_id,
-                    Attribute.name == named.attribute_name,
-                )
-            ).first()
+        attr_id = _resolve_attribute(session, prod_id, named.attribute_name, maps)
         if attr_id is None:
             review = True  # attribute gone -> degrade to product
 

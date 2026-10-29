@@ -26,7 +26,7 @@ from ... import __version__ as APP_VERSION
 from ..._metadata import api_prefix
 from ..assessment.assets import read_bundled_skill_versions, read_versions, resolve_vendored_assessment
 from ..assessment.config_service import (
-    NOT_INSTALLED_DETAIL, AssessConfigRejected, AssessReaderLookupFailed, AssessSyncFailed, assess_ready,
+    NOT_INSTALLED_DETAIL, AssessConfigMissing, AssessConfigRejected, AssessReaderLookupFailed, AssessSyncFailed, assess_ready,
     check_assess_config, get_or_create_assess_config, save_assess_config,
 )
 from ..assessment.handoff import (
@@ -37,7 +37,7 @@ from ..assessment.docs import read_doc, resolve_doc_path
 from ..assessment.grading import (
     DecisionFacts, VibeFacts, classify_decision_kind, enrichment_pct, letter_grade, structure_grade,
 )
-from ..assessment.constants import ADMIN_HELP, RUNS_VOLUME, TERMINAL_STATUSES
+from ..assessment.constants import RUNS_VOLUME, TERMINAL_STATUSES
 from ..assessment.launch import LaunchNotReady, ensure_launch_ready, launch_batch
 from ..assessment.skill_install import install_skill, plan_install
 from ..assessment.readiness import evaluate_readiness
@@ -50,6 +50,7 @@ from ..assessment.schemas import (
 from ..core import Dependencies, resolve_metamodel_catalog
 from ..core._app_identity import app_application_id
 from ..core._features import require_installed
+from ..core._errors import admin_help_error, config_missing_error, setting_refused_error
 from ..core._identity import actor_label, current_user_email, require_user_email
 from ..core._time import as_utc
 from ..core._vibe_input_create import create_vibe_input_with_anchor
@@ -59,7 +60,7 @@ from ..db_models import (
     AssessNextVibeEntity, AssessPendingDecision, AssessSummary, AssessSummaryItem, AssessSourceMap, Business, Domain, ModelVersion,
     Product, VibeInput, VibeInputContextLink,
 )
-from ..error_sanitization import sanitize_error_message
+from ..error_sanitization import recorded_error_text, sanitize_error_message
 from ..models import VibeInputOrigin, VibeInputPriority, VibeInputStatus, VibeInputOut, FeedbackContext
 from ._helpers import build_job_run_url
 
@@ -71,28 +72,15 @@ config_router = APIRouter(prefix=api_prefix)
 router = APIRouter(prefix=api_prefix, dependencies=[Depends(require_assessment_installed)])
 
 
-def _admin_help(message: str, *, job_url: str = "", run_url: str = "", runs_path: str = "",
-                job_reader: str = "") -> dict:
-    """The one error ``detail`` shape for assessment failures the admin must act on.
-
-    ``error: "admin_help"`` is the discriminator (as ``config_missing_error``
-    uses ``error: "config_missing"``) and ``message`` is what ``apiErrorMessage``
-    shows; the links are added only when known. The UI copies all of it into
-    the admin-help block.
-    """
-    extra = {"job_url": job_url, "run_url": run_url, "runs_path": runs_path, "job_reader": job_reader}
-    return {"error": ADMIN_HELP, "message": message, **{k: v for k, v in extra.items() if v}}
-
-
 def _run_links(ws: WorkspaceClient, dr: AssessDomainRun) -> dict:
     """The run's job link, job-run link and reader, from the job id pinned on the run (survives a recreated job)."""
     run_url = build_job_run_url(ws, dr.job_id, dr.databricks_run_id) if dr.databricks_run_id else ""
     return {"job_url": build_job_run_url(ws, dr.job_id), "run_url": run_url, "job_reader": dr.job_reader}
 
 
-def _run_help(ws: WorkspaceClient, dr: AssessDomainRun, message: str, *, runs_path: str = "") -> dict:
-    """``_admin_help`` for a failure on one domain run."""
-    return _admin_help(message, runs_path=runs_path, **_run_links(ws, dr))
+def _run_help(ws: WorkspaceClient, dr: AssessDomainRun, message: str, *, runs_path: str = "") -> HTTPException:
+    """The 409 ``admin_help`` error for a failure on one domain run, with the run's links."""
+    return admin_help_error(message, runs_path=runs_path, **_run_links(ws, dr))
 
 
 def _config_out(cfg, ws: WorkspaceClient, *, installed: bool, app_id: str = "") -> AssessConfigOut:
@@ -122,26 +110,28 @@ def get_assess_config(session: Dependencies.Session, ws: Dependencies.Client, co
 @router.put("/assess/config", response_model=AssessConfigOut, operation_id="putAssessConfig")
 def put_assess_config(body: AssessConfigIn, session: Dependencies.Session, ws: Dependencies.Client,
                       config: Dependencies.Config, headers: Dependencies.Headers, _role: Dependencies.AdminOnly):
-    """Read-only checks (422, nothing written), then apply + job sync; commits only a clean sync.
+    """Read-only checks, then apply + job sync; commits only a clean sync. A refusal writes nothing.
 
-    A failed reader lookup answers 502 with the admin-help detail and writes nothing. A failed
-    sync rolls the Save back, records the error on the row (``missing`` reports it) and answers
-    502 with the admin-help detail.
+    An unset deployment catalog answers 422 ``config_missing``; a reader or warehouse the checks
+    refuse answers 400 ``setting_refused`` (``key`` names the field); a failed reader lookup
+    answers 409 ``admin_help``. A failed sync rolls the Save back, records the error on the row
+    (``missing`` reports it) and answers 409 ``admin_help``.
     """
     catalog = resolve_metamodel_catalog(session, config)
     try:
         reader_sp = check_assess_config(ws, body, deployment_catalog=catalog)
+    except AssessConfigMissing as e:
+        raise config_missing_error(e.key) from e
     except AssessConfigRejected as e:
-        raise HTTPException(422, str(e)) from e
+        raise setting_refused_error(e.key, str(e)) from e
     except AssessReaderLookupFailed as e:
-        raise HTTPException(502, detail=_admin_help(
-            f"Couldn't look up the reader service principal: {e}")) from e
+        raise admin_help_error(f"Couldn't look up the reader service principal: {e}") from e
     try:
         cfg = save_assess_config(session, ws, body, deployment_catalog=catalog, user=actor_label(headers),
                                  app_version=APP_VERSION, config=config, reader_sp=reader_sp)
     except AssessSyncFailed as e:
-        raise HTTPException(502, detail=_admin_help(f"The assessment job sync failed: {e.result.error}",
-                                                    job_url=build_job_run_url(ws, e.job_id))) from e
+        raise admin_help_error(f"The assessment job sync failed: {e.result.error}",
+                               job_url=build_job_run_url(ws, e.job_id)) from e
     return _config_out(cfg, ws, installed=config.assessment_enabled, app_id=app_application_id(ws))
 
 
@@ -279,20 +269,18 @@ def _launch_checked(session: Session, ws: WorkspaceClient, config, headers, *, b
     try:
         ensure_launch_ready(cfg, config.assessment_enabled)
     except LaunchNotReady as e:
-        raise HTTPException(409, detail={**_admin_help(str(e), job_url=job_url), "not_ready": e.missing}) from e
+        raise admin_help_error(str(e), job_url=job_url, not_ready=e.missing) from e
     catalog = resolve_metamodel_catalog(session, config)
     readiness = evaluate_readiness(session, ws, cfg, deployment_catalog=catalog, version=mv, domains=pairs)
     if any(d.blocked for d in readiness.domains):
-        raise HTTPException(409, detail={**_admin_help("Assessment is blocked; resolve the failing checks.",
-                                                       job_url=job_url),
-                                         "readiness": readiness.model_dump()})
+        raise admin_help_error("Assessment is blocked; resolve the failing checks.", job_url=job_url,
+                               readiness=readiness.model_dump())
     try:
         batch = launch_batch(session, ws, business=business, version=mv, domains=pairs, body=body, cfg=cfg,
                              deployment_catalog=catalog, user=actor_label(headers),
                              installed=config.assessment_enabled)
     except RuntimeError as e:  # the bundled assets are unreadable; nothing was launched
-        raise HTTPException(502, detail=_admin_help(f"Launch failed: {sanitize_error_message(str(e))}",
-                                                    job_url=job_url)) from e
+        raise admin_help_error(f"Launch failed: {sanitize_error_message(str(e))}", job_url=job_url) from e
     return _batch_out(session, ws, batch)
 
 
@@ -376,9 +364,9 @@ def _cancel_domain_run(session: Session, ws: WorkspaceClient, dr: AssessDomainRu
         try:
             ws.jobs.cancel_run(run_id=dr.databricks_run_id)
         except DatabricksError as e:
-            raise HTTPException(502, detail=_run_help(
+            raise _run_help(
                 ws, dr, f"Databricks could not cancel run {dr.databricks_run_id}: "
-                        f"{sanitize_error_message(str(e))}")) from e
+                        f"{sanitize_error_message(str(e))}") from e
     dr.status = "cancelled"
     dr.ended_at = datetime.now(timezone.utc)
     session.add(dr)
@@ -641,7 +629,8 @@ def list_assessment_docs(domain_run_id: str, session: Dependencies.Session, ws: 
     except NotFound:
         return DocsOut(folder_url=folder_url, docs=[])
     except DatabricksError as e:
-        raise HTTPException(502, f"Could not list run docs: {sanitize_error_message(str(e))}") from e
+        raise _run_help(
+            ws, dr, f"Could not list run docs: {sanitize_error_message(str(e))}", runs_path=dr.out_dir) from e
     return DocsOut(folder_url=folder_url, docs=sorted(entries, key=lambda d: d.path)[:DOCS_CAP])
 
 
@@ -660,7 +649,8 @@ def get_assessment_doc_content(domain_run_id: str, path: str, session: Dependenc
     except NotFound:
         raise HTTPException(404, "Document not found.") from None
     except DatabricksError as e:
-        raise HTTPException(502, f"Could not read doc: {sanitize_error_message(str(e))}") from e
+        raise _run_help(
+            ws, dr, f"Could not read doc: {sanitize_error_message(str(e))}", runs_path=dr.out_dir) from e
     return DocContentOut(path=full, content=content, truncated=truncated)
 
 
@@ -782,11 +772,12 @@ def create_assessment_handoff(domain_run_id: str, body: HandoffIn, session: Depe
                               headers: Dependencies.Headers, _role: Dependencies.ModelerOnly):
     """Copy the run's project into the caller's home, written with the caller's own (OBO) token.
 
-    Only a ``completed`` run hands off. A missing OBO client, or a scope error
-    from the caller's token, is 409 (the caller must sign in or re-consent);
-    any other write failure, or a failed read of the run's files, is 502. All
-    carry the admin-help detail with the real error and ``runs_path`` (the
-    run's Volume folder), so the files can still be copied by hand.
+    Only a ``completed`` run hands off. A caller without a workspace email is
+    401 ``identity_missing``. A missing OBO client, a scope error from the
+    caller's token (sign in or re-consent), any other write failure and a
+    failed read of the run's files are 409 ``admin_help`` with the real error
+    and ``runs_path`` (the run's Volume folder), so the files can still be
+    copied by hand.
     """
     dr = _require_domain_run(session, domain_run_id)
     if dr.status != "completed":
@@ -796,10 +787,10 @@ def create_assessment_handoff(domain_run_id: str, body: HandoffIn, session: Depe
     path = body.path or default
     if not allowed_handoff_target(path, email):
         raise HTTPException(422, "Hand-off folder must be a subfolder of your own home folder "
-                                 f"({user_home(email)}/).")
+                                 f"({user_home('<your email>')}/).")
     if user_ws is None:
-        raise HTTPException(409, detail=_run_help(
-            ws, dr, "Sign in through the deployed app to hand off the assessment.", runs_path=dr.out_dir))
+        raise _run_help(
+            ws, dr, "Sign in through the deployed app to hand off the assessment.", runs_path=dr.out_dir)
     readme = render_readme(business=biz.name, domain=dom.name, model_version=mv.version, batch_id=dr.batch_id,
                            dr=dr, prompts=build_prompts(path, _require_batch(session, dr.batch_id).output_model))
     try:
@@ -807,14 +798,13 @@ def create_assessment_handoff(domain_run_id: str, body: HandoffIn, session: Depe
     except HandoffWriteError as e:
         error = sanitize_error_message(str(e.cause))
         if is_scope_error(e.cause):
-            raise HTTPException(409, detail=_run_help(ws, dr, scope_message("your workspace folder", error),
-                                                      runs_path=dr.out_dir)) from e
-        raise HTTPException(502, detail=_run_help(ws, dr, f"Hand-off failed writing to {path}: {error}",
-                                                  runs_path=dr.out_dir)) from e
+            raise _run_help(ws, dr, scope_message("your workspace folder", error), runs_path=dr.out_dir) from e
+        raise _run_help(ws, dr, f"Hand-off failed writing to the chosen folder: {error}",
+                        runs_path=dr.out_dir) from e
     except DatabricksError as e:  # reading the run's files as the app
-        raise HTTPException(502, detail=_run_help(
+        raise _run_help(
             ws, dr, f"Hand-off failed reading the run's files: {sanitize_error_message(str(e))}",
-            runs_path=dr.out_dir)) from e
+            runs_path=dr.out_dir) from e
     return _handoff_out(session, ws, user_ws, dr, path, h, email,
                         headers.token.get_secret_value() if headers.token else None)
 
@@ -826,12 +816,12 @@ def install_assessment_skills(domain_run_id: str, body: InstallSkillsIn, session
                               headers: Dependencies.Headers):
     """Install missing (or, on request, outdated) bundled skills into the caller's own Genie Code skills folder."""
     dr = _require_domain_run(session, domain_run_id)
-    email = current_user_email(headers)
+    email = require_user_email(headers)
     _log_token_scopes(headers.token.get_secret_value() if headers.token else None)
-    if user_ws is None or not email:
-        raise HTTPException(409, detail=_run_help(ws, dr, "Sign in through the deployed app to install skills."))
+    if user_ws is None:
+        raise _run_help(ws, dr, "Sign in through the deployed app to install skills.")
     if resolve_vendored_assessment() is None:
-        raise HTTPException(502, detail=_run_help(ws, dr, "The app's bundled skills are missing — redeploy the app."))
+        raise _run_help(ws, dr, "The app's bundled skills are missing — redeploy the app.")
     expected = read_versions()["handoff_skills"]
     bundled = read_bundled_skill_versions(expected)
     before = skills_check(ws, user_ws, expected, user_email=email, bundled=bundled)
@@ -843,11 +833,11 @@ def install_assessment_skills(domain_run_id: str, body: InstallSkillsIn, session
             install_skill(user_ws, name, email)
     except DatabricksError as e:
         if is_scope_error(e):
-            raise HTTPException(409, detail=_run_help(
-                ws, dr, scope_message("your skills folder", sanitize_error_message(str(e))))) from e
-        raise HTTPException(502, detail=_run_help(ws, dr, (
+            raise _run_help(
+                ws, dr, scope_message("your skills folder", sanitize_error_message(str(e)))) from e
+        raise _run_help(ws, dr, (
             f"Updating {current} failed: {sanitize_error_message(str(e))}. "
-            "Other skills may already be updated — Re-check to see the current state."))) from e
+            "Other skills may already be updated — Re-check to see the current state.")) from e
     return InstallSkillsOut(installed=to_install, updated=to_update, skipped=skipped,
                             skills=skills_check(ws, user_ws, expected, user_email=email, bundled=bundled))
 
@@ -1072,8 +1062,8 @@ def add_next_vibe_to_feedback(
         return _add_next_vibe_once(session, next_vibe_id, dr, batch, affected_entities,
                                    domain.name if domain else "Unknown", actor_label(headers))
     except SQLAlchemyError as e:
-        raise HTTPException(500, detail=_admin_help(
-            f"Couldn't add the next vibe to feedback: {sanitize_error_message(str(e))}")) from e
+        raise admin_help_error(
+            f"Couldn't add the next vibe to feedback: {recorded_error_text(e, 'Adding a next vibe to feedback')}") from e
 
 
 @router.post(
@@ -1142,8 +1132,9 @@ def add_next_vibes_to_feedback(
                 next_vibe_id=vid, message=e.detail.get("message", "") if isinstance(e.detail, dict) else str(e.detail)))
         except Exception as e:  # noqa: BLE001 — one item's failure is reported; the other items still land
             logger.exception("adding next vibe %s to feedback failed", vid)
+            detail = recorded_error_text(e, "Adding a next vibe to feedback")
             failures.append(NextVibeFeedbackFailureOut(
-                next_vibe_id=vid, message=f"Couldn't add this next vibe to feedback: {sanitize_error_message(str(e))}. "
+                next_vibe_id=vid, message=f"Couldn't add this next vibe to feedback: {detail}. "
                                           "Please contact your administrator with these details."))
     count_created = sum(1 for i in items if i.created)
     count_reused = len(items) - count_created

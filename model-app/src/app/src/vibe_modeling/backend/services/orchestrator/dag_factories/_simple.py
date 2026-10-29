@@ -1,6 +1,6 @@
-"""Single-step DAG factories for the four "simple" intents.
+"""Single-step DAG factories for the "simple" intents (vibe-iterate, install, uninstall).
 
-The four intents covered here each map to exactly one
+Each intent covered here maps to exactly one
 :class:`OperationStep` — no fan-out, no skip predicates, no
 ``needs_version_from`` chains. The orchestrator persists one
 ``RunOperation`` row per run, dispatches it on ``start()``, and walks
@@ -28,19 +28,28 @@ brief #1).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any, Optional
 
-from ....core import resolve_run_target_catalog
-from ....core._names import agent_business_segment
-from ....models import Intent
+from ....core import (
+    resolve_install_target_catalog,
+    resolve_run_target_catalog,
+    resolve_uninstall_target_catalog,
+)
+from ....core._names import agent_business_segment, normalize_scope
+from ....models import RUN_CONVENTION_FIELDS, Intent
+from ...dispatched_widgets import installed_schema_prefix
+from ...operations._install_conventions import CONVENTION_FILE_KEYS
+from ...version_files import model_json_candidates, readable_import_source
 from ..dag import Dag, OperationStep
+from ._recovery import uninstall_then_install
 
 
 def _sanitized_business_name(business: Any) -> str:
     """Coerce ``Business.name`` into the lowercase-snake form the
-    install/uninstall/generate_samples primitives expect.
+    install/uninstall primitives expect.
 
-    The ``install`` / ``uninstall`` / ``generate_samples`` params
+    The ``install`` / ``uninstall`` params
     models constrain ``business_name`` to ``^[a-z][a-z0-9_]+$`` (a
     legal UC catalog segment fragment). Phase 4 of the drift-unification
     plan reconciles this helper with the canonical
@@ -74,13 +83,11 @@ def _scope_short(req: Any, parent_mv: Any) -> str:
     install/uninstall/samples primitives only operate on a deployed
     ModelVersion whose own scope IS the run's scope.
     """
-    explicit = (getattr(req, "scope", None) or "").lower()
-    if "ecm" in explicit:
-        return "ecm"
-    if "mvm" in explicit:
-        return "mvm"
-    raw = (getattr(parent_mv, "scope", "") or "").lower()
-    return "ecm" if "ecm" in raw else "mvm"
+    explicit = normalize_scope(getattr(req, "scope", None) or "")
+    if explicit in ("ecm", "mvm"):
+        return explicit
+    raw = normalize_scope(getattr(parent_mv, "scope", "") or "")
+    return "ecm" if raw == "ecm" else "mvm"
 
 
 def _model_version_int(req: Any, parent_mv: Any) -> int:
@@ -99,37 +106,20 @@ def _model_version_int(req: Any, parent_mv: Any) -> int:
 
 
 def _schema_prefix_for(
-    req: Any, cataloging_style: str, parent_mv: Any = None
+    req: Any,
+    cataloging_style: str,
+    parent_mv: Any = None,
+    installed: Optional[str] = None,
 ) -> str:
-    """Resolve the ``schema_prefix`` the install/uninstall/samples
-    primitives expect.
+    """The ``schema_prefix`` an uninstall sends (also the uninstall step
+    of an install that replaces another version).
 
-    ``InstallParams.schema_prefix_matches_cataloging_style`` enforces:
-    - One Catalog requires a non-empty prefix.
-    - Catalog per Division/Domain forbids one.
-
-    Resolution order:
-    1. ``req.schema_prefix`` — explicit user override always wins.
-    2. ``parent_mv.scope`` — derive ``ecm_`` or ``mvm_`` from the
-       version being installed/uninstalled/sampled, matching the
-       unified-pipeline convention (spec §3 "One Catalog" DAG).
-    3. Fallback to ``mvm_`` for One Catalog when no parent scope is
-       available — most single-step callers target a deployed (MVM)
-       model. Multi-catalog styles must remain empty per the
-       primitive's model validator.
-
-    Phase 4.5 walkthrough (test workspace): step 1A blocked because the
-    frontend doesn't expose ``schema_prefix`` on the simple-op forms
-    (intentional — for One Catalog the prefix is conventional, not
-    user-chosen). Without parent-derived defaults the install op
-    422'd at validation; this resolution chain unblocks.
-
-    NOTE: ``None`` (field absent from the request) and ``""`` (explicit
-    empty string) are treated differently. ``None`` falls through to
-    the parent-derived default; ``""`` is passed through verbatim so
-    a curl caller that explicitly says "empty" still trips the
-    primitive's cross-field validator (preserves the test contract in
-    ``test_install_one_catalog_without_schema_prefix_returns_blocker``).
+    In order: ``req.schema_prefix`` (a typed value, ``""`` included, which
+    the primitive's One Catalog rule refuses); ``installed``, the prefix the
+    version's latest install dispatched in this cataloging style; ``""`` for
+    Catalog per Division / Domain; else the scope default of ``parent_mv``
+    (``ecm_`` / ``mvm_``, ``mvm_`` with no scope), the prefix One Catalog
+    installs used before the app recorded them.
     """
     explicit = getattr(req, "schema_prefix", None)
     if explicit is not None:
@@ -137,6 +127,8 @@ def _schema_prefix_for(
         # validator will surface a blocker if the value combined with
         # the cataloging_style is illegal.
         return explicit
+    if installed is not None:
+        return installed
     if cataloging_style != "One Catalog":
         # Catalog per Division / per Domain: the per-scope catalog
         # already provides the namespace; passing a prefix would
@@ -145,14 +137,39 @@ def _schema_prefix_for(
     # One Catalog: derive from the parent model version's scope.
     scope = ""
     if parent_mv is not None:
-        scope = (getattr(parent_mv, "scope", "") or "").lower()
-    if "ecm" in scope:
-        return "ecm_"
-    if "mvm" in scope:
-        return "mvm_"
+        scope = normalize_scope(getattr(parent_mv, "scope", "") or "")
     # No parent scope information: fall back to ``mvm_``. Most callers
     # of these single-step ops target a deployed (MVM) model.
-    return "mvm_"
+    return "ecm_" if scope == "ecm" else "mvm_"
+
+
+def install_schema_prefix(req: Any, recorded: Optional[str] = None) -> tuple[str, str]:
+    """The ``schema_prefix`` an install sends, and where it comes from:
+    ``(prefix, source)``.
+
+    - ``"request"``: the request names ``schema_prefix``. A typed prefix
+      other than the version's file's (and, in place, its recorded one) is
+      refused before the run starts and again at dispatch
+      (``install.typed_prefix_refusal``): the agent would rename the schemas
+      and drop the metric views. A typed ``""`` is kept, so the One Catalog
+      rule still refuses it.
+    - ``"record"``: ``recorded``, the prefix of the version's install into the
+      target catalog when it is installed there now
+      (``preflight.inplace_install_prefix``): an in-place reinstall keeps the
+      schemas that install made.
+    - ``"version"``: otherwise. ``Install.dispatch`` sends the prefix of the
+      model.json it installs, ``""`` included (``apply_file_prefix``), and
+      fails the step when that file can't be read. Every import writes its
+      scope prefix into the app's copy of the file
+      (``services/scope_prefix``), so an ECM and an MVM installed into one
+      catalog get ``ecm_`` / ``mvm_``.
+    """
+    explicit = getattr(req, "schema_prefix", None)
+    if explicit is not None:
+        return explicit, "request"
+    if recorded is not None:
+        return recorded, "record"
+    return "", "version"
 
 
 def dag_for_vibe_iterate(
@@ -181,6 +198,9 @@ def dag_for_vibe_iterate(
                     "vibe_instructions": getattr(req, "vibe_instructions", "") or "",
                     "cataloging_style": _resolved_cataloging_style(req),
                     "schema_prefix": getattr(req, "schema_prefix", "") or "",
+                    "vibe_scope": getattr(req, "vibe_scope", "all_domains") or "all_domains",
+                    "vibe_scope_domains": getattr(req, "vibe_scope_domains", []) or [],
+                    "dry_run": getattr(req, "dry_run", False) or False,
                     # Carry-keys (the params model defaults already match
                     # the agent's expectations; these only fire when the
                     # caller wants to override). Keep this list narrow —
@@ -199,55 +219,118 @@ def dag_for_install(
     ctx: Any = None,
     agent_cfg: Any = None,
 ) -> Dag:
-    """Single-op DAG for the ``install`` intent.
+    """DAG for the ``install`` intent.
 
-    The route handler resolves the target ``ModelVersion`` (the
-    version being installed) and passes it via ``ctx.parent_mv`` so we
-    can read its scope + version int. The orchestrator's
-    ``parent_version_id`` is set on the persisted row by the route
-    handler — the factory does not touch that surface.
+    ``ctx.parent_mv`` is the version being installed (its scope, number and
+    file locations). The target catalog is the request's, else the
+    version's install catalog, else its files catalog, else the run default
+    (``resolve_install_target_catalog``). The step carries the paths the
+    version's model.json may be at (``context_file_candidates``):
+    ``ctx.context_file_candidates``, the route's
+    ``version_files.version_model_json_candidates`` (its ``/Volumes/`` import
+    source, then the nested and flat folders under its files catalog,
+    ``resolve_version_volume_catalog``), then the folders under the target
+    catalog, each path once. A ``ctx`` without them starts from the import
+    source; a 0.9.0 import (markers set) has none, its file is the app's
+    copy in its folder.
+
+    ``ctx.occupant`` is another version of the same business and scope
+    installed in the target catalog that the request confirmed replacing:
+    the DAG then uninstalls it first (with the prefix its last install
+    dispatched, ``ctx.occupant_install_widgets``) and installs the version
+    fresh (:func:`uninstall_then_install`). Otherwise it is one install step.
+
+    The ``schema_prefix`` is :func:`install_schema_prefix`'s: the request's,
+    else the recorded one of an in-place reinstall
+    (``ctx.recorded_install_prefix``), else the one in the version's
+    model.json, read at dispatch.
+    The orchestrator's ``parent_version_id`` is set on the persisted rows by
+    the route handler; the install step also names the version
+    (``version_id``).
     """
     parent_mv = getattr(ctx, "parent_mv", None) if ctx is not None else None
+    occupant = getattr(ctx, "occupant", None) if ctx is not None else None
     cataloging_style = _resolved_cataloging_style(req)
-    # Imported and reference-seeded ModelVersions record their actual
-    # model.json location on ``import_source_path``. Agent-produced
-    # versions leave that field NULL because the agent writes model.json
-    # at the convention path the install widget builder constructs by
-    # default. Threading the override here closes the import / seed gap
-    # surfaced by the 2026-05-18 walkthrough (energy_utilities import +
-    # Ecommerce Reference Model both failed install with "Model JSON
-    # File not found" before this fix).
-    context_file_override = (
-        getattr(parent_mv, "import_source_path", None) if parent_mv is not None else None
+    business_name = _sanitized_business_name(business)
+    catalog = resolve_install_target_catalog(req, parent_mv, agent_cfg)
+    scope = _scope_short(req, parent_mv)
+    version = _model_version_int(req, parent_mv)
+    version_candidates = list(getattr(ctx, "context_file_candidates", None) or ())
+    target_candidates = model_json_candidates(
+        catalog, business_name, version, scope, readable_import_source(parent_mv),
     )
-    return Dag(
-        intent="install",
-        steps=(
-            OperationStep(
-                name="install",
-                params={
-                    "scope": _scope_short(req, parent_mv),
-                    "business_name": _sanitized_business_name(business),
-                    "deployment_catalog": resolve_run_target_catalog(req, agent_cfg),
-                    "schema_prefix": _schema_prefix_for(
-                        req, cataloging_style, parent_mv
-                    ),
-                    "model_version": _model_version_int(req, parent_mv),
-                    "cataloging_style": cataloging_style,
-                    "naming_convention": (
-                        getattr(req, "naming_convention", None) or "snake_case"
-                    ),
-                    "primary_key_suffix": (
-                        getattr(req, "primary_key_suffix", None) or "_id"
-                    ),
-                    "table_id_type": (
-                        getattr(req, "table_id_type", None) or "BIGINT"
-                    ),
-                    "context_file_override": context_file_override,
-                },
-            ),
+    context_file_candidates = list(dict.fromkeys(version_candidates + target_candidates))
+    # The convention keys the caller set. A blank counts as unset here: the
+    # defaults below replace it, and the agent's install merge also treats a
+    # blank widget as "no override". For a ``_vibe_scope`` model.json,
+    # ``Install.dispatch`` keeps these and takes the rest from the file.
+    explicit = _set_request_fields(req, CONVENTION_FILE_KEYS, blank_is_unset=True)
+    # ``schema_suffix`` / ``tag_prefix`` have no install default, so their
+    # explicit values ride along in the params. They reach the widget map
+    # only for a ``_vibe_scope`` file (``effective_install_params``).
+    optional_keys = {
+        key: explicit[key] for key in ("schema_suffix", "tag_prefix") if key in explicit
+    }
+    recorded = getattr(ctx, "recorded_install_prefix", None) if ctx is not None else None
+    prefix, prefix_source = install_schema_prefix(req, recorded)
+    install_params = {
+        "scope": scope,
+        "business_name": business_name,
+        "deployment_catalog": catalog,
+        "schema_prefix": prefix,
+        **({"prefix_from_record": True} if prefix_source == "record" else {}),
+        **({"prefix_from_version": True} if prefix_source == "version" else {}),
+        **({"recorded_prefix": recorded} if recorded is not None else {}),
+        "model_version": version,
+        "cataloging_style": cataloging_style,
+        "naming_convention": (
+            getattr(req, "naming_convention", None) or "snake_case"
         ),
-    )
+        "primary_key_suffix": (
+            getattr(req, "primary_key_suffix", None) or "_id"
+        ),
+        "table_id_type": (
+            getattr(req, "table_id_type", None) or "BIGINT"
+        ),
+        "context_file_candidates": context_file_candidates,
+        "explicit_convention_keys": list(explicit),
+        "version_id": getattr(parent_mv, "id", None),
+        **optional_keys,
+    }
+    if occupant is None:
+        dag = Dag(
+            intent="install",
+            steps=(OperationStep(name="install", params=install_params),),
+        )
+    else:
+        dag = uninstall_then_install(
+            "install",
+            uninstall_step_params(
+                business, occupant, catalog, cataloging_style,
+                getattr(ctx, "occupant_install_widgets", None),
+            ),
+            install_params,
+        )
+    return dag
+
+
+def uninstall_step_params(
+    business: Any, mv: Any, catalog: str, cataloging_style: str, install_widgets: Optional[dict],
+) -> dict:
+    """The params of an ``uninstall`` step that removes ``mv`` (of
+    ``business``) from ``catalog`` as its last install laid it down: the
+    prefix that install dispatched in this style (``install_widgets``), else
+    its scope default."""
+    installed = installed_schema_prefix(install_widgets, cataloging_style)
+    return {
+        "business_name": _sanitized_business_name(business),
+        "deployment_catalog": catalog,
+        "schema_prefix": _schema_prefix_for(None, cataloging_style, mv, installed),
+        "scope": _scope_short(None, mv),
+        "model_version": int(mv.version),
+        "cataloging_style": cataloging_style,
+        "version_id": mv.id,
+    }
 
 
 def dag_for_uninstall(
@@ -262,9 +345,20 @@ def dag_for_uninstall(
     primitive. The two share a params surface; we narrow to the
     fields ``UninstallParams`` actually accepts (no naming convention
     pass-through — the agent's uninstall op doesn't use them).
+
+    With no catalog in the request it targets where the version was last
+    installed (``resolve_uninstall_target_catalog``).
+
+    ``ctx.install_widgets`` (the widgets of the version's latest install,
+    resolved by the route) supplies the prefix that install really used,
+    so a scoped install made with its file's prefix is uninstalled with
+    the same one.
     """
     parent_mv = getattr(ctx, "parent_mv", None) if ctx is not None else None
     cataloging_style = _resolved_cataloging_style(req)
+    installed = installed_schema_prefix(
+        getattr(ctx, "install_widgets", None), cataloging_style
+    )
     return Dag(
         intent="uninstall",
         steps=(
@@ -272,9 +366,9 @@ def dag_for_uninstall(
                 name="uninstall",
                 params={
                     "business_name": _sanitized_business_name(business),
-                    "deployment_catalog": resolve_run_target_catalog(req, agent_cfg),
+                    "deployment_catalog": resolve_uninstall_target_catalog(req, parent_mv, agent_cfg),
                     "schema_prefix": _schema_prefix_for(
-                        req, cataloging_style, parent_mv
+                        req, cataloging_style, parent_mv, installed
                     ),
                     "scope": _scope_short(req, parent_mv),
                     "model_version": _model_version_int(req, parent_mv),
@@ -286,49 +380,28 @@ def dag_for_uninstall(
     )
 
 
-def dag_for_generate_samples(
-    req: Any,
-    business: Any,
-    ctx: Any = None,
-    agent_cfg: Any = None,
-) -> Dag:
-    """Single-op DAG for the ``generate-samples`` intent.
-
-    Maps the legacy ``generate_samples: bool`` request field — kept on
-    ``RunIn`` for back-compat with the legacy router branches — to
-    the primitive's ``sample_count: int`` parameter. ``True`` becomes
-    the legacy default of 10 rows; ``False`` would never reach this
-    factory (the route handler rejects it). When a caller passes an
-    explicit ``sample_count`` via ``req.parameters_json`` (an admin
-    fixture path in tests), we honour it.
-    """
-    parent_mv = getattr(ctx, "parent_mv", None) if ctx is not None else None
-    cataloging_style = _resolved_cataloging_style(req)
-    sample_count = _resolve_sample_count(req)
-    return Dag(
-        intent="generate-samples",
-        steps=(
-            OperationStep(
-                name="generate_samples",
-                params={
-                    "business_name": _sanitized_business_name(business),
-                    "deployment_catalog": resolve_run_target_catalog(req, agent_cfg),
-                    "schema_prefix": _schema_prefix_for(
-                        req, cataloging_style, parent_mv
-                    ),
-                    "scope": _scope_short(req, parent_mv),
-                    "model_version": _model_version_int(req, parent_mv),
-                    "cataloging_style": cataloging_style,
-                    "sample_count": sample_count,
-                },
-            ),
-        ),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _set_request_fields(
+    req: Any, fields: Iterable[str], *, blank_is_unset: bool
+) -> dict[str, Any]:
+    """The ``fields`` the request set, in ``fields`` order.
+
+    ``None`` (absent from the body) is always unset. ``""`` is a value
+    unless ``blank_is_unset``: ``vibe_iterate`` forwards an explicit blank
+    (e.g. ``tag_prefix=""`` means no tag prefix), while install treats a
+    blank as "no override" (see :func:`dag_for_install`).
+    """
+    out: dict[str, Any] = {}
+    for field in fields:
+        v = getattr(req, field, None)
+        if v is None or (blank_is_unset and v == ""):
+            continue
+        out[field] = v
+    return out
 
 
 def _optional_convention_params(req: Any) -> dict:
@@ -341,28 +414,9 @@ def _optional_convention_params(req: Any) -> dict:
     keeps the persisted ``params_json`` blob narrow on the happy path
     and avoids accidentally locking in a stale default.
     """
-    out: dict[str, Any] = {}
-    for field in (
-        "naming_convention",
-        "primary_key_suffix",
-        "schema_suffix",
-        "tag_prefix",
-        "tag_suffix",
-        "table_id_type",
-        "boolean_format",
-        "date_format",
-        "timestamp_format",
-        "catalog_prefix",
-        "catalog_suffix",
-        "org_divisions",
-        "business_domains",
-        "classification_levels",
-        "housekeeping_columns",
-        "history_tracking_columns",
-    ):
-        v = getattr(req, field, None)
-        if v is not None:
-            out[field] = v
+    out = _set_request_fields(
+        req, RUN_CONVENTION_FIELDS, blank_is_unset=False
+    )
     # Inline business context override → the agent's
     # business_description carry-key (mirrors the legacy router).
     biz_text = getattr(req, "business_context_text", "") or ""
@@ -377,26 +431,9 @@ def _optional_convention_params(req: Any) -> dict:
     return out
 
 
-def _resolve_sample_count(req: Any) -> int:
-    """Translate the request's sample-count signal into an int.
-
-    The current ``RunIn`` exposes ``generate_samples: bool`` (legacy)
-    rather than a count. We default ``True`` to 10 (the agent's own
-    default), letting tests + future callers override via an
-    explicit ``sample_count`` attribute on the request. Anything
-    illegal (≤0, > 1000) propagates to the params validator as a
-    blocker.
-    """
-    explicit = getattr(req, "sample_count", None)
-    if isinstance(explicit, int) and explicit > 0:
-        return explicit
-    legacy_flag = bool(getattr(req, "generate_samples", False))
-    return 10 if legacy_flag else 10  # always at least 10 for an explicit intent
-
-
 __all__ = [
-    "dag_for_generate_samples",
     "dag_for_install",
     "dag_for_uninstall",
     "dag_for_vibe_iterate",
+    "uninstall_step_params",
 ]

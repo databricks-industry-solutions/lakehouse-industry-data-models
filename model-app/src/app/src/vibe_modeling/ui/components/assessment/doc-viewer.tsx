@@ -2,8 +2,11 @@ import { useEffect, useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MarkdownView } from "@/components/ui/markdown-view";
 import { useGetAssessmentDocContent, useListAssessmentDocs, type DocEntry, type DocsOut } from "@/lib/api";
+import { apiErrorMessage, parseAdminHelp } from "@/lib/api-error";
+import { ADMIN_HELP_LEAD_DOCS } from "@/lib/assessment";
 import { selector } from "@/lib/selector";
 import { cn } from "@/lib/utils";
+import { AdminHelpBlock } from "./admin-help-block";
 
 const SUMMARY_DOC = "domain_readiness_summary.md";
 
@@ -31,12 +34,14 @@ export function DocViewer({
   path: string;
   onNavigate?: (path: string) => void;
 }) {
-  const { data, isLoading, isError } = useGetAssessmentDocContent({
+  const { data, isLoading, error } = useGetAssessmentDocContent({
     params: { domain_run_id: domainRunId, path },
     query: { retry: false },
   });
   if (isLoading) return <Skeleton className="h-24 w-full" />;
-  if (isError || !data?.data) return <p className="text-sm text-muted-foreground">This document could not be loaded.</p>;
+  const help = parseAdminHelp(error);
+  if (help) return <AdminHelpBlock help={help} testId="doc-admin-help" lead={ADMIN_HELP_LEAD_DOCS} />;
+  if (error || !data?.data) return <p className="text-sm text-muted-foreground">This document could not be loaded.</p>;
   const { content, truncated } = data.data;
   return (
     <div className="space-y-2">
@@ -78,13 +83,21 @@ function DocButton({ doc, active, onSelect }: { doc: DocEntry; active: boolean; 
 
 /** Docs tab body: grouped doc list (Design / Other / collapsed skill-author feedback) beside the viewer. */
 export function DocsPane({ domainRunId }: { domainRunId: string }) {
-  const { data, isLoading } = useListAssessmentDocs({
+  const { data, isLoading, error } = useListAssessmentDocs({
     params: { domain_run_id: domainRunId },
-    ...selector<DocsOut>(),
+    query: { ...selector<DocsOut>().query, retry: false },
   });
   const [picked, setPicked] = useState<string | null>(null);
   useEffect(() => setPicked(null), [domainRunId]);
   if (isLoading) return <Skeleton className="h-16 w-full" />;
+  if (error) {
+    const help = parseAdminHelp(error);
+    return help ? (
+      <AdminHelpBlock help={help} testId="docs-admin-help" lead={ADMIN_HELP_LEAD_DOCS} />
+    ) : (
+      <p className="text-sm text-destructive">{apiErrorMessage(error)}</p>
+    );
+  }
   if (!data || data.docs.length === 0) return <p className="text-sm text-muted-foreground">No docs were produced.</p>;
   const selected = picked ?? (data.docs.find((d) => d.name === SUMMARY_DOC) ?? data.docs[0]).path;
   const group = (cat: DocEntry["category"]) => data.docs.filter((d) => d.category === cat);
@@ -102,7 +115,7 @@ export function DocsPane({ domainRunId }: { domainRunId: string }) {
   const commentary = group("commentary");
   const commentarySelected = commentary.some((d) => d.path === selected);
   return (
-    <div className="grid gap-4 md:grid-cols-[16rem_1fr]">
+    <div className="grid gap-4 md:grid-cols-[16rem_minmax(0,1fr)]">
       <div className="space-y-3">
         {section("Design", group("design"))}
         {section("Other", group("other"))}

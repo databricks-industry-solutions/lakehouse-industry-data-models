@@ -9,14 +9,37 @@ drift (replaces ``_merge_feedback_into_instructions`` +
 Pure/read-only: it reads VibeInput + VibeInputContextLink + element rows and
 returns a :class:`CompileOut`. It records nothing.
 
-Provenance (origin/author/confidence) rides only in the structured ``blocks``;
-the markdown carries NO inline markers.
+Provenance (origin/author/confidence) rides only in the structured ``blocks``.
+
+Two documents come out of one pass:
+
+- ``markdown`` is the human preview. It carries NO inline anchors and NO
+  markers, and it is pinned byte-for-byte to the FE twin by the frozen fixture
+  (tests/fixtures/compile_blocks_fixture.json).
+- ``agent_markdown`` is what launch sends to the agent (``model_vibes``). It
+  has the same headers and bodies plus, per item, an inline ``[<target>]``
+  anchor at the start of each short bullet and a K1 marker
+  ``<!-- vi:<input_id> target=<target> -->`` (integration guide §16.3). A short
+  bullet carries a trailing marker (its span is that line); a rich block gets
+  a standalone marker line just before its ``> Priority:`` line (an opener
+  whose span runs to the next marker). ``<!--`` and ``-->`` in user text are
+  escaped in ``agent_markdown`` only, so the app's markers are the only
+  comments the agent sees.
+
+Scoped compile (``scope_domains`` non-empty): only items whose anchor domain
+matches a scope domain (``core._vibe_scope.scope_key`` normalization) are
+included. Other items are excluded with ``out_of_scope``, and model-wide items
+with ``model_wide_in_scoped_run``. Exclusion never touches ``selected_for_run``.
 """
 
 from __future__ import annotations
 
+from typing import Optional
+
 from sqlmodel import Session, select
 
+from .core._vibe_scope import scope_key
+from .core.anchor_resolve import capture_named_anchor
 from .db_models import (
     Attribute,
     Domain,
@@ -31,6 +54,11 @@ from .models import CompiledBlockOut, CompileOut, VibeInputOrigin, VibeInputPrio
 EXCLUDE_DEPRECATED = "deprecated"
 EXCLUDE_NO_ANCHOR = "no_anchor_on_version"
 EXCLUDE_MISSING = "missing"
+EXCLUDE_OUT_OF_SCOPE = "out_of_scope"
+EXCLUDE_MODEL_WIDE_SCOPED = "model_wide_in_scoped_run"
+
+# K1 target for a model-wide item (only ever sent on an All Domains run).
+MODEL_WIDE_TARGET = "model"
 
 
 def _oneline(text: str) -> str:
@@ -162,21 +190,90 @@ def build_anchor(
     return _Anchor("element", names, tuple(sort_keys), section_path, headers)
 
 
+def anchor_domain_and_target(
+    session: Session, link: VibeInputContextLink
+) -> tuple[Optional[str], str]:
+    """Return ``(anchor domain name, K1 target)`` for one link.
+
+    The domain comes from the canonical ``capture_named_anchor`` walk
+    (product/attribute anchors resolve up to their domain). An FK anchor
+    belongs to its SOURCE domain (where the column lives). A subdomain-only
+    anchor, which ``capture_named_anchor`` does not walk up, resolves its
+    domain through ``Subdomain.domain_id``. A model-wide link has no domain.
+
+    Target: ``source_domain.source_product.source_column`` for an FK;
+    ``domain.product[.attribute]`` for a product/attribute anchor;
+    ``domain.subdomain`` for a subdomain anchor; ``domain`` for a domain
+    anchor; ``model`` for a model-wide anchor.
+    """
+    if link.fk_link_id:
+        fk = session.get(ForeignKeyLink, link.fk_link_id)
+        if fk is not None:
+            parts = [fk.source_domain, fk.source_product, fk.source_column]
+            target = ".".join(p for p in parts if p)
+            return (fk.source_domain or None), (target or MODEL_WIDE_TARGET)
+    named = capture_named_anchor(session, link)
+    domain_name = named.domain_name
+    if domain_name is None and link.subdomain_id:
+        sub = session.get(Subdomain, link.subdomain_id)
+        dom = session.get(Domain, sub.domain_id) if sub is not None else None
+        domain_name = dom.name if dom is not None else None
+    if named.product_name:
+        parts = [domain_name, named.product_name, named.attribute_name]
+    elif named.subdomain_name:
+        parts = [domain_name, named.subdomain_name]
+    else:
+        parts = [domain_name]
+    target = ".".join(p for p in parts if p)
+    return domain_name, (target or MODEL_WIDE_TARGET)
+
+
+def _k1_marker(input_id: str, target: str) -> str:
+    return f"<!-- vi:{input_id} target={target} -->"
+
+
+def _neutralize_comments(text: str) -> str:
+    """Escape HTML comment delimiters in USER text for ``agent_markdown``.
+
+    The agent parses every ``<!-- vi:... -->`` in ``model_vibes`` as a K1
+    marker, so a comment typed into feedback would claim another item or a
+    foreign target. Only the app-written markers may open or close a comment;
+    the ``markdown`` preview keeps the text verbatim.
+    """
+    return text.replace("<!--", "&lt;!--").replace("-->", "--&gt;")
+
+
 def compile_inputs(
-    session: Session, version_id: str, input_ids: list[str]
+    session: Session,
+    version_id: str,
+    input_ids: list[str],
+    *,
+    scope_domains: Optional[list[str]] = None,
 ) -> CompileOut:
     """Serialize the selected inputs anchored to ``version_id`` into markdown.
 
     - Drops inputs with ``status=deprecated`` (reported in excluded).
     - Drops inputs with no link on ``version_id`` (reason ``no_anchor_on_version``).
+    - When ``scope_domains`` is non-empty, drops inputs whose anchor domain is
+      not in scope (``out_of_scope``) and model-wide inputs
+      (``model_wide_in_scoped_run``). Runs before ordering, so ``markdown`` for
+      the included set is exactly the unscoped output for those ids.
+    - ``input_scope_domains`` maps each existing, non-deprecated input to the
+      domain the scoped filter above matches it by (None for model-wide
+      inputs, anchors that resolve to no domain, and inputs with no link on
+      this version). Filled with or without a scope, so the run form can
+      pre-fill its scope from the same rule that later includes or excludes
+      each item.
     - Groups by anchor: model-wide first, then Domain → Subdomain → Product →
       Attribute/Relationship, each sorted by element name (case-insensitive).
     - One bullet per input ``- (<priority>) <text-oneline>`` under its header.
-    - No inline provenance markers; provenance rides in ``blocks``.
+    - ``markdown`` has no markers; ``agent_markdown`` adds the inline anchor
+      and the K1 marker per item (see the module docstring).
     """
     out = CompileOut(markdown="")
     if not input_ids:
         return out
+    scope_keys = {scope_key(d) for d in (scope_domains or []) if scope_key(d)}
 
     # Preserve nothing about caller order; we sort deterministically below.
     inputs = session.exec(
@@ -193,7 +290,7 @@ def compile_inputs(
     ).all()
     link_by_input = {lk.input_id: lk for lk in links}
 
-    entries: list[tuple[_Anchor, VibeInput]] = []
+    entries: list[tuple[_Anchor, VibeInput, str]] = []
     for iid in input_ids:
         vi = by_id.get(iid)
         if vi is None:
@@ -208,24 +305,41 @@ def compile_inputs(
         if link is None:
             out.excluded_input_ids.append(iid)
             out.excluded_reasons[iid] = EXCLUDE_NO_ANCHOR
+            out.input_scope_domains[iid] = None
             continue
-        entries.append((_resolve_anchor(session, link), vi))
+        anchor = _resolve_anchor(session, link)
+        if anchor.kind == "model_wide":
+            domain_name, target = None, MODEL_WIDE_TARGET
+        else:
+            domain_name, target = anchor_domain_and_target(session, link)
+        out.input_scope_domains[iid] = domain_name
+        if scope_keys:
+            if anchor.kind == "model_wide":
+                out.excluded_input_ids.append(iid)
+                out.excluded_reasons[iid] = EXCLUDE_MODEL_WIDE_SCOPED
+                continue
+            if domain_name is None or scope_key(domain_name) not in scope_keys:
+                out.excluded_input_ids.append(iid)
+                out.excluded_reasons[iid] = EXCLUDE_OUT_OF_SCOPE
+                continue
+        entries.append((anchor, vi, target))
 
     # Deterministic ordering: model-wide first, then hierarchy by sort keys,
     # then by input text so the round-trip is stable. ORDERING uses the
     # oneline-collapsed text (even for rich inputs) so short/rich inputs
     # interleave predictably; RENDERING uses verbatim text. This split is
     # intentional — do not "fix" the key to use verbatim text.
-    def _order(item: tuple[_Anchor, VibeInput]):
-        anchor, vi = item
+    def _order(item: tuple[_Anchor, VibeInput, str]):
+        anchor, vi, _target = item
         is_model_wide = 0 if anchor.kind == "model_wide" else 1
         return (is_model_wide, anchor.sort_keys, _oneline(vi.text).lower())
 
     entries.sort(key=_order)
 
     lines: list[str] = []
+    agent_lines: list[str] = []
     emitted_headers: list[tuple[int, str]] = []
-    for anchor, vi in entries:
+    for anchor, vi, target in entries:
         # Emit only header levels not already on the current header stack.
         # Drop any trailing headers from the previous anchor that differ.
         common = 0
@@ -237,22 +351,27 @@ def compile_inputs(
         emitted_headers = list(anchor.headers)
         for level, text in anchor.headers[common:]:
             lines.append(f"{'#' * level} {text}")
+            agent_lines.append(f"{'#' * level} {text}")
+        marker = _k1_marker(vi.id, target)
         # Long/rich inputs render as a blank-fenced markdown block that
         # preserves their own newlines/markdown; short inputs stay a
         # one-line bullet. Detection + format mirror the FE exactly via the
         # frozen fixture.
         if _is_rich(vi.text):
             body = _block_body(vi.text)
-            if body == "":
-                lines.extend(["", f"> Priority: {vi.priority}", ""])
-            else:
-                lines.append("")
-                lines.append(f"> Priority: {vi.priority}")
-                lines.append("")
-                lines.extend(body.split("\n"))
-                lines.append("")
+            body_lines = body.split("\n") + [""] if body != "" else []
+            lines.extend(["", f"> Priority: {vi.priority}", ""] + body_lines)
+            # Opener marker on its own line, just before the Priority line.
+            agent_body = [_neutralize_comments(ln) for ln in body_lines]
+            agent_lines.extend(
+                ["", marker, f"> Priority: {vi.priority}", ""] + agent_body
+            )
         else:
             lines.append(f"- ({vi.priority}) {_oneline(vi.text)}")
+            agent_lines.append(
+                f"- ({vi.priority}) [{target}] "
+                f"{_neutralize_comments(_oneline(vi.text))} {marker}"
+            )
 
         out.included_input_ids.append(vi.id)
         out.blocks.append(CompiledBlockOut(
@@ -266,4 +385,5 @@ def compile_inputs(
         ))
 
     out.markdown = "\n".join(lines)
+    out.agent_markdown = "\n".join(agent_lines)
     return out

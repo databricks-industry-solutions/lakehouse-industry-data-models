@@ -8,12 +8,56 @@
  * Select still uses ("new base model", "vibe modeling of version", …).
  *
  * Drift-unification (Phase 7, Item 5): the agent-op strings are the same
- * vocabulary as ``backend/router.py:_INTENT_TO_AGENT_OP``. Keep them in
+ * vocabulary as ``backend/core/_intents.py:INTENT_TO_AGENT_OP``. Keep them in
  * sync — anywhere a string literal matches an entry below, prefer
  * ``intentToRunType`` / ``runTypeToIntent`` so a future rename only has
  * to touch one place.
  */
 import { Intent } from "@/lib/api";
+
+/**
+ * ``Run.intent`` of the audit run a kickstart-from-industry writes
+ * (``services/industry_kickstart.py``). Not part of the generated ``Intent``
+ * enum: it is a label on a run no user starts.
+ */
+export const KICKSTART_RUN_INTENT = "kickstart-from-industry";
+
+/** ``Run.intent`` of the audit run an industry download writes. */
+export const DOWNLOAD_RUN_INTENT = "download-industry";
+
+/** ``Run.intent`` of the audit run an orphan-schema drop writes
+ *  (``services/orphan_schemas.ORPHAN_DROP_INTENT``). */
+export const ORPHAN_DROP_RUN_INTENT = "uninstall-orphan-schemas";
+
+/**
+ * Runs that work inside the app and dispatch no agent job (the backend's
+ * ``routes/_helpers.AUDIT_INTENTS``; both sides are tested against
+ * ``tests/fixtures/setup_run_intents.json``). Cancelling one only marks it
+ * cancelled: there is no job to stop.
+ */
+export const SETUP_RUN_INTENTS: ReadonlySet<string> = new Set([
+  KICKSTART_RUN_INTENT,
+  DOWNLOAD_RUN_INTENT,
+  ORPHAN_DROP_RUN_INTENT,
+]);
+
+export function isSetupRunIntent(intent: string | null | undefined): boolean {
+  return !!intent && SETUP_RUN_INTENTS.has(intent);
+}
+
+/** Display labels of the app-only run intents (not in the ``Intent`` enum). */
+export const APP_RUN_LABELS: Record<string, string> = {
+  [KICKSTART_RUN_INTENT]: "Kickstart from industry",
+  [DOWNLOAD_RUN_INTENT]: "Download industry",
+  [ORPHAN_DROP_RUN_INTENT]: "Drop orphan schemas",
+};
+
+/** Whether the run page offers Retry for a failed or cancelled run of this
+ *  intent. The backend refuses retry and resume of an orphan-schema drop
+ *  (``router._refuse_app_only_retry``). */
+export function canRetryRunIntent(intent: string | null | undefined): boolean {
+  return intent !== ORPHAN_DROP_RUN_INTENT;
+}
 
 /** Display label for each intent slug. Used by ``intentLabel``. */
 export const INTENT_LABELS: Record<Intent, string> = {
@@ -31,7 +75,7 @@ export const INTENT_LABELS: Record<Intent, string> = {
  * FE Select value (legacy human-readable agent-op vocabulary) for each
  * Intent slug. The Select is the FE-only contract — it pre-existed the
  * orchestrator refactor and the labels were already reviewed/translated.
- * The BE has a *similar* map (``backend/router.py:_INTENT_TO_AGENT_OP``)
+ * The BE has a *similar* map (``backend/core/_intents.py:INTENT_TO_AGENT_OP``)
  * for agent-side operation tagging on multi-step pipelines, but it
  * collapses ``vibe-new-ecm-mvm`` onto ``"vibe modeling of version"``
  * (because the lead step IS the vibe op). The FE keeps the standalone
@@ -62,12 +106,13 @@ const AGENT_OP_TO_INTENT: Record<string, Intent> = (() => {
 })();
 
 /**
- * Render an intent slug as a human-friendly label. Falls back to the
- * raw slug if it isn't in the map so a newly-added intent shows up
- * verbatim rather than as an empty string.
+ * Render an intent slug as a human-friendly label: the run-form intents,
+ * then the app-only ones. Falls back to the raw slug if it isn't in either
+ * map so a newly-added intent shows up verbatim rather than as an empty
+ * string.
  */
 export const intentLabel = (intent: string | null | undefined): string =>
-  intent ? (INTENT_LABELS[intent as Intent] ?? intent) : "";
+  intent ? (INTENT_LABELS[intent as Intent] ?? APP_RUN_LABELS[intent] ?? intent) : "";
 
 /**
  * Translate a legacy ``run_type`` Select value (agent-side wording,

@@ -22,6 +22,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 from sqlmodel import Session, select
 
+from ._lifecycle_fixtures import require_files_catalog  # noqa: F401
 from vibe_modeling.backend.db_models import (
     Business,
     ModelVersion,
@@ -34,42 +35,32 @@ from vibe_modeling.backend.services.operations import (
     OperationObservation,
     OperationResult,
 )
-from vibe_modeling.backend.services.operations.import_from_volume import (
-    _scope_from_volume_path,
-)
+from vibe_modeling.backend.import_model import ImportScopeError, import_scope
 
 
 class TestScopeFromVolumePath:
-    """Parse the scope from a version-dir Volume path: nested layout FIRST,
-    legacy flat forms as fallback."""
+    """With nothing in the file, the scope comes from the version folder
+    (``core/_paths.version_dir_key``): nested first, flat as a fallback."""
+
+    @staticmethod
+    def _scope(path: str) -> str:
+        return import_scope({"model": {"domains": []}}, path, None)
 
     def test_nested_layout_standalone_scope_segment(self):
-        # Agent 4.9.8+: ".../v{N}/{scope}/..." — scope is a standalone segment.
-        p = "/Volumes/cat/_metamodel/vol_root/business/acme/v2/mvm/model.json"
-        assert _scope_from_volume_path(p) == "mvm"
+        assert self._scope("/Volumes/cat/_metamodel/vol_root/business/acme/v2/mvm/model.json") == "mvm"
 
     def test_nested_layout_ecm(self):
-        p = "/Volumes/cat/_metamodel/vol_root/business/acme/v1/ecm"
-        assert _scope_from_volume_path(p) == "ecm"
+        assert self._scope("/Volumes/cat/_metamodel/vol_root/business/acme/v1/ecm") == "ecm"
 
     def test_flat_layout_fallback(self):
-        # Legacy flat "{scope}_v{N}" still resolves.
-        p = "/Volumes/cat/_metamodel/vol_root/business/acme/ecm_v3/model.json"
-        assert _scope_from_volume_path(p) == "ecm"
-
-    def test_legacy_flat_vN_scope_fallback(self):
-        # Pre-v0.5.9 "v{N}_{scope}".
-        p = "/Volumes/cat/_metamodel/vol_root/business/acme/v3_mvm/model.json"
-        assert _scope_from_volume_path(p) == "mvm"
+        assert self._scope("/Volumes/cat/_metamodel/vol_root/business/acme/ecm_v3/model.json") == "ecm"
 
     def test_nested_takes_precedence_over_flatish_business_segment(self):
-        # A business folder that merely contains an underscore must not
-        # mis-parse; the nested v{N}/{scope} pair wins.
-        p = "/Volumes/cat/_metamodel/vol_root/business/ecm_corp/v5/mvm/model.json"
-        assert _scope_from_volume_path(p) == "mvm"
+        assert self._scope("/Volumes/cat/_metamodel/vol_root/business/ecm_corp/v5/mvm/model.json") == "mvm"
 
-    def test_default_when_no_match(self):
-        assert _scope_from_volume_path("/Volumes/cat/whatever/model.json") == "ecm"
+    def test_no_answer_is_refused(self):
+        with pytest.raises(ImportScopeError):
+            self._scope("/Volumes/cat/whatever/model.json")
 
 
 # --------------------------------------------------------------------------
@@ -501,7 +492,7 @@ def test_observe_is_terminal_without_polling(
 
 
 def test_successful_import_creates_one_model_version(
-    engine, primitive, seed_business, run_row
+    engine, primitive, seed_business, run_row, require_files_catalog
 ):
     body = _valid_model_json_bytes()
     ws = _ws_with_download(body)
@@ -510,11 +501,12 @@ def test_successful_import_creates_one_model_version(
         business_id=seed_business,
         params={"volume_path": "/Volumes/cat/sch/vol/ok.json"},
     )
-    with Session(engine) as s:
+    with Session(engine) as s, require_files_catalog:
         h = primitive.dispatch(ctx, ws, s)
         obs = primitive.observe(h, ctx, ws, s)
         s.commit()
 
+    assert require_files_catalog.checked == 1
     assert obs.terminal_result and obs.terminal_result.succeeded is True
     assert obs.terminal_result.output_version_id
 

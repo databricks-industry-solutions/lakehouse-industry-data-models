@@ -6,8 +6,8 @@ import { HELP_TOPICS, type HelpTopic } from "@/components/help/help-topics";
 /**
  * Shared reading template for every help content page: a back-to-index
  * affordance, a title, an optional intro line, the body, and optional
- * "Related" links. A calm, document-like surface (comfortable ~68ch measure)
- * distinct from the dense working screens but built on the same tokens.
+ * "Related" links. Fills the window like the working screens (`p-6`) and is
+ * built on the same tokens.
  */
 export function HelpPage({
   title,
@@ -26,7 +26,7 @@ export function HelpPage({
     .filter((t): t is HelpTopic => Boolean(t));
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-8">
+    <div data-testid="help-page" className="p-6">
       <Link
         to="/help"
         className="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
@@ -38,19 +38,19 @@ export function HelpPage({
       <header className="mb-6">
         <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
         {intro && (
-          <p className="mt-2 max-w-[68ch] text-sm leading-relaxed text-muted-foreground">
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             {intro}
           </p>
         )}
       </header>
 
-      <div className="max-w-[68ch] text-sm leading-relaxed">{children}</div>
+      <div className="text-sm leading-relaxed">{children}</div>
 
       {relatedTopics.length > 0 && (
         <footer className="mt-10 border-t border-border pt-4">
-          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Related
-          </div>
+          </h2>
           <ul className="space-y-1">
             {relatedTopics.map((t) => (
               <li key={t.slug}>

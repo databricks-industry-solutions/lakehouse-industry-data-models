@@ -8,6 +8,7 @@
  * resolves without a network fetch.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense } from "react";
@@ -116,6 +117,8 @@ function getDescriptionTextarea(): HTMLTextAreaElement {
 function getSubmitButton(): HTMLButtonElement {
   return screen.getByRole("button", { name: /Create Business/i }) as HTMLButtonElement;
 }
+
+warmImports(() => import("@/routes/_sidebar/businesses.new"));
 
 describe("New Business — non-empty description required to create a Business", () => {
   it("submit disabled when only name is filled", async () => {

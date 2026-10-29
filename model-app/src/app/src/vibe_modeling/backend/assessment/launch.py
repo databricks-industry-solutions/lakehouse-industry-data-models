@@ -9,7 +9,7 @@ from databricks.sdk import WorkspaceClient
 from sqlmodel import Session, select
 
 from ..core._names import agent_business_segment, normalize_scope
-from ..error_sanitization import sanitize_error_message
+from ..error_sanitization import recorded_error_text, sanitize_error_message
 from ..db_models import (
     AssessBatch, AssessConfig, AssessDomainRun, AssessDomainSource, Business, Domain, ModelVersion,
     AssessColumnMapping, AssessEntity,
@@ -19,6 +19,7 @@ from .config_service import assess_ready
 from .constants import domain_out_dir
 from .metamodel import MetamodelLocation, resolve_metamodel_location
 from .schemas import AssessBatchIn, SourceIn
+from ..services.schema_names import domain_schema_name
 
 
 class LaunchNotReady(Exception):
@@ -72,7 +73,7 @@ def build_domain_config(*, batch, business, version, domain, mm: MetamodelLocati
     payload = {
         "batch_id": batch.id, "domain": domain.name, "customer": business.name,
         "metamodel_business": agent_business_segment(business.name),
-        "vibe_catalog": version.uc_catalog, "physical_schema": domain.database_name or domain.name,
+        "vibe_catalog": version.uc_catalog, "physical_schema": domain_schema_name(domain.database_name, domain.name),
         "metamodel_schema": mm.schema, "metamodel_prefix": mm.prefix, "model_version": version.version,
         "model_scope": normalize_scope(version.scope),
         "bronze_sources": bronze, "bronze_catalog": sources[0].catalog_name,
@@ -108,7 +109,7 @@ def launch_batch(session: Session, ws: WorkspaceClient, *, business: Business, v
                                            catalog_name=s.catalog_name, schema_name=s.schema_name))
         session.commit(); session.refresh(dr)
         try:
-            mm = resolve_metamodel_location(ws, version.uc_catalog, domain.database_name or domain.name)
+            mm = resolve_metamodel_location(ws, version.uc_catalog, domain_schema_name(domain.database_name, domain.name))
             if mm is None:
                 raise RuntimeError(f"No metamodel found in {version.uc_catalog}")
             prior_tiers = None
@@ -123,7 +124,8 @@ def launch_batch(session: Session, ws: WorkspaceClient, *, business: Business, v
             dr.databricks_run_id = run.run_id
         except Exception as e:
             dr.status = "failed"
-            dr.error_message = f"Launch failed: {type(e).__name__}: {sanitize_error_message(str(e))}"[:2000]
+            dr.error_message = "Launch failed: " + recorded_error_text(
+                e, f"Launch of domain run {dr.id}", f"{type(e).__name__}: {sanitize_error_message(str(e))}")[:1900]
             dr.ended_at = datetime.now(timezone.utc)
         session.add(dr); session.commit()
     session.refresh(batch)

@@ -1,10 +1,13 @@
 """Model-version read-side endpoints (`/api/businesses/.../versions/...`,
 `/api/model-versions/...`).
 
-Covers listing versions, the next-vibes inspection surface, the
-delete-version flow (with optional reinstall-previous), manual sync / resync
-into Lakebase, the admin-recovery `import-from-volume` endpoint, and the
-per-version artifact listing the UI surfaces on the model-version page.
+Covers listing versions, the run form's pre-fill for a vibe of a version
+(``getRunDefaults``), the next-vibes inspection surface, the
+delete-version flow and its ``_metamodel`` cleanups (list and Retry
+cleanup), manual sync / resync
+into Lakebase, the admin-recovery `import-from-volume` endpoint, the
+uninstall impact, and the per-version artifact listing the UI surfaces on the
+model-version page.
 Anything that operates on a single ModelVersion row but is NOT a
 `/runs/...` endpoint lives here.
 
@@ -20,11 +23,11 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlmodel import select
 
 from ..._metadata import api_prefix
@@ -38,26 +41,28 @@ from .._query_helpers import (
     resolve_model_version,
 )
 from ..agent_compat import (
-    SUPPORTED_TAGS,
-    classify_tag,
-    describe_incompatibility,
-    detect_tag_from_model_json,
+    gate_model_json,
     latest_supported_tag,
 )
-from ..core import Dependencies, resolve_version_volume_catalog
+from ..core import (
+    Dependencies,
+    resolve_uninstall_target_catalog,
+    resolve_version_volume_catalog,
+)
+from ..core._metamodel_cleanups import retry_cleanup, unfinished_cleanups
 from ..core._names import agent_business_segment
+from ..core._runs import lock_business_for_run
+from ..core._time import as_utc
+from ..core._vibe_scope import scope_head
+from ..import_model import ImportScopeError, import_scope
+from ..error_sanitization import recorded_error_text
 from ..db_models import (
     Business,
     Domain,
+    MetamodelCleanup,
     ModelVersion,
     Run,
     RunArtifact,
-    RunOperation,
-)
-from ..job_launcher import (
-    generate_session_id,
-    launch_run,
-    session_id_to_bigint,
 )
 from ..model_export import (
     bundle_layout,
@@ -66,31 +71,46 @@ from ..model_export import (
     resolve_bundle_root,
 )
 from ..model_sync import ModelSyncService, _SyncEmptyError, _version_root_in_volume
+from ..run_link import import_sources, link_after_import, linked_run_ids
 from ..models import (
     DeleteVersionOut,
     InstallationStatusOut,
+    MetamodelCleanupOut,
+    MetamodelCleanupSummaryOut,
     ModelVersionOut,
     NextVibesOut,
     ReconcileInstallationOut,
     RunArtifactOut,
+    RunDefaultsOut,
+    UninstallImpactOut,
 )
-from ..services.orchestrator.dag_factories import (
-    dag_for_import_from_volume,
-    dag_for_revert,
-)
-from ..services.orchestrator.dag_factories._recovery import (
-    ImportFromVolumeRequest,
-    RevertRequest,
-)
+from ..services.run_defaults import run_defaults
+from ..services.orchestrator.dag_factories import dag_for_import_from_volume
+from ..services.orchestrator.dag_factories._recovery import ImportFromVolumeRequest
 from ..services.orchestrator.validate import validate_dag
+from ..services.schema_names import (
+    expected_schema_candidates_for_version,
+    resolve_expected_and_found_schemas,
+)
+from ..services.import_metamodel_writer import seed_error_text, seed_warnings
+from ..services.uninstall_impact import ScanRateLimited, uninstall_impact
 from ..services import operations as _operations_pkg
+from ..services.operations._version_lifecycle import (
+    VersionDeleteRefused,
+    delete_version as delete_version_rows,
+    evict_deployed_siblings,
+    installed_catalogs,
+    is_draft,
+    mark_version_deployed,
+    mark_version_uninstalled,
+)
 from ._helpers import (
-    _get_agent_config,
+    _get_or_create_agent_config,
     _next_vibes_from_inputs,
-    _offending_relation,
-    delete_model_version,
+    require_catalog_name,
     require_config,
     resolve_warehouse_id,
+    scan_rate_limited,
 )
 
 logger = logging.getLogger(__name__)
@@ -128,12 +148,36 @@ def get_model_version_in_business(
     operation_id="listVersions",
 )
 def list_versions(business_id: str, session: Dependencies.Session):
+    """The business's versions, newest first, each with ``is_head`` (the
+    scope head, ``core._vibe_scope.scope_head``), ``is_imported`` (the
+    ``run_link`` rule), ``linked_run_id`` for an imported version linked to
+    its run and, for a Dry Run draft,
+    ``draft_state``: ``ready`` when it builds on the head, ``older_base``
+    otherwise (installing it would replace newer versions)."""
     versions = session.exec(
         select(ModelVersion)
         .where(ModelVersion.business_id == business_id)
         .order_by(ModelVersion.version.desc())
     ).all()
-    return versions
+    heads = {
+        scope: scope_head(session, business_id, scope)
+        for scope in {mv.scope for mv in versions}
+    }
+    linked = linked_run_ids(session, [mv.id for mv in versions])
+    imported = import_sources(session, versions)
+    out: list[ModelVersionOut] = []
+    for mv in versions:
+        head = heads.get(mv.scope)
+        draft_state = None
+        if is_draft(mv):
+            draft_state = "ready" if head is not None and mv.base_version_id == head.id else "older_base"
+        out.append(ModelVersionOut.model_validate(mv, from_attributes=True).model_copy(update={
+            "is_head": head is not None and mv.id == head.id,
+            "draft_state": draft_state,
+            "linked_run_id": linked.get(mv.id),
+            "is_imported": mv.id in imported,
+        }))
+    return out
 
 
 @router.get(
@@ -169,20 +213,21 @@ def delete_version(
     session: Dependencies.Session,
     ws: Dependencies.Client,
     config: Dependencies.Config,
-    tracker: Dependencies.Tracker,
     _role: Dependencies.BusinessAdminOnly,
-    reinstall_previous: bool = False,
 ):
-    """Delete the latest version of its scope.
+    """Delete one version (``_version_lifecycle.delete_version``).
 
-    Always: drops the ``ModelVersion`` row and its Lakebase cascade
-    (``Domain`` → ``Product`` → ``Attribute``, ``ForeignKeyLink``,
-    ``DiagramLayout``, ``RunArtifact``) plus the agent's
-    ``_metamodel.{business,domain,product,attribute}`` rows when present.
-
-    Optional: when ``reinstall_previous=true`` and a same-scope prior
-    version exists with a matching catalog, dispatch the legacy
-    uninstall → install orchestrator DAG to revive that previous version.
+    Refused with 409 (nothing changed) while the business has an active run
+    or another request holds it, when the version is installed anywhere
+    (``{"error": "installed", "catalogs", "message"}``: uninstall it first),
+    or when newer real versions of its scope sit above it ("Delete the newer
+    versions first"), so a scope is peeled from the top. Deleting the scope
+    head makes the newest
+    superseded, not replaced, older version the head again
+    (``previous_version``); the feedback the version applied is open again
+    (``reopened_input_count``). The agent's ``_metamodel`` rows are removed
+    per catalog after the commit, recorded in ``metamodel_cleanup``; a
+    failed one stays listed until Retry cleanup.
     """
     business = session.get(Business, business_id)
     if not business:
@@ -192,200 +237,92 @@ def delete_version(
     if not version or version.business_id != business_id:
         raise HTTPException(status_code=404, detail="Version not found")
 
-    # "Latest in its scope" is the bar — not "latest across both scopes".
-    # The agent's version counter is per-scope (v1_ecm + v1_mvm can
-    # coexist), so the previous gate that ordered ALL versions by
-    # ``version desc`` would mark an ECM v2 row as non-latest just
-    # because an MVM v3 also existed.
-    current_scope = (version.scope or "").lower()
-    same_scope_versions = session.exec(
-        select(ModelVersion)
-        .where(
-            ModelVersion.business_id == business_id,
-            ModelVersion.scope == version.scope,
-            ModelVersion.status == "completed",
-        )
-        .order_by(ModelVersion.version.desc())
-    ).all()
-    if not same_scope_versions or same_scope_versions[0].id != version_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Can only delete the latest version in its scope",
-        )
-
-    prev_version = same_scope_versions[1] if len(same_scope_versions) >= 2 else None
-    catalog = version.uc_catalog
-    name = agent_business_segment(business.name)
-
-    if reinstall_previous:
-        if prev_version is None:
-            raise HTTPException(
-                status_code=400,
-                detail="No previous version to reinstall",
-            )
-        if not catalog:
-            raise HTTPException(
-                status_code=400,
-                detail="Version was never installed — nothing to reinstall over",
-            )
-
-    # --- Always-delete part --------------------------------------------------
-
-    # Drop the agent's _metamodel.* rows for this version, if present.
-    # Skipped silently for versions that were never written there
-    # (import-only versions) — there's nothing to clean up.
-    metamodel_deleted = False
-    if catalog:
-        sync = ModelSyncService(
-            session, ws, warehouse_id=resolve_warehouse_id(session, config)
-        )
-        try:
-            metamodel_deleted = sync.delete_metamodel_rows(
-                catalog=catalog,
-                business_name=name,
-                version=str(version.version),
-                model_scope=current_scope,
-            )
-        except Exception:
-            logger.exception(
-                "delete_version: failed to clean _metamodel.* rows for %s v%s (%s);"
-                " Lakebase rows still deleted",
-                name, version.version, current_scope,
-            )
-
-    deleted_version_number = version.version
-
-    # Wrap the Lakebase cascade + its commit: some live FKs lack ON DELETE
-    # CASCADE, so a missed child (or a surviving inbound pointer) surfaces
-    # as an IntegrityError on commit. Convert it to a clean 409 instead of
-    # letting the bare DB error become a sanitized 500. Single transaction —
-    # rollback leaves no partial delete behind.
     try:
-        delete_model_version(session, version)
-
-        # Drop the explorer cache so a subsequent fetch reads the post-delete state.
-        from ..explorer import invalidate_model_cache
-        invalidate_model_cache(business_id, deleted_version_number)
-
-        # Commit the delete (for the reinstall path this also lets the
-        # orchestrator dispatch see a clean state — the install primitive
-        # cares about which versions exist).
-        session.commit()
-    except IntegrityError as exc:
-        session.rollback()
-        rel = _offending_relation(exc)
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "Could not delete version: it still has dependent records"
-                + (f" ({rel})" if rel else "")
-            ),
+        outcome = delete_version_rows(
+            session, ws, resolve_warehouse_id(session, config), version,
+            discard_change_feedback=config.run_change_review_enabled,
         )
-    except SQLAlchemyError:
-        session.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="Could not delete version due to a database error",
-        )
-
-    if not reinstall_previous:
-        return DeleteVersionOut(
-            deleted_version=deleted_version_number,
-            previous_version=prev_version.version if prev_version else None,
-            run_id=None,
-            reinstall_dispatched=False,
-            metamodel_rows_cleaned=metamodel_deleted,
-            message=f"Deleted version {deleted_version_number}",
-        )
-
-    # --- Optional reinstall --------------------------------------------------
-
-    _get_agent_config(session)
-    scope = current_scope if current_scope in ("ecm", "mvm") else "mvm"
-    cataloging_style = "One Catalog"
-    schema_prefix = f"{scope}_"
-
-    revert_req = RevertRequest(
-        business_name=name,
-        deployment_catalog=catalog,
-        current_model_version=deleted_version_number,
-        target_model_version=prev_version.version,
-        scope=scope,
-        schema_prefix=schema_prefix,
-        cataloging_style=cataloging_style,
-        target_import_source_path=prev_version.import_source_path,
-    )
-    dag = dag_for_revert(revert_req)
-    validation = validate_dag(dag, registry_get=_operations_pkg.get)
-    if validation.blockers:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid reinstall DAG",
-                "blockers": [
-                    {
-                        "field_path": iss.field_path,
-                        "step_index": iss.step_index,
-                        "message": iss.message,
-                    }
-                    for iss in validation.blockers
-                ],
-            },
-        )
-
-    sid = generate_session_id()
-    sid_bigint = session_id_to_bigint(sid)
-    run = Run(
-        business_id=business_id,
-        version_id=prev_version.id,
-        # ``dag_for_revert`` is the underlying DAG (uninstall → install
-        # of the prior version), so the persisted intent stays ``revert``
-        # to match what the orchestrator later writes from ``dag.intent``.
-        # The "reinstall" framing is a UX detail at the delete-dialog
-        # level, not a separate orchestrator intent.
-        intent="revert",
-        status="pending",
-        vibe_session_id=sid,
-        vibe_session_id_bigint=sid_bigint,
-        parameters_json=json.dumps({
-            "deployment_catalog": catalog,
-            "business_name": name,
-            "deleted_version": deleted_version_number,
-            "version_to_restore": prev_version.version,
-        }),
-        progress_message=f"Re-installing version {prev_version.version}...",
-    )
-    session.add(run)
-    session.commit()
-    session.refresh(run)
-
-    try:
-        tracker.orchestrator.start(run, dag, session)
-        session.commit()
-        session.refresh(run)
-    except Exception as e:
-        from ..run_state_transitions import transition_run
-        reason = f"Failed to start reinstall orchestrator: {e}"
-        run.error_message = reason
-        session.add(run)
-        transition_run(session, run, target_status="failed", reason=reason)
-        session.commit()
-        session.refresh(run)
-
-    if run.status in ("running", "pending"):
-        tracker.start_tracking(run.id)
-
+    except VersionDeleteRefused as refused:
+        raise HTTPException(status_code=refused.status_code, detail=refused.detail)
     return DeleteVersionOut(
-        deleted_version=deleted_version_number,
-        previous_version=prev_version.version,
-        run_id=run.id,
-        reinstall_dispatched=True,
-        metamodel_rows_cleaned=metamodel_deleted,
-        message=(
-            f"Deleted version {deleted_version_number}; "
-            f"re-installing version {prev_version.version}..."
+        deleted_version=outcome.deleted_version,
+        previous_version=outcome.previous_version,
+        metamodel_rows_cleaned=outcome.metamodel_rows_cleaned,
+        metamodel_cleanup=MetamodelCleanupSummaryOut(
+            done=outcome.cleanup_done, pending=outcome.cleanup_pending, failed=outcome.cleanup_failed,
         ),
+        reopened_input_count=outcome.reopened_input_count,
+        message=f"Deleted version {outcome.deleted_version}",
     )
+
+
+def _cleanup_out(row: MetamodelCleanup) -> MetamodelCleanupOut:
+    out = MetamodelCleanupOut.model_validate(row, from_attributes=True)
+    return out.model_copy(update={"updated_at": as_utc(row.updated_at)})
+
+
+@router.get(
+    "/businesses/{business_id}/metamodel-cleanups",
+    response_model=list[MetamodelCleanupOut],
+    operation_id="listMetamodelCleanups",
+)
+def list_metamodel_cleanups(business_id: str, session: Dependencies.Session):
+    """The business's unfinished ``_metamodel`` cleanups (``pending`` or
+    ``failed``), newest first. While one is unfinished in a catalog, the
+    agent still sees the deleted version there."""
+    business = session.get(Business, business_id)
+    if not business:
+        raise HTTPException(status_code=404, detail="Business not found")
+    return [_cleanup_out(r) for r in unfinished_cleanups(session, agent_business_segment(business.name))]
+
+
+@router.post(
+    "/businesses/{business_id}/metamodel-cleanups/{cleanup_id}/retry",
+    response_model=MetamodelCleanupOut,
+    operation_id="retryMetamodelCleanup",
+)
+def retry_metamodel_cleanup(
+    business_id: str,
+    cleanup_id: str,
+    session: Dependencies.Session,
+    ws: Dependencies.Client,
+    config: Dependencies.Config,
+    _role: Dependencies.BusinessAdminOnly,
+):
+    """Retry cleanup: attempt the removal again under the business lock,
+    with the attempt count reset. 409 while a run is active or another
+    request holds the business. A ``done`` row is returned unchanged."""
+    business = session.get(Business, business_id)
+    if not business:
+        raise HTTPException(status_code=404, detail="Business not found")
+    row = session.get(MetamodelCleanup, cleanup_id)
+    if row is None or row.business_segment != agent_business_segment(business.name):
+        raise HTTPException(status_code=404, detail="Cleanup not found")
+    warehouse_id = resolve_warehouse_id(session, config)
+    lock_business_for_run(session, business.id)
+    session.refresh(row)
+    return _cleanup_out(retry_cleanup(session, ws, warehouse_id, row))
+
+
+@router.get(
+    "/businesses/{business_id}/model-versions/{model_version_id}/run-defaults",
+    response_model=RunDefaultsOut,
+    operation_id="getRunDefaults",
+)
+def get_run_defaults(
+    business_id: str,
+    model_version_id: str,
+    session: Dependencies.Session,
+    ws: Dependencies.Client,
+):
+    """The Advanced Options a vibe of this version starts from, and which of
+    them the agent keeps at the version's own value
+    (``services/run_defaults.run_defaults``). Reads the version's
+    ``model.json`` once (bounded); an unreadable file answers 200 with
+    ``file_read`` False."""
+    mv = get_model_version_in_business(session, business_id, model_version_id)
+    business = session.get(Business, business_id)
+    return run_defaults(session, ws, business, mv)
 
 
 # --- Per-version artifact listing (read-side, distinct from runs/.../artifacts) ---
@@ -613,10 +550,8 @@ def sync_model_version(
     bname = agent_business_segment(business.name)
     vstr = f"v{mv.version}"
 
-    # Per-version Volume catalog: the producing run's uc_catalog when known,
-    # else the installation metamodel catalog. Passing bare mv.uc_catalog here
-    # (the prior behavior) made sync a silent no-op for drafts whose uc_catalog
-    # is "" - the kickstart-class bug this resolver fixes.
+    # Where the version's files are (resolve_version_volume_catalog), so a
+    # draft or a version installed elsewhere still syncs from its own folder.
     catalog = resolve_version_volume_catalog(mv, session, config)
     sync = ModelSyncService(session, ws, resolve_warehouse_id(session, config))
     try:
@@ -668,8 +603,7 @@ def force_resync_version(
 
     bname = agent_business_segment(business.name)
     vstr = f"v{mv.version}"
-    # Per-version Volume catalog (the promoted canonical rule): mv.uc_catalog,
-    # else the installation metamodel catalog.
+    # Where the version's files are (resolve_version_volume_catalog).
     catalog = resolve_version_volume_catalog(mv, session, config)
     if not catalog:
         # No per-version catalog AND no installation metamodel catalog: this is
@@ -766,10 +700,11 @@ def import_version_from_volume(
     _role: Dependencies.AdminOnly,
     volume_path: str,
     new_version_number: Optional[int] = None,
-    scope: str = "mvm",
+    scope: Optional[Literal["ecm", "mvm"]] = None,
     catalog: Optional[str] = None,
     base_version_id: Optional[str] = None,
     vibe_instructions: str = "",
+    databricks_run_id: Optional[int] = None,
 ):
     """Admin recovery: create a new ModelVersion on `business_id` populated
     from a model.json at `volume_path` (e.g.
@@ -787,6 +722,9 @@ def import_version_from_volume(
     since those are not part of the primitive's contract.
 
     - `new_version_number`: if omitted, uses max(existing version) + 1.
+    - `databricks_run_id`: the run that produced the file, linked after the
+      import commits (``run_link.link_after_import``); a refused link keeps
+      the import and returns its reason in ``warnings``.
     """
     business = session.get(Business, business_id)
     if not business:
@@ -822,7 +760,7 @@ def import_version_from_volume(
         raw = resp.contents.read()
         doc = json.loads(raw)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not read {volume_path}: {e}")
+        raise HTTPException(status_code=502, detail=f"Could not read the file at volume_path: {e}")
 
     # Accept either a flat model.json (domains at top level) or the
     # nested `{model: {...}}` wrapper that the current agent writes.
@@ -834,41 +772,35 @@ def import_version_from_volume(
         )
 
     from ..core._defaults import SUPPORTED_AGENT_VERSION
-    detected_tag = detect_tag_from_model_json(doc, fallback=SUPPORTED_AGENT_VERSION)
-    verdict = classify_tag(detected_tag)
-    if verdict in ("breaking", "unknown"):
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "incompatible_agent_tag",
-                "detected_agent_tag": detected_tag,
-                "compat_verdict": verdict,
-                "latest_supported_tag": latest_supported_tag(),
-                "supported_tags": sorted(SUPPORTED_TAGS),
-                "message": describe_incompatibility(detected_tag, verdict),
-            },
-        )
-    if verdict == "needs-adapter":
-        logger.warning(
-            "import_version_from_volume: tag %r classified as needs-adapter; "
-            "proceeding without a shim (no adapter registered).",
-            detected_tag,
-        )
+    gate = gate_model_json(doc, fallback=SUPPORTED_AGENT_VERSION)
+    if gate.refused:
+        raise HTTPException(status_code=422, detail=gate.refusal_detail())
+    if gate.needs_adapter:
+        logger.warning("import_version_from_volume: %s", gate.adapter_warning)
+
+    # The scope the import lands in (``import_model.import_scope``: the file's
+    # version, else ``scope``, else its requirements, else its folder). When
+    # nothing answers, or ``scope`` contradicts the file, the primitive fails
+    # its step with the reason and the route answers 502 below.
+    try:
+        resolved_scope: Optional[str] = import_scope(doc, volume_path, scope)
+    except ImportScopeError:
+        resolved_scope = None
 
     # Resolve the new version number for the conflict pre-check. The
     # primitive will allocate ``next_version_for_scope`` itself (per the
     # post-refactor natural key (business, version, scope)), so when a
     # caller supplies an explicit number that doesn't match, we reject
-    # early. The path's `scope` (default "mvm") is the scope the import
-    # will land into; siblings in the OTHER scope don't influence the
-    # ordinal.
-    auto_new_version = next_version_for_scope(session, business_id, scope)
-    if new_version_number is not None and new_version_number != auto_new_version:
+    # early. Siblings in the OTHER scope don't influence the ordinal.
+    auto_new_version = (
+        next_version_for_scope(session, business_id, resolved_scope) if resolved_scope else None
+    )
+    if new_version_number is not None and auto_new_version is not None and new_version_number != auto_new_version:
         raise HTTPException(
             status_code=400,
             detail=(
                 f"new_version_number={new_version_number} does not match the "
-                f"next available number ({auto_new_version}) for scope={scope!r}. "
+                f"next available number ({auto_new_version}) for scope={resolved_scope!r}. "
                 f"The orchestrator-driven import allocates per-scope; remove the "
                 f"override or set it to {auto_new_version}."
             ),
@@ -878,13 +810,13 @@ def import_version_from_volume(
     # Conflict if that (version, scope) somehow already exists (race
     # between the latest-lookup and the primitive's insert).
     existing = resolve_model_version(
-        session, business_id, new_version_number, scope,
-    )
+        session, business_id, new_version_number, resolved_scope,
+    ) if resolved_scope and new_version_number is not None else None
     if existing:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"ModelVersion v{new_version_number} (scope={scope!r}) already "
+                f"ModelVersion v{new_version_number} (scope={resolved_scope!r}) already "
                 f"exists for this business."
             ),
         )
@@ -908,6 +840,7 @@ def import_version_from_volume(
         volume_path=volume_path,
         deployment_catalog=catalog or "",
         business_name=biz_name_slug,
+        scope=scope,
     )
     dag = dag_for_import_from_volume(import_req)
     validation = validate_dag(dag, registry_get=_operations_pkg.get)
@@ -940,7 +873,7 @@ def import_version_from_volume(
         progress_message="Importing from Volume",
         parameters_json=json.dumps({
             "volume_path": volume_path,
-            "scope": scope,
+            "scope": resolved_scope or scope or "",
             "source": "import_from_volume",
             "deployment_catalog": catalog or "",
         }),
@@ -963,7 +896,7 @@ def import_version_from_volume(
         #   Previous: direct synthetic_run.status write.
         #   New: transition_run stamps all five layers atomically.
         from ..run_state_transitions import transition_run
-        reason = f"Import orchestrator failed: {e}"
+        reason = f"Import orchestrator failed: {recorded_error_text(e, 'Import orchestrator', str(e))}"
         synthetic_run.error_message = reason
         session.add(synthetic_run)
         transition_run(session, synthetic_run, target_status="failed", reason=reason)
@@ -992,20 +925,16 @@ def import_version_from_volume(
     # Lakebase rows. The route still owns the catalog/scope rewrite +
     # supersession + Delta mirror — features that aren't part of the
     # primitive's contract but the legacy admin endpoint shipped.
-    if catalog:
-        mv.uc_catalog = catalog
-        mv.deployment_status = "deployed"
-    if scope and not mv.scope:
-        mv.scope = scope
+    landed_scope = mv.scope or ""
     if base_version_id:
         mv.base_version_id = base_version_id
     if vibe_instructions:
         mv.vibe_instructions = vibe_instructions
     session.add(mv)
 
-    if mv.deployment_status == "deployed":
-        from ..progress_tracker import _supersede_deployed_siblings
-        _supersede_deployed_siblings(session, mv)
+    if catalog:
+        # The import primitive recorded the version installed in ``catalog``.
+        evict_deployed_siblings(session, mv, same_scope=False, run_id=synthetic_run.id)
 
     # Drop the explorer cache for this version so a subsequent model fetch
     # reads fresh data rather than a pre-import snapshot.
@@ -1016,257 +945,103 @@ def import_version_from_volume(
     # targeting this version doesn't die on the agent's
     # `_version_exists` check.
     delta_written = False
+    delta_warnings: list[str] = []
     warehouse_id = resolve_warehouse_id(session, config)
     if warehouse_id and catalog:
         sync = ModelSyncService(session, ws, warehouse_id=warehouse_id)
         # Nested (agent 4.9.8+) canonical layout; the builder normalizes the
         # business segment the same way ``biz_name_slug`` does.
         delta_volume_path = _version_root_in_volume(
-            catalog, business.name, str(mv.version), scope
+            catalog, business.name, str(mv.version), landed_scope
         )
         try:
             delta_written = sync.write_model_to_delta(
                 catalog=catalog,
                 business_name=business.name,
                 version=str(mv.version),
-                model_scope=scope,
+                model_scope=landed_scope,
                 volume_path=delta_volume_path,
                 model_payload=model_payload,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 "import_version_from_volume: Delta write failed; Lakebase was still populated"
             )
+            delta_warnings = seed_warnings({"errors": [seed_error_text(exc)]})
 
     session.commit()
+    linked_run_id, link_warning = (None, None)
+    if databricks_run_id is not None:
+        linked_run_id, link_warning = link_after_import(session, ws, business, mv, databricks_run_id)
     return {
         "ok": True,
         "version_id": mv.id,
         "version": mv.version,
         "run_id": synthetic_run.id,
+        "linked_run_id": linked_run_id,
+        "warnings": delta_warnings + ([link_warning] if link_warning else []),
         "delta_written": delta_written,
-        "detected_agent_tag": detected_tag,
-        "compat_verdict": verdict,
+        "detected_agent_tag": gate.tag,
+        "compat_verdict": gate.verdict,
         "latest_supported_tag": latest_supported_tag(),
     }
 
 
+# --- Uninstall impact ------------------------------------------------------
+
+@router.get(
+    "/businesses/{business_id}/versions/{version_id}/uninstall-impact",
+    response_model=UninstallImpactOut,
+    operation_id="getUninstallImpact",
+)
+def get_uninstall_impact(
+    business_id: str,
+    version_id: str,
+    session: Dependencies.Session,
+    ws: Dependencies.Client,
+    config: Dependencies.Config,
+    user: Dependencies.UserIdentity,
+    _role: Dependencies.ModelerOnly,
+    catalog: Optional[str] = None,
+    cataloging_style: Optional[
+        Literal["One Catalog", "Catalog per Division", "Catalog per Domain"]
+    ] = None,
+):
+    """What uninstalling the version from ``catalog`` drops: its schemas with
+    their tables (and which hold rows), views and volumes, and the catalog's
+    shared ``_metrics`` schema.
+
+    ``catalog`` defaults the way the uninstall run resolves it
+    (``resolve_uninstall_target_catalog``: the run's catalog, else where the
+    version was last installed, else the installation's metamodel catalog)
+    and is lower-cased. A version installed in several catalogs has one
+    impact per catalog; the response lists them in ``installed_catalogs``.
+    ``cataloging_style`` is the style the uninstall will run with; without
+    it, the style of the version's last install. Results are cached for 60 s;
+    each caller may start a limited number of scans per minute (429 with
+    ``Retry-After``).
+    """
+    mv = get_model_version_in_business(session, business_id, version_id)
+    agent_cfg = _get_or_create_agent_config(session, config)
+    target = resolve_uninstall_target_catalog(
+        SimpleNamespace(deployment_catalog=catalog or ""), mv, agent_cfg
+    ).lower()
+    if not target:
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "No catalog is configured. Choose the catalog to check."},
+        )
+    require_catalog_name(target)
+    try:
+        return uninstall_impact(
+            session, ws, resolve_warehouse_id(session, config), mv, target,
+            cataloging_style=cataloging_style, user=user,
+        )
+    except ScanRateLimited as exc:
+        raise scan_rate_limited(exc.retry_after_s, "uninstall checks") from exc
+
+
 # --- Installation drift detection (#69) -----------------------------------
-
-
-def _scope_short(scope: Optional[str]) -> str:
-    """Match `progress_tracker.compute_install_catalog_and_prefix`'s scope
-    normalisation: "ecm" unless the scope string mentions "mvm"-ish
-    variants, in which case ("ecm" not in it) it's "mvm"."""
-    return "ecm" if "ecm" in str(scope or "").lower() else "mvm"
-
-
-def _dispatched_schema_affixes_for_version(
-    session, version_id: str
-) -> tuple[list[str], list[str]]:
-    """Read the ``schema_prefix`` / ``schema_suffix`` actually dispatched to
-    the agent for the op(s) that produced or installed ``version_id``.
-
-    Sourced from ``RunOperation.dispatched_widgets_json`` — the write-once
-    audit of the exact widget map handed to the agent (populated for every
-    model-producing + install/uninstall op; see
-    ``OperationDispatchHandle.dispatched_widgets``). This is how the drift
-    probe learns the model's real physical-schema affixes instead of
-    assuming the default ``"One Catalog"`` ``{scope}_`` prefix and a blank
-    suffix.
-
-    - A generation op links via ``output_version_id``; an install/uninstall
-      op links via ``parent_version_id`` (it consumes, not produces, the
-      version).
-    - ``schema_prefix`` appears in both install and generation widgets;
-      ``schema_suffix`` only in the generation/vibe-iterate widgets (install
-      doesn't forward it), so we scan every linked op and union what we find.
-
-    Returns ``(prefixes, suffixes)`` — de-duplicated, order-preserving, and
-    EMPTY when no op carries a ``dispatched_widgets_json`` (pre-E-03
-    installs, hand-built rows). Empty lists are the caller's signal to fall
-    back to the legacy scope-prefixed / bare probing without regressing the
-    currently-working cases.
-    """
-    try:
-        rows = session.exec(
-            select(RunOperation.dispatched_widgets_json).where(
-                (RunOperation.output_version_id == version_id)
-                | (RunOperation.parent_version_id == version_id)
-            )
-        ).all()
-    except Exception as exc:  # noqa: BLE001 — best-effort enrichment only
-        logger.debug(
-            "Drift probe could not read dispatched widgets for %s: %s",
-            version_id, exc,
-        )
-        return [], []
-
-    prefixes: list[str] = []
-    suffixes: list[str] = []
-    for r in rows:
-        blob = r if isinstance(r, str) else (r[0] if r else "")
-        if not blob or blob == "{}":
-            continue
-        try:
-            widgets = json.loads(blob)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if not isinstance(widgets, dict):
-            continue
-        # ``schema_prefix``/``schema_suffix`` may legitimately be "" (the
-        # explicit-empty override for Catalog-per-* installs). Distinguish
-        # "key absent" (no signal) from "" (explicit empty is a real form).
-        if "schema_prefix" in widgets:
-            p = str(widgets.get("schema_prefix") or "")
-            if p not in prefixes:
-                prefixes.append(p)
-        if "schema_suffix" in widgets:
-            s = str(widgets.get("schema_suffix") or "")
-            if s not in suffixes:
-                suffixes.append(s)
-    return prefixes, suffixes
-
-
-def _expected_schema_candidates_for_version(
-    session, version_id: str, scope: Optional[str]
-) -> list[tuple[str, list[str]]]:
-    """Return ``(default_expected, [candidate_forms])`` per domain.
-
-    ``Domain.database_name`` is the agent's LOGICAL schema name, assigned
-    at domain-design time (Stage 4 of the pipeline) before any deployment
-    target is known - e.g. the agent's own docs show
-    ``"database_name": "party_db"`` with no scope prefix. The PHYSICAL
-    schema the agent creates at install time (Stage 12) is
-    ``f"{schema_prefix}{database_name}{schema_suffix}"``.
-
-    - ``schema_prefix`` is ``f"{scope_short}_"`` for the default
-      ``"One Catalog"`` style (so an ECM and MVM install into the same
-      catalog don't collide) and empty for ``Catalog per Division`` /
-      ``Catalog per Domain`` (a dedicated per-scope catalog namespaces
-      them instead). See ``progress_tracker.compute_install_catalog_and_prefix``.
-    - ``schema_suffix`` is a user naming-standard affix (e.g. ``_wt``) the
-      generation op forwards to the agent.
-
-    We don't persist the cataloging_style, and the legacy probe assumed the
-    ``{scope}_`` prefix with a BLANK suffix — so a model installed with a
-    non-default prefix or ANY ``schema_suffix`` (e.g. WT-Scratch's ``_wt``)
-    was false-flagged as drifted (the agent's real ``mvm_party_db_wt``
-    never matched the probe's ``mvm_party_db``). We now read the affixes
-    actually dispatched to the agent from ``RunOperation.dispatched_
-    widgets_json`` and fold them into the candidate set. When no dispatched
-    affixes are recorded (pre-E-03 installs), we degrade to the legacy
-    ``{scope}_``-prefixed + bare forms so currently-working cases don't
-    regress. The caller resolves each domain's forms against the live
-    catalog listing and picks whichever is actually present.
-
-    Every domain on the version is probed — no cap. A prior ``_DRIFT_
-    MAX_SCHEMAS_PROBED = 8`` cap silently truncated wide models (e.g. an
-    18-domain ECM only ever reported 8 expected schemas), making the
-    drift probe blind to missing schemas past the 8th domain. A single
-    ``ws.schemas.list`` call plus local set matching is sub-second
-    regardless of domain count, so the "feels instant" rationale for the
-    cap didn't cost anything to give up.
-    """
-    rows = session.exec(
-        select(Domain.database_name).where(Domain.version_id == version_id)
-    ).all()
-    scope_prefix = f"{_scope_short(scope)}_"
-
-    disp_prefixes, disp_suffixes = _dispatched_schema_affixes_for_version(
-        session, version_id
-    )
-    # Prefixes to probe: always the scope-prefixed + bare legacy forms,
-    # plus any prefix the agent was actually handed. Suffixes: always the
-    # blank legacy form, plus any dispatched suffix.
-    probe_prefixes: list[str] = [scope_prefix, ""]
-    for p in disp_prefixes:
-        if p not in probe_prefixes:
-            probe_prefixes.append(p)
-    probe_suffixes: list[str] = [""]
-    for s in disp_suffixes:
-        if s not in probe_suffixes:
-            probe_suffixes.append(s)
-
-    # The single most-actionable name to report as "expected"/"missing"
-    # when NONE of the forms exist in the catalog. Prefer what the agent
-    # was actually told to use (dispatched prefix+suffix); otherwise keep
-    # the legacy scope-prefixed default.
-    #
-    # Pick the longest NON-EMPTY dispatched affix rather than row order:
-    # a One-Catalog model links both a generation op (which may carry an
-    # empty schema_prefix) and an install op (the computed "ecm_"/"mvm_"),
-    # and row order could otherwise surface the bare name ("customer")
-    # instead of the actionable physical name ("ecm_customer") in the
-    # reconcile dialog. When the ONLY recorded prefix is explicitly empty
-    # (a genuine Catalog-per-* install) keep "" — the bare name is correct
-    # there. No dispatched affix at all → legacy scope-prefixed default.
-    def _pick_default_affix(values: list[str], fallback: str) -> str:
-        non_empty = [v for v in values if v]
-        if non_empty:
-            return max(non_empty, key=len)
-        if values:  # explicitly recorded, all empty (Catalog-per-*)
-            return ""
-        return fallback
-
-    default_prefix = _pick_default_affix(disp_prefixes, scope_prefix)
-    default_suffix = _pick_default_affix(disp_suffixes, "")
-
-    seen: list[tuple[str, list[str]]] = []
-    seen_set: set[str] = set()
-    for r in rows:
-        # session.exec() yields the column value directly when selecting a
-        # single column; play defensively in case it's a tuple.
-        name = r if isinstance(r, str) else (r[0] if r else "")
-        name = (name or "").strip()
-        if not name or name in seen_set:
-            continue
-        seen_set.add(name)
-        forms: list[str] = []
-        for pfx in probe_prefixes:
-            for sfx in probe_suffixes:
-                form = f"{pfx}{name}{sfx}"
-                if form not in forms:
-                    forms.append(form)
-        default_expected = f"{default_prefix}{name}{default_suffix}"
-        seen.append((default_expected, forms))
-    return seen
-
-
-def _resolve_expected_and_found_schemas(
-    ws, catalog: str, candidates: list[tuple[str, list[str]]]
-) -> tuple[list[str], list[str]]:
-    """Resolve each domain's candidate forms against the live catalog schema
-    listing. Single SDK call; matching is done locally so a fat catalog
-    with hundreds of schemas still returns in ms.
-
-    For each domain, prefer whichever candidate form is actually present in
-    the catalog. When none is present, report the domain's
-    ``default_expected`` — the most actionable name for an operator staring
-    at a missing-schema list (the dispatched affixes when known, else the
-    default "One Catalog" scope-prefixed convention).
-
-    Returns ``(expected_schemas, found_schemas)``.
-    """
-    if not catalog or not candidates:
-        return [], []
-    try:
-        all_names = {s.name or "" for s in ws.schemas.list(catalog_name=catalog)}
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "Drift probe could not list schemas in %r: %s", catalog, exc
-        )
-        raise
-    expected: list[str] = []
-    found: list[str] = []
-    for default_expected, forms in candidates:
-        match = next((f for f in forms if f in all_names), None)
-        if match is not None:
-            expected.append(match)
-            found.append(match)
-        else:
-            expected.append(default_expected)
-    return expected, sorted(found)
 
 
 @router.get(
@@ -1300,8 +1075,9 @@ def get_installation_status(
 
     install_catalog = (mv.uc_catalog or "").strip()
     lakebase_says = mv.deployment_status == "deployed"
-    candidates = _expected_schema_candidates_for_version(
-        session, model_version_id, mv.scope
+    also_installed_in = [c for c in installed_catalogs(session, mv) if c != install_catalog]
+    candidates = expected_schema_candidates_for_version(
+        session, model_version_id, mv.scope, install_catalog
     )
 
     # No catalog recorded means we never tried to install (or we have no
@@ -1325,10 +1101,11 @@ def get_installation_status(
             skipped_reason=(
                 "no deployment_catalog or no domains recorded; cannot probe"
             ),
+            also_installed_in=also_installed_in,
         )
 
     try:
-        expected, found = _resolve_expected_and_found_schemas(
+        expected, found = resolve_expected_and_found_schemas(
             ws, install_catalog, candidates
         )
     except Exception as exc:  # noqa: BLE001
@@ -1347,12 +1124,30 @@ def get_installation_status(
             in_sync=None,
             checked_at=datetime.now(timezone.utc),
             skipped_reason=f"could not list schemas: {exc}",
+            also_installed_in=also_installed_in,
         )
 
     missing = sorted(s for s in expected if s not in set(found))
     catalog_present = len(found) > 0
-    # Drift = Lakebase says installed but the catalog disagrees.
-    in_sync = (not lakebase_says) or (lakebase_says and not missing)
+    # Every other catalog the version is installed in must hold its schemas too.
+    other_missing: list[str] = []
+    skipped_reason: Optional[str] = None
+    for other in also_installed_in:
+        other_candidates = expected_schema_candidates_for_version(
+            session, model_version_id, mv.scope, other
+        )
+        try:
+            other_expected, other_found = resolve_expected_and_found_schemas(
+                ws, other, other_candidates
+            )
+        except Exception as exc:  # noqa: BLE001
+            skipped_reason = f"could not list schemas in {other}: {exc}"
+            continue
+        other_missing.extend(f"{other}.{s}" for s in sorted(set(other_expected) - set(other_found)))
+    # Drift = Lakebase says installed but a catalog disagrees.
+    in_sync: Optional[bool] = (not lakebase_says) or not (missing or other_missing)
+    if in_sync and skipped_reason:
+        in_sync = None
 
     return InstallationStatusOut(
         version_id=model_version_id,
@@ -1360,10 +1155,12 @@ def get_installation_status(
         lakebase_says_installed=lakebase_says,
         expected_schemas=expected,
         found_schemas=found,
-        missing_schemas=missing,
+        missing_schemas=missing + other_missing,
         catalog_present=catalog_present,
         in_sync=in_sync,
         checked_at=datetime.now(timezone.utc),
+        skipped_reason=skipped_reason,
+        also_installed_in=also_installed_in,
     )
 
 
@@ -1392,6 +1189,10 @@ def reconcile_installation(
       Bare-name candidates can also match another business's schemas in a
       shared catalog, so "some found" is not evidence of this install.
     - Any expected schema missing on a non-deployed row → unchanged.
+    - A Dry Run draft is never marked deployed: it shares its base's schema
+      names, so the probe cannot tell its install from the base's.
+    - Every other catalog the version is installed in (an open install row)
+      is probed too; one missing a schema closes that catalog's row only.
 
     We do NOT touch the agent's ``_metamodel`` rows here — that's an
     upstream cleanup the user can drive via a fresh ``uninstall`` run
@@ -1403,8 +1204,8 @@ def reconcile_installation(
         raise HTTPException(status_code=404, detail="ModelVersion not found")
 
     install_catalog = (mv.uc_catalog or "").strip()
-    candidates = _expected_schema_candidates_for_version(
-        session, model_version_id, mv.scope
+    candidates = expected_schema_candidates_for_version(
+        session, model_version_id, mv.scope, install_catalog
     )
     notes: list[str] = []
 
@@ -1422,7 +1223,7 @@ def reconcile_installation(
         )
 
     try:
-        expected, found = _resolve_expected_and_found_schemas(
+        expected, found = resolve_expected_and_found_schemas(
             ws, install_catalog, candidates
         )
     except Exception as exc:  # noqa: BLE001
@@ -1433,18 +1234,40 @@ def reconcile_installation(
 
     missing = sorted(s for s in expected if s not in set(found))
     previous = mv.deployment_status
+    others = [c for c in installed_catalogs(session, mv) if c != install_catalog]
 
     notes.append(
         f"{len(found)}/{len(expected)} expected schemas present in catalog"
     )
+    for other in others:
+        other_candidates = expected_schema_candidates_for_version(
+            session, model_version_id, mv.scope, other
+        )
+        try:
+            other_expected, other_found = resolve_expected_and_found_schemas(
+                ws, other, other_candidates
+            )
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"could not list schemas in {other}: {exc}; left as it is")
+            continue
+        if set(other_expected) - set(other_found):
+            mark_version_uninstalled(session, mv, other)
+            notes.append(f"not all expected schemas found in {other}; no longer recorded installed there")
     if not missing:
-        if mv.deployment_status != "deployed":
-            mv.deployment_status = "deployed"
-            session.add(mv)
-    elif mv.deployment_status == "deployed":
-        mv.deployment_status = "uninstalled"
-        session.add(mv)
-        notes.append("not all expected schemas found; marked uninstalled")
+        if is_draft(mv):
+            # A Dry Run draft shares its base's schema names, so the base's
+            # installed schemas look like the draft's. Only an install
+            # (which makes the draft current) records it deployed.
+            notes.append("a Dry Run draft is not marked deployed; install it to deploy it")
+        elif install_catalog not in installed_catalogs(session, mv):
+            mark_version_deployed(session, mv, install_catalog)
+    elif install_catalog in installed_catalogs(session, mv):
+        mark_version_uninstalled(session, mv, install_catalog)
+        notes.append(
+            "not all expected schemas found; marked uninstalled"
+            if mv.deployment_status != "deployed"
+            else f"not all expected schemas found in {install_catalog}; still installed in {mv.uc_catalog}"
+        )
 
     session.commit()
     session.refresh(mv)

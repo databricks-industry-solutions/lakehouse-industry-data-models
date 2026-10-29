@@ -16,9 +16,19 @@ schemas on a live fork (verified: an ECM uninstall dispatched without
 ``data_model_scopes`` wiped all 15 ``mvm_*`` schemas instead). Centralizing
 here means any future Group B primitive gets the correct widget value
 by construction instead of by remembering to copy the inline helper.
+
+:data:`SCHEMA_PREFIX_PATTERN` and :data:`CATALOG_NAME_PATTERN` are the one
+``schema_prefix`` and ``deployment_catalog`` widget rules every primitive's
+params model validates against (generation and deployment alike).
 """
 
 from __future__ import annotations
+
+# A ``schema_prefix`` widget value: empty, or lowercase snake ending in ``_``.
+SCHEMA_PREFIX_PATTERN = r"^[a-z][a-z0-9_]*_$|^$"
+
+# A ``deployment_catalog`` widget value: a lowercase Unity Catalog name.
+CATALOG_NAME_PATTERN = r"^[a-z][a-z0-9_]+$"
 
 
 def scope_label(scope: str) -> str:

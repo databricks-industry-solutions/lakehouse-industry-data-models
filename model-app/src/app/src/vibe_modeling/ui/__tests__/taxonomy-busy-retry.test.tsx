@@ -157,7 +157,7 @@ describe("BusyCountdown", () => {
     const retry = vi.fn(() => Promise.resolve());
     const cancel = vi.fn(() => Promise.resolve());
     render(<Harness retry={retry} cancel={cancel} />);
-    expect(screen.getByTestId("busy-countdown").textContent).toContain("The model is busy. Retrying in 00:15");
+    expect(screen.getByTestId("busy-countdown").textContent).toContain("The model is busy. Next try in 00:15");
     expect(screen.getByRole("button", { name: "Retry now" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
     for (const s of BUSY_RETRY_SCHEDULE_S) await advance(s * 1000);

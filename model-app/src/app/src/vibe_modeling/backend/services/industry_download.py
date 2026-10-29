@@ -10,25 +10,37 @@ Flow (``download_industry_model``):
 
 1. Build the GitHub connector from the installation's ``agent_config``
    (mirrors :func:`routes.sources._connector`).
-2. ``fetch_model_json`` → ``json.loads`` → :func:`import_model.detect_schema`,
+2. The scope from the model id (an id with no ``ecm`` / ``mvm`` scope is
+   refused, 422, before anything is read) → ``fetch_model_json`` →
+   ``json.loads`` → the app's copy gets
+   the scope prefix (:func:`scope_prefix.apply_import_prefix`: a blank file
+   prefix becomes ``ecm_`` / ``mvm_`` on its schemas, metric view sources and
+   metric view names) → :func:`import_model.detect_schema`,
    which UNWRAPS the ``{"model": ...}`` envelope. The business identity and
    the synced domains come from the unwrapped inner ``model`` — never the
    top-level ``model_name``/``domains`` keys (the routes/sources.py:168 bug).
 3. Validate the target sector exists (404 otherwise).
 4. Reconcile per the model-scope conflict unit: create a new industry,
    add a never-seen scope to an existing one, or 409 a same-scope clash.
+   Once every refusal is behind us, set up ``<deployment_catalog>._metamodel``
+   and its ``vol_root`` volume (:func:`metamodel_registry.ensure_metamodel_or_refuse`,
+   idempotent) so the uploads and the seed below have somewhere to land; a
+   refused request creates nothing in Unity Catalog.
 5. Construct the ``Business`` directly here (NOT via the create_business
    route): ``kind='industry'``, ``sector_id`` set, ``source_industry_id``
    left NULL — a downloaded industry is itself the source, not a kickstart.
 6. Create the draft ``ModelVersion`` + sync the model via
    :class:`ModelSyncService`.
-7. Materialize each fetched artifact's bytes onto the Volume, index them with
+7. Materialize each fetched artifact's bytes onto the Volume (the model.json
+   is the app's rewritten, scope-stamped copy; companion artifacts verbatim), index them with
    :func:`services.artifact_indexer.index_artifacts_at_path`, and materialize
    the source's next-vibe backlog via :func:`model_sync.ingest_next_vibes`.
 8. Commit, then seed ``<deployment_catalog>._metamodel.*`` via
-   :func:`import_metamodel_writer.write_metamodel` so the downloaded industry
+   :func:`import_metamodel_writer.write_metamodel` (which creates the agent's
+   registry tables first when they are missing) so the downloaded industry
    is directly iterable (the agent reads its parent model only from
-   ``_metamodel``). Best-effort, external, post-commit, non-fatal.
+   ``_metamodel``). Best-effort, external, post-commit, non-fatal: a seed
+   failure is returned in ``DownloadResult.warnings``.
 9. Write the audit :class:`Run` (``Run.business_id`` is required, so the
    business must be committed first); its timestamps are stamped equal and it
    carries the source lineage in ``vibe_instructions_text``.
@@ -60,14 +72,11 @@ from ..model_sync import ModelSyncService, ingest_next_vibes
 from ..sources import build_source_connector
 from ..sources.github import SourceNotFoundError, model_id_to_relpath
 from .artifact_indexer import index_artifacts_at_path
-from .import_metamodel_writer import seed_metamodel_one
+from .import_metamodel_writer import seed_metamodel_one, seed_warnings
+from .metamodel_registry import ensure_metamodel_or_refuse
+from .scope_prefix import apply_import_prefix, file_schema_prefix, import_schema_prefix, stamp_scope
 
 logger = logging.getLogger(__name__)
-
-# ``_paths._validate_scope`` accepts only ``ecm``/``mvm``. When the model_id
-# carries no discernible scope token, fall back to this so the Volume path
-# builder never raises.
-DEFAULT_DOWNLOAD_SCOPE = "ecm"
 
 @dataclass
 class DownloadResult:
@@ -93,20 +102,15 @@ class DownloadResult:
     warnings: list[str] = field(default_factory=list)
 
 
-def _scope_from_model_id(model_id: str) -> str:
-    """Derive the Volume scope for a downloaded model from its fused id.
-
-    The candidate scope is the explicit ``<scope>`` segment of the
-    ``<version>_<scope>`` model id (via :func:`sources.github.model_id_to_relpath`);
-    a malformed id yields no candidate. The candidate is validated against the
-    canonical :data:`_VALID_SCOPES` set so an unknown token falls back to
-    :data:`DEFAULT_DOWNLOAD_SCOPE` (keeping the Volume path builder from raising).
-    """
+def _scope_from_model_id(model_id: str) -> Optional[str]:
+    """The scope of a downloaded model: the ``<scope>`` segment of its
+    ``<version>_<scope>`` id (:func:`sources.github.model_id_to_relpath`), or
+    ``None`` when the id names no ``ecm`` / ``mvm`` scope."""
     try:
         cand = model_id_to_relpath(model_id).split("/")[1]
-    except SourceNotFoundError:
-        cand = ""
-    return cand if cand in _VALID_SCOPES else DEFAULT_DOWNLOAD_SCOPE
+    except (SourceNotFoundError, IndexError):
+        return None
+    return cand if cand in _VALID_SCOPES else None
 
 
 def _model_relpath(model_id: str) -> str:
@@ -236,6 +240,14 @@ def download_industry_model(
     """
     warnings: list[str] = []
 
+    # The scope names the Volume folder, the version row and the prefix.
+    scope = _scope_from_model_id(model_id)
+    if scope is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"The source model {model_id!r} is not an ECM or an MVM model, so it can't be downloaded.",
+        )
+
     # 1. Build connector + fetch the raw model.json.
     connector = _connector(session, config, ws)
     from ..sources import SourceError, SourceNotFoundError, SourcePermissionError
@@ -256,6 +268,11 @@ def download_industry_model(
             status_code=422, detail=f"model.json from source is not valid JSON: {exc}"
         ) from exc
 
+    # The app's copy carries the scope prefix (the source file is unchanged).
+    schema_prefix = import_schema_prefix(scope, file_schema_prefix(model_json))
+    prefix_report = apply_import_prefix(model_json, scope, schema_prefix)
+    warnings.extend(prefix_report.warnings)
+
     # 2. Route through detect_schema — it UNWRAPS the {"model": ...} envelope.
     analysis = detect_schema(model_json)
     if not analysis.valid:
@@ -271,9 +288,6 @@ def download_industry_model(
             status_code=422, detail="model.json carries no model name to use as the industry name."
         )
     description = str(inner.get("description") or "").strip()
-
-    # 4. Resolve scope (with fallback) for the Volume layout + version row.
-    scope = _scope_from_model_id(model_id)
 
     # 5. Resolve the conflict unit: the MODEL (scope) within the industry.
     existing = session.exec(
@@ -305,14 +319,6 @@ def download_industry_model(
                     ),
                 },
             )
-        # Additive: a never-seen scope under an existing industry. No row
-        # mutation, no conflict.
-        business = existing
-        on_conflict_applied = "added"
-        # First-download-wins: backfill the round-trip publish target only if
-        # never set. Sole exception to this branch's no-mutate invariant (ADR D-049).
-        if not existing.source_repo_path:
-            existing.source_repo_path = _industry_repo_path(session, config, industry_id)
     else:
         # 3. New industry → the sanitization-aware name guard rejects a name
         # that normalizes (via agent_business_segment) to any existing
@@ -323,19 +329,31 @@ def download_industry_model(
         try:
             ensure_business_name_available(session, industry_name)
         except BusinessNameConflict as exc:
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error": "business_name_taken",
-                    "name": industry_name,
-                    "message": str(exc),
-                },
-            ) from exc
-        # Validate the requested target sector exists and create the business
-        # under it. sector_id is only honoured here.
-        sector = session.get(Sector, sector_id)
-        if sector is None:
+            from ..routes._helpers import business_name_taken_error
+
+            raise business_name_taken_error(industry_name, str(exc)) from exc
+        # Validate the requested target sector exists. sector_id is only
+        # honoured for a new industry.
+        if session.get(Sector, sector_id) is None:
             raise HTTPException(status_code=404, detail=f"Sector '{sector_id}' not found.")
+
+    # Every check that can refuse the request is behind us. The model's files
+    # and the agent's registry rows land under the deployment catalog: make
+    # sure its ``_metamodel`` schema and ``vol_root`` volume exist before the
+    # first row or Unity Catalog write, since a fresh catalog has neither.
+    deployment_catalog = resolve_metamodel_catalog(session, config)
+    ensure_metamodel_or_refuse(ws, deployment_catalog)
+
+    if existing is not None:
+        # Additive: a never-seen scope under an existing industry. No row
+        # mutation, no conflict.
+        business = existing
+        on_conflict_applied = "added"
+        # First-download-wins: backfill the round-trip publish target only if
+        # never set. Sole exception to this branch's no-mutate invariant (ADR D-049).
+        if not existing.source_repo_path:
+            existing.source_repo_path = _industry_repo_path(session, config, industry_id)
+    else:
         business = _new_industry(
             industry_name, description, sector_id,
             _industry_repo_path(session, config, industry_id),
@@ -356,19 +374,23 @@ def download_industry_model(
         completion_date=now_ts,
         import_source_path=source_path,
         imported_at=now_ts,
+        files_catalog=deployment_catalog or None,
+        import_schema_prefix_added=prefix_report.schema_prefix_added,
+        import_view_prefix_added=prefix_report.view_prefix_added,
     )
     session.add(mv)
     session.flush()
 
+    stamp_scope(model_json, new_version_num, scope)
+    model_json_text = json.dumps(model_json)
     ModelSyncService(session).sync_from_model_json(mv.id, inner)
 
-    # Resolve the deployment catalog + Volume dir and capture the primitives
+    # Resolve the Volume dir and capture the primitives
     # the post-commit steps need, THEN commit the structure BEFORE the slow
     # Volume materialize. Holding a Postgres transaction across the
     # multi-minute artifact upload trips Lakebase's idle-in-transaction
     # timeout and 500s an otherwise-complete download. This also keeps the
     # design ordering: Lakebase durable before the external _metamodel write.
-    deployment_catalog = resolve_metamodel_catalog(session, config)
     version_dir = (
         _paths.version_dir_in_volume(
             deployment_catalog, business.name, new_version_num, scope,
@@ -389,7 +411,7 @@ def download_industry_model(
             _materialize_artifacts(
                 ws, connector,
                 industry_id=industry_id, model_id=model_id,
-                version_dir=version_dir, model_json_text=raw,
+                version_dir=version_dir, model_json_text=model_json_text,
                 warnings=warnings,
             )
             index_artifacts_at_path(
@@ -423,10 +445,12 @@ def download_industry_model(
     # iterable (the agent reads its parent model ONLY from _metamodel on
     # iterate/enlarge/shrink). Resolve the warehouse then commit to close the
     # read transaction, so no Postgres transaction is held across the external
-    # SQL-warehouse write. Best-effort, non-fatal (shared seed helper).
+    # SQL-warehouse write. Best-effort, non-fatal (shared seed helper, which
+    # creates the registry tables first in a catalog the agent never ran in);
+    # a failure is a warning on the 200.
     warehouse_id = get_warehouse_id(session)
     session.commit()
-    seed_metamodel_one(
+    seed = seed_metamodel_one(
         ws,
         catalog=deployment_catalog,
         warehouse_id=warehouse_id,
@@ -435,7 +459,10 @@ def download_industry_model(
         scope=scope,
         version=new_version_num,
         log_prefix="industry_download",
+        wait_mode="request",
+        location=version_dir or None,
     )
+    warnings.extend(seed_warnings(seed))
 
     # 9. Audit Run: synchronous pseudo-run, so stamp all three timestamps equal
     # (a completed run with NULL started/completed renders as perpetually

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { versionScopeLabel } from "@/lib/version-label";
+import { versionBrandLabel, versionScopeLabel } from "@/lib/version-label";
 
 describe("versionScopeLabel", () => {
   it("returns v{version} {SCOPE} when scope is provided", () => {
@@ -23,5 +23,22 @@ describe("versionScopeLabel", () => {
   it("uppercases the scope and handles string version numbers", () => {
     expect(versionScopeLabel(10, "ecm")).toBe("v10 ECM");
     expect(versionScopeLabel("42", "mvm")).toBe("v42 MVM");
+  });
+});
+
+describe("versionBrandLabel", () => {
+  it("labels a base version Base", () => {
+    expect(versionBrandLabel({ is_base: true })).toBe("Base");
+  });
+
+  it("labels a non-base version Vibed", () => {
+    expect(versionBrandLabel({ is_base: false })).toBe("Vibed");
+    expect(versionBrandLabel({})).toBe("Vibed");
+  });
+
+  it("labels a version whose parent was deleted", () => {
+    expect(versionBrandLabel({ is_base: false, parent_deleted: true })).toBe(
+      "Vibed (parent deleted)",
+    );
   });
 });

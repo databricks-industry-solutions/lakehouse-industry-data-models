@@ -12,6 +12,7 @@ import {
 import type { ColumnDisplayMode } from "@/components/diagram/types";
 import { isNotFoundError } from "@/lib/api-error";
 import { selector } from "@/lib/selector";
+import { liveDomainOptions } from "@/lib/domain-options";
 import { versionScopeLabel } from "@/lib/version-label";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +26,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { ToolbarActions, ToolbarTabsList } from "@/components/model/toolbar";
 import { useBreadcrumbs } from "@/components/explorer/breadcrumb-context";
 import {
   Tooltip,
@@ -33,14 +35,15 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Database, FolderOpen, GitGraph, Globe, Key, Layers, Link2 } from "lucide-react";
+import { Database, FolderOpen, GitGraph, Globe, Key, Layers, Link2, Sparkles } from "lucide-react";
 import { ChangeBadge, changeRowClassName } from "@/components/explorer/change-badge";
 import { DiagramViewer } from "@/components/diagram/diagram-viewer";
-import { DomainSelect } from "@/components/diagram/domain-select";
+import { TabDomainSelect } from "@/components/diagram/domain-select";
 import { RelationshipAnalysis } from "@/components/explorer/relationship-analysis";
 import { OntologyGraph } from "@/components/explorer/ontology-graph";
 import { AssessButton } from "@/components/assessment/assess-button";
 import { AddFeedbackButton } from "@/components/feedback/add-feedback-button";
+import { buildFeedbackContext } from "@/components/feedback/feedback-context";
 
 // Focal (single-domain) default column-display mode preference key (item 4,
 // 0.6.6). Kept in sync with the Settings > Diagram tab (settings.tsx) and
@@ -49,11 +52,6 @@ const DIAGRAM_FOCAL_MODE_KEY = "diagram.default_column_mode_focal";
 
 const validTabs = ["products", "diagram", "relationships", "ontology"] as const;
 type DomainTab = (typeof validTabs)[number];
-
-// Tabs this domain page shares with the scope-level page (item 3B). Picking
-// "All domains" keeps these as-is; the domain-only "products" tab has no
-// scope-level equivalent and maps to "overview" there.
-const SHARED_WITH_SCOPE_TABS = new Set(["diagram", "relationships", "ontology"]);
 
 export const Route = createFileRoute(
   "/_sidebar/businesses/$businessId/model/$version/$scope/$domainName/"
@@ -217,9 +215,7 @@ export function DomainDetail({
     (p) => p.key === DIAGRAM_FOCAL_MODE_KEY,
   )?.value as ColumnDisplayMode | undefined;
 
-  const domainList = (model.domains ?? [])
-    .filter((d) => d.change_status !== "deleted")
-    .map((d) => ({ name: d.name, division: d.division ?? "" }));
+  const domainList = liveDomainOptions(model.domains);
 
   useBreadcrumbs([
     {
@@ -253,40 +249,37 @@ export function DomainDetail({
     [],
   );
 
+  // Feedback here is about this domain on every tab (every tab, the
+  // Ontology's layouts included, shows this domain), or the diagram's current
+  // table or relationship while the diagram tab is focused (elsewhere the
+  // selection is stale and must not narrow the domain).
   const getFeedbackContext = useCallback(
-    () => ({
-      context_version: 1,
-      view_mode: tab === "products" ? "domain_tables" : tab,
-      domain_filter: domainName,
-      // Include the diagram's current selection only when the diagram
-      // tab is focused. Elsewhere the selection is stale and shouldn't
-      // narrow the feedback scope from domain to a specific table/edge.
-      selected_node_id: tab === "diagram" ? diagramSelection.nodeId : null,
-      selected_edge_id: tab === "diagram" ? diagramSelection.edgeId : null,
-    }),
-    [tab, domainName, diagramSelection.nodeId, diagramSelection.edgeId],
+    () =>
+      buildFeedbackContext({
+        selection: tab === "diagram" ? diagramSelection : null,
+        subject: { domain: domainName },
+      }),
+    [tab, domainName, diagramSelection],
   );
 
-  // Item 3B: the title dropdown is the domain page's single domain picker
-  // (the diagram toolbar's own is hidden via showDomainSelect={false}
-  // below). Picking a domain navigates DOWN to it, preserving the current
-  // tab (both pages share diagram/relationships/ontology). Picking "All
-  // domains" navigates UP to the scope route - "products" has no
-  // scope-level equivalent so it maps to "overview" there. Push (not
-  // replace) so the back button walks the domain history.
-  const handleDomainNavigate = (domain: string | null) => {
-    if (domain === domainName) return;
-    if (domain === null) {
+  // Domain selection is per tab: Products, Diagram and Ontology carry the
+  // domain dropdown (Relationships is model-wide, so it has none), and a
+  // pick opens the chosen domain's page on the SAME tab. "All domains"
+  // (Diagram and Ontology only) opens that tab on the version page. Push
+  // (not replace) so the back button walks the domain history.
+  const handleDomainSwitch = (next: string | null) => {
+    if (next === domainName) return;
+    if (next === null) {
       navigate({
         to: "/businesses/$businessId/model/$version/$scope",
         params: { businessId, version, scope },
-        search: { tab: SHARED_WITH_SCOPE_TABS.has(tab) ? (tab as "diagram" | "relationships" | "ontology") : "overview" },
+        search: { tab: tab === "ontology" ? "ontology" : "diagram" },
       });
       return;
     }
     navigate({
       to: "/businesses/$businessId/model/$version/$scope/$domainName",
-      params: { businessId, version, scope, domainName: domain },
+      params: { businessId, version, scope, domainName: next },
       search: { tab },
     });
   };
@@ -295,17 +288,11 @@ export function DomainDetail({
     <Tabs value={tab} onValueChange={setTab}>
       <div className="flex items-center gap-3 flex-wrap">
         <Database className="h-5 w-5" />
-        <h1 className="text-2xl font-semibold tracking-tight">{domain.name}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight min-w-0 break-words">{domain.name}</h1>
         {domain.division && (
           <Badge variant="outline">{domain.division}</Badge>
         )}
-        <DomainSelect
-          domains={domainList}
-          value={domainName}
-          onChange={handleDomainNavigate}
-          className="w-56 h-8 text-sm"
-        />
-        <TabsList>
+        <ToolbarTabsList>
           <TabsTrigger value="products">
             <Layers className="h-4 w-4 mr-1.5" />
             Products ({(domain.products ?? []).length})
@@ -322,8 +309,26 @@ export function DomainDetail({
             <Globe className="h-4 w-4 mr-1.5" />
             Ontology
           </TabsTrigger>
-        </TabsList>
-        <div className="ml-auto flex items-center gap-2">
+        </ToolbarTabsList>
+        <ToolbarActions>
+          {/* F6: a scoped vibe on this domain; scoped runs need the head. */}
+          {installVersion?.is_head && (
+            <Button variant="outline" size="sm" asChild data-testid="iterate-on-domain">
+              <Link
+                to="/businesses/$businessId/runs/new"
+                params={{ businessId }}
+                search={{
+                  operationType: "vibe modeling of version",
+                  sourceVersion: Number(version),
+                  sourceScope: scope,
+                  scopeDomains: domainName,
+                }}
+              >
+                <Sparkles className="h-4 w-4 mr-1.5" />
+                Iterate on this domain
+              </Link>
+            </Button>
+          )}
           {installVersion && (
             <AssessButton
               businessId={businessId}
@@ -339,7 +344,7 @@ export function DomainDetail({
               getContext={getFeedbackContext}
             />
           )}
-        </div>
+        </ToolbarActions>
       </div>
       {domain.description && (
         <p className="text-muted-foreground mt-1 text-sm leading-relaxed">
@@ -352,6 +357,12 @@ export function DomainDetail({
       </div>
 
       <TabsContent value="products">
+        <TabDomainSelect
+          domains={domainList}
+          value={domainName}
+          onChange={handleDomainSwitch}
+          allowAll={false}
+        />
         <ProductsTable
           products={domain.products ?? []}
           businessId={businessId}
@@ -367,7 +378,7 @@ export function DomainDetail({
             <Skeleton className="h-96 w-full" />
           ) : (
             <DiagramViewer
-              // Item 3B: picking another domain (title dropdown, or a
+              // Item 3B: picking another domain (the toolbar dropdown, or a
               // related-domain-group click in the diagram) navigates to
               // this SAME route with a new `domainName` param - the router
               // re-renders this component in place rather than remounting
@@ -386,8 +397,7 @@ export function DomainDetail({
               initialColumnMode={columnModePref}
               focusProduct={focusProduct}
               onSelectionChange={handleDiagramSelection}
-              onDomainNavigate={handleDomainNavigate}
-              showDomainSelect={false}
+              onDomainNavigate={handleDomainSwitch}
               feedbackSlot={
                 <AddFeedbackButton
                   businessId={businessId}
@@ -412,7 +422,13 @@ export function DomainDetail({
 
       <TabsContent value="ontology">
         <Suspense fallback={<Skeleton className="h-96 w-full" />}>
-          <OntologyGraph businessId={businessId} version={version} scope={scope} domainFilter={domainName} />
+          <OntologyGraph
+            businessId={businessId}
+            version={version}
+            scope={scope}
+            domainFilter={domainName}
+            onDomainPick={handleDomainSwitch}
+          />
         </Suspense>
       </TabsContent>
     </Tabs>

@@ -195,12 +195,10 @@ def ingest_domain_run(session: Session, ws: WorkspaceClient, dr: AssessDomainRun
         p = products.get(e.name.lower())
         attrs: dict[str, Attribute] = {}
         if p:
-            for a in session.exec(select(Attribute).where(Attribute.product_id == p.id)):
-                if a.column_name:
-                    attrs[a.column_name.lower()] = a
-            for a in session.exec(select(Attribute).where(Attribute.product_id == p.id)):
-                if a.name:
-                    attrs[a.name.lower()] = a
+            # A name match wins over a column_name match, so names go in second.
+            product_attrs = list(session.exec(select(Attribute).where(Attribute.product_id == p.id)))
+            attrs = {a.column_name.lower(): a for a in product_attrs if a.column_name}
+            attrs.update({a.name.lower(): a for a in product_attrs if a.name})
         ent = AssessEntity(domain_run_id=dr.id, product_id=p.id if p else None, name=e.name, grade=e.grade,
                            coverage_pct=e.coverage_pct, primary_source=e.primary_source, row_count=e.row_count,
                            net_new_candidate=e.net_new_candidate, core_sourced=e.core_sourced,

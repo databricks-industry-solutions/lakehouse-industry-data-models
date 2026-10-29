@@ -13,6 +13,7 @@ import { parseAdminHelp, parsePlainConflict, type AdminHelp } from "@/lib/api-er
 import { notifyError } from "@/lib/notify";
 import { StatusLine } from "@/components/settings/status-line";
 import { AdminHelpBlock } from "./admin-help-block";
+import { AgentText } from "./agent-text";
 
 /**
  * Route a feedback failure: an admin-help detail to the block, a plain 409
@@ -42,6 +43,12 @@ function RetryNotice({ message, onRetry, disabled, testId }: { message: string; 
       </Button>
     </div>
   );
+}
+
+/** The bulk-add label: "all N" only when none of the before-build vibes is added yet, else "the remaining N". */
+export function bulkAddLabel(unlinked: number, total: number): string {
+  if (unlinked < total) return unlinked === 1 ? "Add the remaining before-build vibe" : `Add the remaining ${unlinked} before-build vibes`;
+  return unlinked === 1 ? "Add the before-build vibe" : `Add all ${unlinked} before-build vibes`;
 }
 
 const SECTIONS: { key: string; title: string }[] = [
@@ -187,10 +194,10 @@ function VibeCard({
             ))}
           </span>
         )}
-        {v.problem && <div className="font-medium">{v.problem}</div>}
-        <div>{change}</div>
+        {v.problem && <div className="font-medium"><AgentText text={v.problem} /></div>}
+        <div><AgentText text={change} /></div>
         {v.impact_if_skipped && (
-          <div className="text-xs text-muted-foreground">If skipped: {v.impact_if_skipped}</div>
+          <div className="text-xs text-muted-foreground">If skipped: <AgentText text={v.impact_if_skipped} /></div>
         )}
         {v.affected_entities?.length > 0 && (
           <div className="flex flex-wrap gap-1">
@@ -291,7 +298,7 @@ export function NextVibesList({
           disabled={pendingBulk}
           variant="default"
         >
-          {pendingBulk ? "Adding all..." : `Add all ${unlinkedBeforeBuild.length} before-build vibes`}
+          {pendingBulk ? "Adding..." : bulkAddLabel(unlinkedBeforeBuild.length, beforeBuildVibes.length)}
         </Button>
       )}
       {bulkHelp && <AdminHelpBlock help={bulkHelp} testId="bulk-feedback-admin-help" live />}

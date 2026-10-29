@@ -1,5 +1,14 @@
 import "@testing-library/jest-dom/vitest";
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
+import { configure } from "@testing-library/react";
+
+// Time budgets, not retries: every assertion must still pass. The defaults
+// (1 s for findBy*/waitFor, 5 s per test) are sized for an idle machine; the
+// gate runs ~200 files in parallel beside other work, and the first test of a
+// file also pays a dynamic import of a large route module. A busy host then
+// fails tests that are correct. asyncUtilTimeout stays well below testTimeout
+// so a genuine miss still reports the failed query, not a bare test timeout.
+configure({ asyncUtilTimeout: 4000 });
 
 // jsdom doesn't implement ResizeObserver, and cmdk (used by Command / combobox
 // widgets like the Deployment Catalog picker) calls it on mount. Without a
@@ -53,3 +62,11 @@ if (typeof (globalThis as unknown as { jest?: unknown }).jest === "undefined") {
     getTimerCount: () => vi.getTimerCount(),
   };
 }
+
+// The Add-feedback draft store is module state: start every test empty.
+// Imported lazily so a test file's vi.mock (e.g. of the router) still
+// applies to the store module.
+afterEach(async () => {
+  const { resetFeedbackDrafts } = await import("@/components/feedback/feedback-draft");
+  resetFeedbackDrafts();
+});

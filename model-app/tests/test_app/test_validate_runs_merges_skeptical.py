@@ -10,16 +10,15 @@ raw-validated ``data.vibe_instructions`` against the leading op's
 does:
 
   1. Resolve ``data.next_vibe_ids`` against the parent ECM's
-     ``next_vibes_json``. Unknown ids → 400.
+     ``next_vibes_json``. Unknown ids are a blocker (create: 400).
   2. Set ``data.vibe_instructions`` to the compiled selected Vibe Inputs
      BEFORE calling ``validate_dag_request``. Next-vibe text is not folded
      into instructions - those IDs are validated + linked for audit only.
 
 These tests are written WITHOUT reading either:
 
-  - ``src/app/src/vibe_modeling/backend/router.py``'s
-    ``_resolve_and_link_legacy_selections`` helper or the modified
-    body of ``validate_run``, or
+  - the selection handling of ``services/orchestrator/preflight.py``
+    (``run_preflight``) or the body of ``validate_run``, or
   - ``tests/test_app/test_validate_runs_merges_selections.py`` (the
     dev-author tests).
 
@@ -231,7 +230,7 @@ class TestValidateMergesSelections:
         )
 
     # 5) unknown next_vibe_id → 400 with detail mentioning the bad id
-    def test_unknown_next_vibe_id_rejects_with_400(
+    def test_unknown_next_vibe_id_is_a_blocker(
         self, client_with_agent, engine, seed_business
     ):
         parent_vid, nv_ids = _seed_parent_ecm_with_next_vibes(engine, seed_business)
@@ -242,16 +241,10 @@ class TestValidateMergesSelections:
             next_vibe_ids=["nv-bogus"],
         )
         resp = client_with_agent.post(f"/api/businesses/{seed_business}/runs/validate", json=body)
-        assert resp.status_code == 400, (
-            f"unknown next_vibe_id should reject with 400; got "
-            f"{resp.status_code}: {resp.text}"
-        )
-        # Detail should mention the bad id so the FE can surface it inline.
-        text = resp.text.lower()
-        assert "nv-bogus" in text, (
-            f"400 detail should mention the unknown next_vibe_id; got: "
-            f"{resp.text}"
-        )
+        assert resp.status_code == 200, resp.text
+        # The blocker names the bad id so the FE can surface it inline.
+        messages = [b["message"] for b in resp.json()["blockers"] if b["field_path"] == "next_vibe_ids"]
+        assert messages and "nv-bogus" in messages[0], resp.text
 
 # ---------------------------------------------------------------------------
 # 7) Symmetry between /api/runs and /api/runs/validate
@@ -350,7 +343,7 @@ class TestSymmetryWithCreate:
     def test_unknown_next_vibe_id_rejects_on_both(
         self, client_with_agent, mock_ws, engine, seed_business
     ):
-        """Unknown next_vibe_id — both endpoints must reject with 400."""
+        """Unknown next_vibe_id: create rejects with 400, validate with a blocker."""
         _mock_run_now(mock_ws, run_id=80003)
         parent_vid, nv_ids = _seed_parent_ecm_with_next_vibes(engine, seed_business)
 
@@ -366,10 +359,10 @@ class TestSymmetryWithCreate:
             f"create should reject unknown next_vibe_id with 400; got "
             f"{c_resp.status_code}: {c_resp.text}"
         )
-        assert v_resp.status_code == 400, (
-            f"validate should reject unknown next_vibe_id with 400 (mirror "
-            f"of create); got {v_resp.status_code}: {v_resp.text}"
-        )
+        assert v_resp.status_code == 200, v_resp.text
+        assert [b["message"] for b in v_resp.json()["blockers"] if b["field_path"] == "next_vibe_ids"] == [
+            c_resp.json()["detail"]
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -445,10 +438,8 @@ class TestValidateIsSideEffectFree:
             next_vibe_ids=["nv-bogus"],
         )
         resp = client_with_agent.post(f"/api/businesses/{seed_business}/runs/validate", json=body)
-        assert resp.status_code == 400, (
-            f"unknown next_vibe_id should 400; got "
-            f"{resp.status_code}: {resp.text}"
-        )
+        assert resp.status_code == 200, resp.text
+        assert any(b["field_path"] == "next_vibe_ids" for b in resp.json()["blockers"]), resp.text
 
         after = self._count_rows(engine)
         assert after == before, (

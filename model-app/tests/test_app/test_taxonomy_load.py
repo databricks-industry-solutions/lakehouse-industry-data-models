@@ -17,10 +17,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
-from fastapi import FastAPI
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
+from _test_app import make_test_app
 from vibe_modeling.backend.core._config import AppConfig
 from vibe_modeling.backend.core._defaults import _ConfigDependency
 from vibe_modeling.backend.core._roles import UserRole, resolve_user_role
@@ -122,10 +122,7 @@ class Harness:
             s.add(AgentConfig(taxonomy_model_service=SERVICE, taxonomy_llm_max_concurrency=capacity))
             s.commit()
 
-        app = FastAPI()
-        app.include_router(taxonomy_routes.router)
-        app.include_router(config_routes.router)
-        app.include_router(business_routes.router)
+        app = make_test_app(taxonomy_routes.router, config_routes.router, business_routes.router)
 
         @app.get("/api/load-probe/to-thread")
         async def to_thread_probe():

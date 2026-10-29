@@ -170,6 +170,31 @@ describe("WhatYouSubmitted — vibe_instructions_text", () => {
     expect(screen.getByText(/run instructions/i)).toBeInTheDocument();
     expect(screen.getByText(/ISO 27001/i)).toBeInTheDocument();
   });
+
+  it("strips K1 markers from the run instructions and dispatched model_vibes (D16)", () => {
+    const agentText = [
+      "## Domain: meter_to_cash",
+      "- (high) [meter_to_cash.invoice] Add a due date <!-- vi:abc-1 target=meter_to_cash.invoice -->",
+      "<!-- vi:abc-2 target=meter_to_cash -->",
+      "> Priority: medium",
+      "Rich block body",
+    ].join("\n");
+    const { container } = render(
+      <WhatYouSubmitted
+        run={makeRun({ intent: "vibe-iterate", vibe_instructions_text: agentText })}
+        operations={[
+          makeOperation({
+            operation_name: "vibe_iterate",
+            dispatched_widgets: { model_vibes: agentText, run_type: "Dry Run" },
+          }),
+        ]}
+      />,
+    );
+    expect(container.textContent).not.toContain("<!--");
+    expect(container.textContent).not.toContain("vi:abc");
+    expect(screen.getAllByText(/Add a due date/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Rich block body/).length).toBeGreaterThan(0);
+  });
 });
 
 describe("WhatYouSubmitted — volume path", () => {
@@ -235,6 +260,18 @@ describe("WhatYouSubmitted — advanced overrides", () => {
     expect(screen.getByText(/advanced overrides/i)).toBeInTheDocument();
     expect(screen.getByText("Naming convention")).toBeInTheDocument();
     expect(screen.getByText("camelCase")).toBeInTheDocument();
+  });
+
+  it("always shows the run's stored run time budget, even at the Settings default", () => {
+    render(
+      <WhatYouSubmitted
+        run={makeRun({
+          parameters_json: JSON.stringify({ intent: "new-base-model", runtime_budget_hours: 6 }),
+        })}
+      />,
+    );
+    expect(screen.getByText("Run time budget (hours)")).toBeInTheDocument();
+    expect(screen.getByText("6")).toBeInTheDocument();
   });
 
   it("does NOT show advanced overrides section when no override fields are set", () => {
@@ -424,6 +461,8 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    // No base-model pre-fill: the form keeps its own values.
+    useGetRunDefaults: () => ({ data: undefined, isLoading: false, isError: false }),
     cancelRun: vi.fn(),
     cancelRunWithRollback: vi.fn(),
     retryRun: vi.fn(),

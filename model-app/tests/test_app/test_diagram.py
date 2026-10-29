@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "a
 
 import pytest
 
+from _test_app import make_test_app
 from vibe_modeling.backend.diagram import (
     _build_elk_graph,
     _build_product_index,
@@ -634,11 +635,9 @@ class TestPendingHeartbeat:
             lambda *a, **kw: None,
         )
 
-        from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
-        app = FastAPI()
-        app.include_router(diagram_mod.router)
+        app = make_test_app(diagram_mod.router)
 
         # Minimal dependency overrides. The 202 path doesn't actually touch
         # the session or workspace client (both are captured and submitted

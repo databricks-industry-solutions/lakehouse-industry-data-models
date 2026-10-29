@@ -394,6 +394,33 @@ def test_post_runs_returns_400_and_no_run_row(
     assert runs == [], f"expected no Run rows, found {[r.id for r in runs]}"
 
 
+def test_post_runs_long_clash_message_keeps_its_steps(
+    client, engine, biz_id, mock_ws
+):
+    """A clash message past the 500-character cap keeps its "To proceed"
+    steps on the create path (it is an ``AppMessage``)."""
+    from vibe_modeling.backend.error_sanitization import MAX_ERROR_LENGTH
+
+    _seed_agent_config(engine)
+    names = [f"ecm_{c * 120}" for c in "abcdef"]
+    _stub_schemas(mock_ws, names)
+    body = {
+        "intent": "new-base-model",
+        "catalog": "vibe_modeling_test",
+        "cataloging_style": "One Catalog",
+        "ecm_schema_prefix": "ecm_",
+        "mvm_schema_prefix": "mvm_",
+    }
+    resp = client.post(f"/api/businesses/{biz_id}/runs", json=body)
+    assert resp.status_code == 400, resp.text
+    detail = resp.json()["detail"]
+    assert len(detail) > MAX_ERROR_LENGTH
+    assert "To proceed, either:" in detail
+    assert detail.endswith("  - target a different deployment catalog.")
+    with Session(engine) as s:
+        assert s.exec(select(Run).where(Run.business_id == biz_id)).all() == []
+
+
 def test_post_validate_does_not_create_run_row(
     client, engine, biz_id, mock_ws
 ):
@@ -462,13 +489,14 @@ def test_vibe_iterate_intent_is_gated(client, engine, biz_id, mock_ws):
     # metamodel record on this business), so it must trip the gate.
     _stub_schemas(mock_ws, ["ecm_foreign_biz"])
 
+    # vibe-iterate carries the single legacy ``schema_prefix``
+    # (``_resolve_clash_check_prefixes``); the per-scope prefixes are not read.
     body = {
         "intent": "vibe-iterate",
         "version_id": parent_id,
         "catalog": "vibe_modeling_test",
         "cataloging_style": "One Catalog",
-        "ecm_schema_prefix": "ecm_",
-        "mvm_schema_prefix": "mvm_",
+        "schema_prefix": "ecm_",
         "vibe_instructions": "tweak something",
     }
     resp = client.post(f"/api/businesses/{biz_id}/runs/validate", json=body)
@@ -599,3 +627,32 @@ def test_listing_failure_does_not_block(client, engine, biz_id, mock_ws):
     assert resp.status_code == 200, resp.text
     blockers = resp.json().get("blockers", [])
     assert not _has_clash_blocker(blockers), blockers
+
+
+def test_vibe_iterate_legacy_prefix_matches_the_install_by_any_form_of_the_scope(
+    engine, biz_id, mock_ws
+):
+    """A legacy ``schema_prefix`` run carrying the widget label of the scope
+    finds the ECM install that owns the prefixed schema (``normalize_scope``)
+    and raises no clash. No completed Run row is seeded, so the Domain match
+    is the only ownership signal."""
+    from vibe_modeling.backend.services.orchestrator import preflight
+    from vibe_modeling.backend.db_models import Domain
+    from vibe_modeling.backend.models import RunIn
+
+    _seed_agent_config(engine)
+    mv_id = _seed_completed_ecm_version(engine, business_id=biz_id, version=1)
+    with Session(engine) as s:
+        s.add(Domain(version_id=mv_id, name="Customer", database_name="ecm_customer"))
+        s.commit()
+    _stub_schemas(mock_ws, ["ecm_customer"])
+    body = RunIn(
+        intent="vibe-iterate", version_id=mv_id, catalog="vibe_modeling_test",
+        schema_prefix="ecm_", scope="Expanded Coverage Model - ECM",
+    )
+
+    with Session(engine) as s:
+        agent_config = s.exec(select(AgentConfig)).first()
+        issues = preflight._check_target_catalog_clash(biz_id, body, agent_config, s, mock_ws)
+
+    assert [i.message for i in issues] == []

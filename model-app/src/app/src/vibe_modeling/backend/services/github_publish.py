@@ -4,9 +4,11 @@ The publish flow is the write-side sibling of the read-only bundle export
 (``model_export.build_bundle_zip_bytes``): it reconstructs the version's
 ``model.json`` + companion artifacts via the SAME single-source iterator
 (:func:`model_export.iter_bundle_files`) so the published tree and the
-downloadable zip can never diverge, then pushes every file to a fresh branch
-on the configured GitHub repo through the Unity Catalog HTTP connection and
-opens one PR.
+downloadable zip can never diverge on layout, then pushes every file to a
+fresh branch on the configured GitHub repo through the Unity Catalog HTTP
+connection and opens one PR. The published files lose the schema and view
+prefixes a 0.9.0 import added (:class:`PublishStrip`); the zip keeps the
+app's names.
 
 Auth is OAuth U2M only for now: the request is shaped through the user's
 own WorkspaceClient (OBO) against a UC HTTP connection
@@ -24,15 +26,19 @@ never touches the app. The two share only the default-repo constants.
 from __future__ import annotations
 
 import base64
+import copy
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Any, Iterable, Optional
 
 from databricks.sdk.service.serving import ExternalFunctionRequestHttpMethod
 from fastapi import HTTPException
 from sqlmodel import Session, select
 
-from ..db_models import AgentConfig, Business, ModelVersion, Run, RunArtifact
+from .._artifact_io import artifact_path_suffix, read_artifact_bytes
+from ..db_models import AgentConfig, Business, Domain, ModelVersion, Run, RunArtifact
 from ..model_export import (
     bundle_layout,
     export_model_json,
@@ -40,6 +46,16 @@ from ..model_export import (
     resolve_bundle_root,
 )
 from ..sources.github import DEFAULT_REPO_NAME, DEFAULT_REPO_OWNER
+from .operations._install_conventions import REQUIRED_READ_TIMEOUT_S, read_volume_bytes
+from .scope_prefix import (
+    metric_view_names,
+    schema_strip_map,
+    strip_import_prefix,
+    strip_import_prefix_sql,
+)
+from .version_files import read_conventions, version_model_json_candidates
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -82,6 +98,176 @@ def _http_json(resp) -> dict:
         return {}
 
 
+# --- The prefixes an import added (stripped on publish) --------------------
+
+
+def _unreadable(mv: ModelVersion, path: str) -> HTTPException:
+    """The refusal when a file the strip needs cannot be read: nothing is
+    published, so the repository never gets the app's prefixed names."""
+    label = f"v{mv.version} {(mv.scope or '').upper()}".strip()
+    return HTTPException(
+        status_code=502,
+        detail={
+            "message": (
+                f"Could not read the model file of {label} to remove the prefixes "
+                "the app added at import. Nothing was published; try again."
+            ),
+            "path": path,
+        },
+    )
+
+
+@dataclass(frozen=True)
+class PublishStrip:
+    """What a publish removes: the schema and view prefixes a 0.9.0 import
+    added (``services/scope_prefix``), so the industry repository gets the
+    names it had. ``schema_map`` is ``prefixed -> original`` (lower-case
+    keys); ``view_names`` are the version's metric view names, which a
+    stripped view name must not take; ``model_files`` holds each
+    ``model_json`` artifact read once, by Volume path: its bytes and the
+    parsed model dict (``None`` when the file is not a JSON object). Nothing
+    to strip: both prefixes empty."""
+
+    schema_prefix: str = ""
+    view_prefix: str = ""
+    schema_map: dict[str, str] = field(default_factory=dict)
+    view_names: tuple[str, ...] = ()
+    model_files: dict[str, tuple[bytes, Any]] = field(default_factory=dict, compare=False)
+
+    @property
+    def active(self) -> bool:
+        return bool(self.schema_map or self.view_prefix)
+
+    def model_json(self, root: Any, view_names: Iterable[str] = ()) -> Any:
+        """Strip ``root`` (a model.json, changed in place); returns it.
+        ``view_names`` adds names in use to :attr:`view_names`."""
+        if not self.active:
+            return root
+        return strip_import_prefix(
+            root,
+            self.schema_prefix if self.schema_map else "",
+            self.view_prefix,
+            self.schema_map,
+            (*self.view_names, *view_names),
+        )
+
+    def read(self, ws: Any, artifact: RunArtifact) -> bytes:
+        """The bytes to publish for ``artifact``: a ``model_json`` artifact
+        (from :attr:`model_files`) and a ``.sql`` file stripped, anything
+        else as read. A file the strip does not change, or that is not a JSON
+        object, keeps its bytes. A stripped model.json is written with
+        ``indent=2``, non-ASCII characters kept as such when the file had
+        any."""
+        cached = self.model_files.get(artifact.file_path)
+        if cached is not None:
+            data, root = cached
+            if self.active and isinstance(root, dict):
+                stripped = self.model_json(copy.deepcopy(root), metric_view_names(root))
+                if stripped != root:
+                    return json.dumps(stripped, indent=2, ensure_ascii=data.isascii()).encode("utf-8")
+            return data
+        data = read_artifact_bytes(ws, artifact.file_path)
+        if self.active and artifact_path_suffix(artifact.file_path) == ".sql":
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                logger.warning("publish: %s is not UTF-8; published as is", artifact.file_path)
+                return data
+            out = strip_import_prefix_sql(text, self.schema_map, self.view_prefix, self.view_names)
+            return data if out == text else out.encode("utf-8")
+        return data
+
+
+def _json_object(data: bytes, path: str) -> Optional[dict]:
+    """``data`` parsed when it is a JSON object, else ``None`` (the file is
+    published as read)."""
+    try:
+        root = json.loads(data)
+    except ValueError:
+        logger.warning("publish: %s is not JSON; published as is", path)
+        return None
+    return root if isinstance(root, dict) else None
+
+
+def publish_markers(session: Session, mv: ModelVersion) -> tuple[str, str, bool]:
+    """``(schema marker, view marker, inherited)`` for publishing ``mv``.
+
+    A version a 0.9.0 import brought in records its markers (``""`` when it
+    added nothing, agent output included). A version with none (NULL: an
+    agent run, an older row) takes those of its nearest ancestor along
+    ``base_version_id`` in the same business AND the same scope: a vibe of an
+    imported ECM keeps the ECM's names, while an MVM shrunk from an ECM does
+    not take the ECM's markers (its views carry ``ecm_`` names next to the
+    MVM's own). No such ancestor: nothing to strip.
+    """
+    scope = (mv.scope or "").lower()
+    seen: set[str] = set()
+    current: ModelVersion | None = mv
+    while current is not None and current.id not in seen:
+        seen.add(current.id)
+        if current.import_schema_prefix_added is not None or current.import_view_prefix_added is not None:
+            return (
+                current.import_schema_prefix_added or "",
+                current.import_view_prefix_added or "",
+                current is not mv,
+            )
+        parent = session.get(ModelVersion, current.base_version_id) if current.base_version_id else None
+        if parent is None or parent.business_id != mv.business_id or (parent.scope or "").lower() != scope:
+            break
+        current = parent
+    return "", "", False
+
+
+def build_publish_strip(
+    session: Session,
+    ws: Any,
+    mv: ModelVersion,
+    business_name: str,
+    artifacts: Iterable[RunArtifact],
+) -> PublishStrip:
+    """The :class:`PublishStrip` for ``mv`` (:func:`publish_markers`).
+
+    An inherited schema marker applies only when ``mv``'s own model.json still
+    uses it as its ``schema_prefix`` (a vibe may have changed it); a version's
+    own marker is the prefix its import wrote into that file. The schema map
+    comes from ``mv``'s ``Domain.database_name`` rows; a strip that would give
+    two schemas one name is skipped (:func:`scope_prefix.schema_strip_map`).
+    With a marker, every ``model_json`` artifact is read here, once, for the
+    strip and for the version's view names, so a stripped view never takes
+    the name of another. One that reads but is not a JSON object is
+    published as read.
+
+    Each read gets ``REQUIRED_READ_TIMEOUT_S``. A read that fails or times out
+    raises a 502 (:func:`_unreadable`): publishing the file unstripped would
+    put the app's names in the repository. The caller builds this before it
+    writes anything to GitHub.
+    """
+    schema_marker, view_marker, inherited = publish_markers(session, mv)
+    if not (schema_marker or view_marker):
+        return PublishStrip()
+    budget = REQUIRED_READ_TIMEOUT_S
+    if schema_marker and inherited:
+        paths = version_model_json_candidates(session, mv, business_name)
+        found = read_conventions(ws, paths, timeout_s=budget)
+        if found.path is None:
+            raise _unreadable(mv, paths[0] if paths else "")
+        if str((found.conventions or {}).get("schema_prefix") or "") != schema_marker:
+            schema_marker = ""
+    schema_map: dict[str, str] = {}
+    if schema_marker:
+        names = session.exec(select(Domain.database_name).where(Domain.version_id == mv.id)).all()
+        schema_map = schema_strip_map(names, schema_marker)
+    model_files: dict[str, tuple[bytes, Any]] = {}
+    for a in artifacts:
+        if a.artifact_type == "model_json" and a.file_path and a.file_path not in model_files:
+            data = read_volume_bytes(ws, a.file_path, timeout_s=budget)
+            if data is None:
+                raise _unreadable(mv, a.file_path)
+            model_files[a.file_path] = (data, _json_object(data, a.file_path))
+    view_names = tuple(n for _data, root in model_files.values() for n in metric_view_names(root))
+    return PublishStrip(schema_marker, view_marker, schema_map, view_names, model_files)
+
+
 def publish_model_version(
     user_ws,
     cfg: AgentConfig,
@@ -103,9 +289,10 @@ def publish_model_version(
       github_pat_not_implemented)``; the PAT publish path is deferred.
 
     On the happy path it reconstructs ``model.json`` + artifacts via
-    :func:`iter_bundle_files`, PUTs each file to a new branch via the GitHub
-    Contents API (routed through the UC connection), opens one PR, and records
-    an audit :class:`Run`.
+    :func:`iter_bundle_files`, with the prefixes an import added stripped
+    (:func:`build_publish_strip`), PUTs each file to a new branch via the
+    GitHub Contents API (routed through the UC connection), opens one PR, and
+    records an audit :class:`Run`.
     """
     if cfg.github_auth_mode == "secret_pat":
         raise HTTPException(
@@ -143,7 +330,6 @@ def publish_model_version(
         version=mv.version,
     )
 
-    model_json = export_model_json(session, version_id)
     layout = bundle_layout(
         mv.scope or "", mv.scope or "", mv.version, dir_override=root
     )
@@ -152,6 +338,10 @@ def publish_model_version(
         .where(RunArtifact.model_version_id == version_id)
         .order_by(RunArtifact.created_at.desc())
     ).all()
+    strip = build_publish_strip(
+        session, user_ws, mv, business.name if business else "", artifacts
+    )
+    model_json = strip.model_json(export_model_json(session, version_id))
 
     base_branch = _default_branch(user_ws, connection_name, owner, repo)
     base_sha = _branch_head_sha(
@@ -165,7 +355,8 @@ def publish_model_version(
 
     published: list[str] = []
     for bundle_path, data in iter_bundle_files(
-        user_ws, layout, model_json, artifacts
+        user_ws, layout, model_json, artifacts,
+        read_artifact=lambda a: strip.read(user_ws, a),
     ):
         _put_file(
             user_ws,

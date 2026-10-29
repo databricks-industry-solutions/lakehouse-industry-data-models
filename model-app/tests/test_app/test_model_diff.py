@@ -115,3 +115,10 @@ def test_returns_full_diff_shape():
         "deleted_products",
         "deleted_attributes",
     }
+
+
+def test_case_only_type_change_is_modified_unless_case_insensitive():
+    old = {"domains": [{"name": "d", "products": [{"name": "p", "attributes": [{"name": "a", "type": "string"}]}]}]}
+    new = {"domains": [{"name": "d", "products": [{"name": "p", "attributes": [{"name": "a", "type": "STRING"}]}]}]}
+    assert compute_model_diff(old, new)["attributes"] == {("d", "p", "a"): ChangeStatus.MODIFIED}
+    assert compute_model_diff(old, new, type_case_sensitive=False)["attributes"] == {}

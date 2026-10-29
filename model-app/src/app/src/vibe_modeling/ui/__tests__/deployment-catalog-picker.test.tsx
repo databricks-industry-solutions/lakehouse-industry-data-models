@@ -8,6 +8,14 @@ import {
   type CatalogOption,
 } from "@/components/runs/deployment-catalog-picker";
 
+// These tests cover the listing and filtering; the access checks are in
+// deployment-catalog-picker-capabilities.test.tsx. A check that never answers
+// keeps every option unmarked here.
+vi.mock("@/lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/api")>()),
+  getCatalogCapabilities: vi.fn(() => new Promise(() => {})),
+}));
+
 /**
  * Tests for the Deployment Catalog picker (#111).
  *

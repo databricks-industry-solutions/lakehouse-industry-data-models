@@ -5,6 +5,7 @@
  * Business-write surface (new, edit, inline-edit dialog, import dialog).
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense } from "react";
@@ -100,6 +101,8 @@ function getSubmit(): HTMLButtonElement {
 function getDescriptionTextarea(): HTMLTextAreaElement {
   return screen.getByTestId("business-description") as HTMLTextAreaElement;
 }
+
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.edit"));
 
 describe("v0.4.0 #6 — Edit Business: description required", () => {
   it("submit disabled when description is cleared; helper text visible", async () => {

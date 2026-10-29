@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, screen } from "@testing-library/react";
 
 import { LaunchRunDialog } from "@/components/runs/launch-run-dialog";
+import { renderWithRouter } from "./helpers/router-wrapper";
 
-function setup(overrides: Partial<React.ComponentProps<typeof LaunchRunDialog>> = {}) {
+async function setup(overrides: Partial<React.ComponentProps<typeof LaunchRunDialog>> = {}) {
   const onConfirm = vi.fn();
   const onCancel = vi.fn();
-  const utils = render(
+  const utils = renderWithRouter(
     <LaunchRunDialog
       open
       operationType="install model"
@@ -17,12 +18,13 @@ function setup(overrides: Partial<React.ComponentProps<typeof LaunchRunDialog>> 
       {...overrides}
     />,
   );
+  await screen.findByRole("alertdialog");
   return { ...utils, onConfirm, onCancel };
 }
 
 describe("LaunchRunDialog", () => {
-  it("renders metadata for the given operation", () => {
-    setup();
+  it("renders metadata for the given operation", async () => {
+    await setup();
     // Title
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
     expect(screen.getByText("Launch run?")).toBeInTheDocument();
@@ -42,8 +44,8 @@ describe("LaunchRunDialog", () => {
     ).toBeInTheDocument();
   });
 
-  it("invokes onConfirm when Launch is clicked", () => {
-    const { onConfirm, onCancel } = setup();
+  it("invokes onConfirm when Launch is clicked", async () => {
+    const { onConfirm, onCancel } = await setup();
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: /^Launch$/ }));
     });
@@ -51,8 +53,8 @@ describe("LaunchRunDialog", () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
-  it("invokes onCancel when Cancel is clicked", () => {
-    const { onConfirm, onCancel } = setup();
+  it("invokes onCancel when Cancel is clicked", async () => {
+    const { onConfirm, onCancel } = await setup();
     act(() => {
       fireEvent.click(screen.getByRole("button", { name: /^Cancel$/ }));
     });
@@ -60,8 +62,8 @@ describe("LaunchRunDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
-  it("invokes onCancel when Escape is pressed", () => {
-    const { onConfirm, onCancel } = setup();
+  it("invokes onCancel when Escape is pressed", async () => {
+    const { onConfirm, onCancel } = await setup();
     act(() => {
       fireEvent.keyDown(document.activeElement ?? document.body, {
         key: "Escape",
@@ -72,11 +74,59 @@ describe("LaunchRunDialog", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
-  it("disables both buttons and swaps the Launch label while submitting", () => {
-    setup({ submitting: true });
+  it("disables both buttons and swaps the Launch label while submitting", async () => {
+    await setup({ submitting: true });
     const launch = screen.getByRole("button", { name: /Starting/ });
     expect(launch).toBeDisabled();
     expect(screen.getByRole("button", { name: /^Cancel$/ })).toBeDisabled();
   });
 
+  it("omits the Scope and Run type rows when not given", async () => {
+    await setup();
+    expect(screen.queryByText("Scope")).not.toBeInTheDocument();
+    expect(screen.queryByText("Run type")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("full-run-warning")).not.toBeInTheDocument();
+  });
+
+  it("shows the Scope and Run type rows for a scoped Dry Run, with no Full Run warning", async () => {
+    await setup({
+      operationType: "vibe modeling of version",
+      scopeLabel: "Some domains: meter_to_cash",
+      agentRunMode: "dry",
+      catalog: "utility_cat",
+    });
+    expect(screen.getByText("Scope")).toBeInTheDocument();
+    expect(screen.getByText("Some domains: meter_to_cash")).toBeInTheDocument();
+    expect(screen.getByText("Run type")).toBeInTheDocument();
+    expect(screen.getByText("Dry Run")).toBeInTheDocument();
+    expect(screen.queryByTestId("full-run-warning")).not.toBeInTheDocument();
+  });
+
+  it("shows one Full Run warning line naming the catalog", async () => {
+    await setup({
+      operationType: "vibe modeling of version",
+      scopeLabel: "All domains",
+      agentRunMode: "full",
+      catalog: "utility_cat",
+    });
+    expect(screen.getByText("Full Run")).toBeInTheDocument();
+    const warnings = screen.getAllByTestId("full-run-warning");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toHaveTextContent(/Deploys to utility_cat\./);
+    expect(warnings[0]).toHaveTextContent(/drops and rebuilds every schema this business owns/);
+  });
+
+  it("links to the help page of the operation", async () => {
+    await setup({ operationType: "vibe new ecm + mvm" });
+    expect(screen.getByText("Vibe ECM + MVM")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "What this run does" })).toHaveAttribute(
+      "href",
+      "/help/run-vibe-ecm-mvm",
+    );
+  });
+
+  it("keeps the text help link at its own size (no icon-only padding)", async () => {
+    await setup();
+    expect(screen.getByRole("link", { name: "What this run does" })).not.toHaveClass("p-[5px]");
+  });
 });

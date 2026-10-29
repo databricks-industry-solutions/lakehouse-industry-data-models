@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -123,6 +124,5 @@ def test_setup_creates_when_get_says_the_job_is_gone():
 
 def test_read_versions_has_pins():
     v = read_versions()
-    assert v["skills_ref"].startswith(("4c709f7", "dev:"))
+    assert re.fullmatch(r"[0-9a-f]{40}", v["skills_ref"]) and v["skills_version"] == "0.5.0"
     assert "genie_version" not in v
-    assert v["release_skills_ref"].startswith("4c709f7")

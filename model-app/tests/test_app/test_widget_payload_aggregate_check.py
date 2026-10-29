@@ -20,6 +20,7 @@ from sqlmodel import Session
 
 from vibe_modeling.backend.db_models import ModelVersion, Run
 from vibe_modeling.backend.job_launcher import (
+    plan_widget_payload,
     VIBE_INSTRUCTIONS_INLINE_LIMIT,
     WIDGET_PAYLOAD_LIMIT_BYTES,
     WidgetPayloadTooLargeError,
@@ -110,6 +111,8 @@ def test_long_vibes_per_value_forces_offload_even_when_aggregate_fits():
     # The widget value was rewritten to the Volume path, not the inline text.
     assert out["model_vibes"].startswith("/Volumes/")
     assert long_vibes not in out["model_vibes"]
+    # The widget is the path the upload wrote to.
+    assert out["model_vibes"] == ws.files.upload.call_args.args[0]
 
 
 # ---------------------------------------------------------------------------
@@ -182,11 +185,12 @@ def test_short_vibes_aggregate_overflow_offload_rescues():
 
 
 # ---------------------------------------------------------------------------
-# 5. Long vibes + huge other fields → offload (per-value) then still raise.
+# 5. Long vibes + huge other fields: still too large after the offload, so
+#    it raises before writing the vibe file.
 # ---------------------------------------------------------------------------
 
 
-def test_long_vibes_aggregate_still_too_large_offload_then_raise():
+def test_long_vibes_aggregate_still_too_large_raises_before_writing():
     ws = _make_ws_with_upload()
     long_vibes = "v" * 5000  # over per-value limit
     huge_filler = WIDGET_PAYLOAD_LIMIT_BYTES + 4000
@@ -202,8 +206,13 @@ def test_long_vibes_aggregate_still_too_large_offload_then_raise():
             raw_vibes=long_vibes,
         )
 
-    # Per-value rule fires regardless of the aggregate outcome.
-    assert ws.files.upload.call_count == 1
+    # The planned map (with the Volume path) is measured first: a refused
+    # payload writes no file.
+    ws.files.upload.assert_not_called()
+    with pytest.raises(WidgetPayloadTooLargeError):
+        plan_widget_payload(
+            widgets, catalog="cat", business_name="biz", session_id="sid-5", raw_vibes=long_vibes,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +348,7 @@ def test_dispatch_generation_op_offloads_long_vibes():
             "model_vibes": long_vibes,
             "cataloging_style": "One Catalog",
         },
+        inherited_params={"runtime_budget_hours": 6},
     )
     ws = _make_ws_with_upload()
     session = MagicMock()
@@ -404,6 +414,7 @@ def test_dispatch_generation_op_raises_on_aggregate_overflow():
             "model_vibes": short_vibes,
             "cataloging_style": "One Catalog",
         },
+        inherited_params={"runtime_budget_hours": 6},
     )
     ws = _make_ws_with_upload()
     session = MagicMock()

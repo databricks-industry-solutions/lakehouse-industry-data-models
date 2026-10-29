@@ -35,11 +35,11 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
+from _test_app import make_test_app
 from vibe_modeling.backend.core._config import AppConfig
 from vibe_modeling.backend.core._defaults import (
     _ConfigDependency,
@@ -117,8 +117,7 @@ def client(engine, mock_ws, config, tracker):
     """TestClient where the real ProgressTracker is wired in so the progress
     endpoint can ask it for the current watchdog signals. Tests that need a
     pure mock tracker can still use the conftest-level `client` fixture."""
-    app = FastAPI()
-    app.include_router(router)
+    app = make_test_app(router)
 
     def override_session():
         with Session(engine) as s:
@@ -474,8 +473,8 @@ class TestLastPollError:
         self, tracker, engine, seed_business
     ):
         """When ``_poll_session_status_by_id`` raises an SDK-style error
-        the tracker must persist ``repr(e)`` to ``Run.last_poll_error``
-        so the UI can render it."""
+        the tracker persists a sanitized sentence naming it to
+        ``Run.last_poll_error`` so the UI can render it."""
         run_id = self._seed_orch_run(engine, seed_business)
         boom = RuntimeError("transient SDK timeout")
         with patch.object(
@@ -489,10 +488,9 @@ class TestLastPollError:
 
         with Session(engine) as s:
             run = s.get(Run, run_id)
-            assert repr(boom) in run.last_poll_error, (
-                f"last_poll_error must carry repr(exception); got "
-                f"{run.last_poll_error!r}"
-            )
+            assert run.last_poll_error == (
+                "Could not read the agent's progress: transient SDK timeout"
+            ), run.last_poll_error
 
     def test_successful_poll_clears_last_poll_error(
         self, tracker, engine, seed_business

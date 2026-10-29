@@ -12,9 +12,12 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
+from ._fake_volume import FakeVolume
+
 import pytest
 from sqlmodel import select
 
+from vibe_modeling.backend.core._paths import version_dir_in_volume
 from vibe_modeling.backend.db_models import (
     Attribute,
     Domain,
@@ -187,6 +190,8 @@ class TestImportFullFixture:
             assert mv is not None
             assert mv.import_source_path == volume_path
             assert mv.imported_at is not None
+            # The import copies its files into the metamodel catalog.
+            assert mv.files_catalog == "test_metamodel_catalog"
             # Version provenance stamped from the envelope (businesses.py path).
             assert mv.agent_version == "4.9.8"
             assert mv.release_version == "0.8.0"
@@ -205,63 +210,17 @@ class TestImportFullFixture:
     ):
         """Import indexes every file under the model.json's parent folder
         as a RunArtifact row, including vibes/next_vibes.json."""
-        # Reset stale call-counts from earlier fixture configs.
-        mock_ws.files.download.reset_mock()
-        mock_ws.files.list_directory_contents.reset_mock()
-
-        volume_path = "/Volumes/test_cat/_metamodel/vol_root/imports/mining/ecm_v1/model.json"
-        root = "/Volumes/test_cat/_metamodel/vol_root/imports/mining/ecm_v1"
+        volume_path = "/Volumes/test_cat/landing/imports/mining/ecm_v1/model.json"
+        source = "/Volumes/test_cat/landing/imports/mining/ecm_v1"
         next_vibes_payload = {"must_do": ["pick coal product"], "optional": []}
-
-        # Mock list_directory_contents to walk a synthetic layout.
-        def _entry(name, is_dir=False):
-            e = MagicMock()
-            e.name = name
-            e.is_directory = is_dir
-            return e
-
-        def list_dir(path):
-            if path == root:
-                return [
-                    _entry("model.json"),
-                    _entry("readme.md"),
-                    _entry("diagram", is_dir=True),
-                    _entry("docs", is_dir=True),
-                    _entry("ontology", is_dir=True),
-                    _entry("schemas", is_dir=True),
-                    _entry("metrics", is_dir=True),
-                    _entry("vibes", is_dir=True),
-                ]
-            if path == f"{root}/diagram":
-                return [_entry("erd.dbml")]
-            if path == f"{root}/docs":
-                return [_entry("model.xlsx"), _entry("summary.md")]
-            if path == f"{root}/ontology":
-                return [_entry("model.ttl")]
-            if path == f"{root}/schemas":
-                return [_entry("ddl.sql")]
-            if path == f"{root}/metrics":
-                return [_entry("kpis.sql")]
-            if path == f"{root}/vibes":
-                return [_entry("next_vibes.json"), _entry("plan.md")]
-            return []
-
-        mock_ws.files.list_directory_contents.side_effect = list_dir
-
-        # The download mock must return the model.json for the model path
-        # and next_vibes payload for the next_vibes path. Use a side_effect.
-        model_bytes = json.dumps(_load_fixture()).encode("utf-8")
-        nv_bytes = json.dumps(next_vibes_payload).encode("utf-8")
-
-        def download(path):
-            resp = MagicMock()
-            if path.endswith("next_vibes.json"):
-                resp.contents.read.return_value = nv_bytes
-            else:
-                resp.contents.read.return_value = model_bytes
-            return resp
-
-        mock_ws.files.download.side_effect = download
+        volume = FakeVolume(mock_ws)
+        volume.put(volume_path, _load_fixture())
+        for rel in ("readme.md", "diagram/erd.dbml", "docs/model.xlsx", "docs/summary.md",
+                    "ontology/model.ttl", "schemas/ddl.sql", "metrics/kpis.sql", "vibes/plan.md"):
+            volume.put(f"{source}/{rel}", f"{rel} body")
+        volume.put(f"{source}/vibes/next_vibes.json", next_vibes_payload)
+        user_files = dict(volume.under(source))
+        root = version_dir_in_volume("test_metamodel_catalog", "Test Corp", 1, "mvm")
 
         r = client_with_agent.post(
             f"/api/businesses/{seed_business}/import/execute",
@@ -314,6 +273,12 @@ class TestImportFullFixture:
                 )
             ).all()
             assert agent_inputs == []
+
+        # The user's folder is untouched; the app's copy is stamped and prefixed.
+        assert volume.under(source) == user_files
+        copied = volume.json(f"{root}/model.json")["model"]
+        assert copied["version"] == "v1_mvm"
+        assert all(d["database_name"].startswith("mvm_") for d in copied["domains"])
 
     def test_two_imports_increment_version(
         self, client_with_agent, mock_ws, seed_business

@@ -17,8 +17,8 @@ from fastapi import HTTPException
 
 from vibe_modeling.backend.core._defaults import SUPPORTED_AGENT_VERSION
 from vibe_modeling.backend.routes._helpers import (
+    _check_notebook_release,
     _detect_notebook_identity,
-    _preflight_notebook_version,
     parse_release_version_from_notebook,
     parse_version_from_notebook,
 )
@@ -92,26 +92,26 @@ def test_identity_falls_back_to_marker_when_no_release():
 
 def test_preflight_passes_on_matching_release():
     ws = _FakeWs(_nb(release=_PINNED, marker="4.9.9"))
-    assert _preflight_notebook_version(ws, "/nb") is None
+    assert _check_notebook_release(_detect_notebook_identity(ws, "/nb")[0]) is None
 
 
 def test_preflight_tolerates_agent_marker_patch_drift():
     # Same release, agent build moved 4.9.9 -> 4.9.10: must still pass.
     ws = _FakeWs(_nb(release=_PINNED, marker="4.9.10"))
-    assert _preflight_notebook_version(ws, "/nb") is None
+    assert _check_notebook_release(_detect_notebook_identity(ws, "/nb")[0]) is None
 
 
 def test_preflight_fails_on_release_mismatch():
     ws = _FakeWs(_nb(release="0.7.7", marker="4.9.9"))
     with pytest.raises(HTTPException) as exc:
-        _preflight_notebook_version(ws, "/nb")
+        _check_notebook_release(_detect_notebook_identity(ws, "/nb")[0])
     assert exc.value.status_code == 400
     assert "release" in str(exc.value.detail).lower()
 
 
 def test_preflight_no_marker_is_advisory_only():
     ws = _FakeWs("print('no markers here')")
-    assert _preflight_notebook_version(ws, "/nb") is None
+    assert _check_notebook_release(_detect_notebook_identity(ws, "/nb")[0]) is None
 
 
 # --- live check endpoint ----------------------------------------------------

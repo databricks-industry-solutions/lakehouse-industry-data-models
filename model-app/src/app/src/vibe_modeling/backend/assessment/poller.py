@@ -14,7 +14,7 @@ from sqlalchemy import CursorResult, update
 from sqlmodel import Session, col, or_, select
 
 from ..db_models import AssessDomainRun
-from ..error_sanitization import sanitize_error_message
+from ..error_sanitization import recorded_error_text, sanitize_error_message
 from .constants import INGEST_MAX_ATTEMPTS, INGEST_RETRY_WAITS, POLL_INTERVAL_S, TERMINAL_STATUSES
 from .ingest import ingest_domain_run, read_volume_json
 from .status import map_status
@@ -120,7 +120,8 @@ class AssessPoller:
             return
         seen = dr.ingest_attempts or 0
         attempts = seen + 1
-        err = sanitize_error_message(f"{type(error).__name__}: {error}")
+        err = recorded_error_text(
+            error, f"Ingest of domain run {dr_id}", sanitize_error_message(f"{type(error).__name__}: {error}"))
         if attempts >= INGEST_MAX_ATTEMPTS:
             values = dict(status="results_invalid", results_valid=False, ingest_next_at=None, ended_at=now,
                           error_message=f"Ingest failed {attempts} times: {err}"[:2000])

@@ -1,13 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Suspense, useState } from "react";
-import { toast } from "sonner";
 import {
   useListBusinessesSuspense,
   useDeleteBusiness,
   useListSectorsSuspense,
   BusinessKind,
 } from "@/lib/api";
-import { notifyError } from "@/lib/notify";
+import { APP_FOLDERS_DELETE_NOTE, notifyBusinessDeleted, notifyDeleteFailed } from "@/lib/delete-outcome";
 import { invalidateEntityLists } from "@/lib/delete-invalidation";
 import { selector } from "@/lib/selector";
 import { formatDate } from "@/lib/date";
@@ -106,17 +105,20 @@ export function IndustryTable() {
     },
   });
 
-  const runDelete = async (id: string, cascade: boolean) => {
+  // Always cascade, like the Explorer: the backend refuses a bare delete of a
+  // row that has runs but no versions, and a confirmed delete removes them all.
+  const runDelete = async (id: string, name: string) => {
+    let res;
     try {
-      await deleteBiz({
-        params: cascade ? { business_id: id, cascade: true } : { business_id: id },
-      });
+      res = await deleteBiz({ params: { business_id: id, cascade: true } });
     } catch (err) {
-      notifyError(err, { title: "Delete failed" });
+      if (notifyDeleteFailed(err, { title: "Delete failed" })) {
+        await invalidateEntityLists(queryClient, "business");
+      }
       return;
     }
     await invalidateEntityLists(queryClient, "business");
-    toast.success("Industry deleted");
+    notifyBusinessDeleted(res.data, BusinessKind.industry, name);
   };
 
   if (industries.length === 0) {
@@ -204,7 +206,7 @@ function DeleteIndustryButton({
   id: string;
   name: string;
   modelCount: number;
-  runDelete: (id: string, cascade: boolean) => Promise<void>;
+  runDelete: (id: string, name: string) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
   const hasModels = modelCount > 0;
@@ -236,20 +238,21 @@ function DeleteIndustryButton({
                       {modelCount} {versionWord}
                     </strong>
                     , plus all attached runs, feedback, artifacts, and contexts.
-                    This cannot be undone.
+                    This cannot be undone. {APP_FOLDERS_DELETE_NOTE}
                   </span>
                 </div>
               </AlertDialogDescription>
             ) : (
               <AlertDialogDescription>
-                This cannot be undone.
+                Any runs, feedback, artifacts, and contexts attached to it are
+                deleted too. This cannot be undone.
               </AlertDialogDescription>
             )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              onClick={() => runDelete(id, hasModels)}
+              onClick={() => runDelete(id, name)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {hasModels ? "Delete everything" : "Delete"}

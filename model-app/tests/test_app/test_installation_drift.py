@@ -37,6 +37,10 @@ from vibe_modeling.backend.services.operations._protocol import (
     OperationContext,
     OperationDispatchHandle,
 )
+from vibe_modeling.backend.services.operations._version_lifecycle import (
+    installed_catalogs,
+    mark_version_deployed,
+)
 from vibe_modeling.backend.services.operations.uninstall import Uninstall
 
 
@@ -51,17 +55,18 @@ def _seed_business(engine, *, name="drift-biz") -> str:
         return b.id
 
 
+# Older versions stored logical names; the tests that model them keep that shape.
+LEGACY_LOGICAL = ("customer", "inventory")
+
+
 def _seed_version(
     engine, business_id, *, version=1, scope="ecm",
     deployment_status="deployed", catalog="vibe_modeling_test",
-    # Bare, unprefixed logical names - matches the agent's own
-    # `database_name` convention (see modelling_agent's Stage 4 docs,
-    # e.g. `"database_name": "party_db"`). The scope prefix
-    # ("ecm_"/"mvm_") is only ever applied at physical install time for
-    # the default "One Catalog" cataloging style; see
-    # `_scope_short`/`_expected_schema_candidates_for_version` in
-    # routes/versions.py.
-    domains=("customer", "inventory"),
+    # Agent 5.3.3 stores `database_name` with the schema prefix the model
+    # was generated with ("ecm_customer"); older versions stored a logical
+    # name ("customer"), which the tests that pass `domains=` keep. Both go
+    # through `services/schema_names.physical_schema_name`.
+    domains=("ecm_customer", "ecm_inventory"),
 ) -> str:
     with Session(engine) as s:
         mv = ModelVersion(
@@ -158,9 +163,8 @@ def _seed_gen_and_install_ops(
 def test_status_in_sync_when_all_schemas_present(client, engine, mock_ws):
     biz_id = _seed_business(engine)
     mv_id = _seed_version(engine, biz_id)
-    # Physical schemas carry the scope prefix the default "One Catalog"
-    # install applies (`ecm_` here) - the bare `database_name` values
-    # ("customer", "inventory") are the agent's logical names only.
+    # 5.3.3 `database_name` values already carry the `ecm_` prefix, and
+    # the probe expects them as stored (no doubled prefix).
     _stub_schemas(mock_ws, [
         "ecm_customer", "ecm_inventory", "_metamodel", "information_schema"
     ])
@@ -205,7 +209,7 @@ def test_status_in_sync_when_schemas_present_bare_no_prefix(client, engine, mock
     the physical schema equals the domain's bare `database_name`. The
     probe must resolve this form too, not just the scope-prefixed one."""
     biz_id = _seed_business(engine)
-    mv_id = _seed_version(engine, biz_id)
+    mv_id = _seed_version(engine, biz_id, domains=LEGACY_LOGICAL)
     _stub_schemas(mock_ws, ["customer", "inventory", "information_schema"])
 
     resp = client.get(f"/api/model-versions/{mv_id}/installation-status")
@@ -340,7 +344,7 @@ def test_status_honors_dispatched_non_default_prefix(client, engine, mock_ws):
     """A dispatched ``schema_prefix`` that isn't the scope default is still
     resolved — the probe reads the actual prefix the agent was handed."""
     biz_id = _seed_business(engine)
-    mv_id = _seed_version(engine, biz_id)
+    mv_id = _seed_version(engine, biz_id, domains=LEGACY_LOGICAL)
     _seed_generation_op(
         engine, biz_id, mv_id,
         dispatched_widgets={"schema_prefix": "wt_", "schema_suffix": ""},
@@ -400,6 +404,120 @@ def test_status_falls_back_to_legacy_when_no_dispatched_widgets(
     body = resp.json()
     assert body["in_sync"] is True
     assert sorted(body["found_schemas"]) == ["ecm_customer", "ecm_inventory"]
+
+
+def test_status_install_prefix_ignores_another_businesss_bare_schemas(
+    client, engine, mock_ws
+):
+    """The install recorded ``ecm_``; its schemas are gone and another
+    business owns the bare names in the shared catalog. Those are not this
+    version's schemas: the version is out of sync."""
+    biz_id = _seed_business(engine)
+    mv_id = _seed_version(engine, biz_id)
+    _seed_gen_and_install_ops(
+        engine, biz_id, mv_id,
+        gen_widgets={"schema_prefix": "", "schema_suffix": ""},
+        install_widgets={"schema_prefix": "ecm_", "deployment_catalog": "vibe_modeling_test"},
+    )
+    _stub_schemas(mock_ws, ["_metamodel", "customer", "inventory"])
+
+    resp = client.get(f"/api/model-versions/{mv_id}/installation-status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["found_schemas"] == []
+    assert sorted(body["missing_schemas"]) == ["ecm_customer", "ecm_inventory"]
+    assert body["in_sync"] is False
+
+
+def test_status_empty_install_prefix_still_probes_bare_names(
+    client, engine, mock_ws
+):
+    """A Catalog-per-* install records an empty prefix: the bare names are
+    the installed schemas."""
+    biz_id = _seed_business(engine)
+    mv_id = _seed_version(engine, biz_id, domains=LEGACY_LOGICAL)
+    _seed_gen_and_install_ops(
+        engine, biz_id, mv_id,
+        gen_widgets={"schema_prefix": "", "schema_suffix": ""},
+        install_widgets={"schema_prefix": "", "deployment_catalog": "vibe_modeling_test"},
+    )
+    _stub_schemas(mock_ws, ["_metamodel", "customer", "inventory", "ecm_customer"])
+
+    resp = client.get(f"/api/model-versions/{mv_id}/installation-status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert sorted(body["found_schemas"]) == ["customer", "inventory"]
+    assert body["in_sync"] is True
+
+
+def _deployed_by_full_run_in_a_then_installed_into_b(engine):
+    """Deployed in ``cat_a`` by a Full Run vibe (no install op; the agent
+    applies ``ecm_``), then installed into ``cat_b`` with an empty prefix."""
+    biz_id = _seed_business(engine)
+    mv_id = _seed_version(engine, biz_id, catalog="cat_a", domains=LEGACY_LOGICAL)
+    with Session(engine) as s:
+        mv = s.get(ModelVersion, mv_id)
+        mark_version_deployed(s, mv, "cat_a")
+        run = Run(business_id=biz_id, intent="vibe-iterate", status="succeeded", parameters_json="{}")
+        s.add(run)
+        s.flush()
+        s.add(RunOperation(
+            run_id=run.id, step_index=0, operation_name="vibe_iterate", params_json="{}",
+            status="succeeded", output_version_id=mv_id,
+            dispatched_widgets_json=json.dumps({"schema_prefix": "", "deployment_catalog": "cat_a"}),
+        ))
+        s.add(RunOperation(
+            run_id=run.id, step_index=1, operation_name="install", params_json="{}",
+            status="succeeded", parent_version_id=mv_id,
+            dispatched_widgets_json=json.dumps({
+                "schema_prefix": "", "cataloging_style": "Catalog per Division",
+                "deployment_catalog": "cat_b",
+            }),
+        ))
+        mark_version_deployed(s, mv, "cat_b")
+        s.commit()
+    return mv_id
+
+
+def _schemas_per_catalog(mock_ws, by_catalog: dict[str, list[str]]) -> None:
+    mock_ws.schemas.list.side_effect = lambda catalog_name, **_kw: iter(
+        [SimpleNamespace(name=n) for n in by_catalog.get(catalog_name, [])]
+    )
+
+
+def test_status_picks_the_install_prefix_per_catalog(client, engine, mock_ws):
+    """The install into ``cat_b`` recorded ``""``; ``cat_a`` has no recorded
+    install, so its ``ecm_`` schemas are still found: no false drift."""
+    mv_id = _deployed_by_full_run_in_a_then_installed_into_b(engine)
+    _schemas_per_catalog(mock_ws, {
+        "cat_a": ["ecm_customer", "ecm_inventory"],
+        "cat_b": ["customer", "inventory"],
+    })
+
+    resp = client.get(f"/api/model-versions/{mv_id}/installation-status")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["deployment_catalog"] == "cat_b"
+    assert body["also_installed_in"] == ["cat_a"]
+    assert sorted(body["found_schemas"]) == ["customer", "inventory"]
+    assert body["missing_schemas"] == []
+    assert body["in_sync"] is True
+
+
+def test_reconcile_keeps_the_other_catalogs_row_when_its_prefix_differs(
+    client_with_agent, engine, mock_ws
+):
+    mv_id = _deployed_by_full_run_in_a_then_installed_into_b(engine)
+    _schemas_per_catalog(mock_ws, {
+        "cat_a": ["ecm_customer", "ecm_inventory"],
+        "cat_b": ["customer", "inventory"],
+    })
+
+    resp = client_with_agent.post(f"/api/model-versions/{mv_id}/reconcile-installation")
+    assert resp.status_code == 200, resp.text
+    assert not any("cat_a" in n for n in resp.json()["notes"]), resp.json()["notes"]
+    with Session(engine) as s:
+        assert sorted(installed_catalogs(s, s.get(ModelVersion, mv_id))) == ["cat_a", "cat_b"]
 
 
 # --- /reconcile-installation ----------------------------------------------

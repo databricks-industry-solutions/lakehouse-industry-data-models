@@ -18,6 +18,8 @@ import pytest
 
 from vibe_modeling.backend.model_sync import load_next_vibes_from_root
 
+from ._fake_volume import FakeVolume
+
 
 # --- Volume layout fixtures ---
 
@@ -310,14 +312,11 @@ class TestExecuteImportPicksUpNextVibesTxt:
             "Model Quality Score: 76/100\n"
             "**PRIORITY 1 — remove_fk: customer.profile** — drop x"
         )
-        _wire_downloads(mock_ws, {
-            "/Volumes/c/s/vol/v1/model.json": model_json,
-            "/Volumes/c/s/vol/v1/vibes/next_vibes.txt": next_vibes_txt,
-        })
-        # Indexer walk — keep it empty so the metamodel side-effect doesn't
-        # try to enumerate the dir. The next-vibes lookup is download-based
-        # so it still hits.
-        _wire_volume(mock_ws, {"/Volumes/c/s/vol/v1": []})
+        # The import copies the folder into the app's folder and reads the
+        # next vibes from the copy.
+        volume = FakeVolume(mock_ws)
+        volume.put("/Volumes/c/s/vol/v1/model.json", model_json)
+        volume.put("/Volumes/c/s/vol/v1/vibes/next_vibes.txt", next_vibes_txt)
 
         r = client_with_agent.post(
             f"/api/businesses/{seed_business}/import/execute",

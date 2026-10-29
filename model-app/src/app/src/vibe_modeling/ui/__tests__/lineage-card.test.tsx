@@ -163,6 +163,29 @@ describe("LineageCard — RunOperation-driven source/generated", () => {
     expect(links).toContain("/businesses/b1/model/2/mvm?tab=overview");
   });
 
+  it("skips the leading uninstall of the source industry's version: Source is the business's own base", async () => {
+    const version = (id: string, business: string, n: number, scope: string) => ({
+      id, business_id: business, version: n, scope, status: "completed", deployment_status: "deployed",
+      uc_catalog: "c", completion_date: null, created_at: "2026-04-20T11:00:00Z", confidence_score: null,
+      context_id: null, base_version_id: null, vibe_instructions: "",
+    });
+    stubLineageEndpoints({
+      operations: [
+        { id: "op-0", run_id: "r1", step_index: 0, operation_name: "uninstall", status: "succeeded",
+          parent_version_id: "ind-v1-ecm", output_version_id: null, created_at: "2026-04-20T12:00:00Z" },
+        { id: "op-1", run_id: "r1", step_index: 1, operation_name: "vibe_iterate", status: "succeeded",
+          parent_version_id: "v1-ecm", output_version_id: "v2-ecm", created_at: "2026-04-20T12:05:00Z" },
+      ],
+      versions: [version("v1-ecm", "b1", 1, "ecm"), version("v2-ecm", "b1", 2, "ecm")],
+    });
+    renderWithRouter(<LineageCard runId="r1" businessId="b1" runStatus="completed" />);
+    const links = await screen.findAllByRole("link");
+    expect(links.map((a) => a.getAttribute("href"))).toEqual([
+      "/businesses/b1/model/1/ecm?tab=overview",
+      "/businesses/b1/model/2/ecm?tab=overview",
+    ]);
+  });
+
   it("renders Pending placeholder for generated when run is running and no output_version_id yet", async () => {
     stubLineageEndpoints({
       lineage: {
@@ -215,7 +238,7 @@ describe("LineageCard — RunOperation-driven source/generated", () => {
     expect(screen.getByRole("link", { name: /v1 MVM/ })).toBeInTheDocument();
 
     // Generated is "Pending" — old code would have linked back to the
-    // parent here, which is the the model-versioning work #52 bug. Test asserts no link
+    // parent here, which is the model-versioning work #52 bug. Test asserts no link
     // is rendered for the generated row.
     expect(screen.getByTestId("lineage-generated-pending")).toHaveTextContent("Pending");
     // No link with "v1 MVM" appears in BOTH source and generated; only

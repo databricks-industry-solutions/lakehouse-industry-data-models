@@ -89,10 +89,13 @@ def test_content_bad_path_422_without_download(client, mock_ws, dr_id):
     mock_ws.files.download.assert_not_called()
 
 
-def test_content_other_error_502_sanitized(client, mock_ws, dr_id):
-    mock_ws.files.download.side_effect = PermissionDenied("denied dapi" + "a" * 32)
+def test_content_other_error_409_admin_help_sanitized(client, mock_ws, dr_id):
+    mock_ws.files.download.side_effect = PermissionDenied("denied for dana@example.com dapi" + "a" * 32)
     r = _content(client, dr_id, "docs/x.md")
-    assert r.status_code == 502 and "dapi" + "a" * 32 not in r.text
+    assert r.status_code == 409 and "dapi" + "a" * 32 not in r.text
+    detail = r.json()["detail"]
+    assert detail["error"] == "admin_help" and detail["runs_path"] == OUT
+    assert detail["message"].startswith("Could not read doc: denied for [REDACTED]")
 
 
 def test_content_unknown_run_404(client):

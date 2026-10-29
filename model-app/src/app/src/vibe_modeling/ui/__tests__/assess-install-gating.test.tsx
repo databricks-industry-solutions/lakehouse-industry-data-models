@@ -1,7 +1,7 @@
 /**
- * When the optional bronze assessment skill is not installed, the Settings →
- * Assessment tab is gone entirely (the taxonomy builder's rule); installed
- * but not ready, it shows. The help-index Assessment card shows only once ready.
+ * The bronze assessment's settings are a card in Settings → Platform,
+ * Optional features (no tab of its own; the old `?tab=assessment` link lands
+ * there). The help-index Assessment card shows only once ready.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
@@ -62,25 +62,24 @@ function renderAt(path: string, routePath: string, component: () => ReactNode) {
 const renderSettings = (tab = "agent") =>
   renderAt(`/settings?tab=${tab}`, "/settings", SettingsRoute.options.component as () => ReactNode);
 
-describe("Settings → Assessment tab", () => {
-  it("is absent when the skill is not installed", async () => {
-    vi.stubGlobal("fetch", firstRunFetcher());
+describe("Settings: the assessment lives under Platform → Optional features", () => {
+  const notInstalled = {
+    "/api/config/taxonomy": { status: 200, body: { installed: false, ready: false, model_service: "", max_concurrency: 4, install_default_model_service: "" } },
+  };
+
+  it("has no Assessment tab, installed or not", async () => {
+    assess.installed = true;
+    vi.stubGlobal("fetch", firstRunFetcher(notInstalled));
     renderSettings();
     expect(await screen.findByRole("tab", { name: "Agent" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Assessment" })).toBeNull();
   });
 
-  it("falls back to the Agent tab for an assessment deep link when not installed", async () => {
-    vi.stubGlobal("fetch", firstRunFetcher());
+  it("an assessment deep link lands on the Platform tab, which shows the feature card", async () => {
+    vi.stubGlobal("fetch", firstRunFetcher(notInstalled));
     renderSettings("assessment");
-    expect(await screen.findByRole("tab", { name: "Agent" })).toHaveAttribute("aria-selected", "true");
-  });
-
-  it("shows when installed, even before it is ready", async () => {
-    assess.installed = true;
-    vi.stubGlobal("fetch", firstRunFetcher());
-    renderSettings();
-    expect(await screen.findByRole("tab", { name: "Assessment" })).toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: "Platform" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByTestId("feature-card-assessment")).toHaveTextContent("Not installed");
   });
 });
 

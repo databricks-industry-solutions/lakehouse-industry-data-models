@@ -34,18 +34,20 @@ semver as ``agent_version``); the split means the notebook marker (`4.9.9`)
 no longer matches the release tag (`v0.8.0`). Pre-v0.8.0 notebooks that carry
 no ``__RELEASE_VERSION__`` fall back to the marker as their release identity.
 Shipped as the bundled default via
-`src/app/vendored/agent/vibe_modelling_agent_v4.9.9.ipynb`.
+`src/app/vendored/agent/vibe_modelling_agent_v5.3.3.ipynb`.
 """
 
-SUPPORTED_AGENT_MARKER = "4.9.9"
+SUPPORTED_AGENT_MARKER = "5.3.3"
 """Agent-logic marker for the pinned release (notebook ``__AGENT_VERSION__``).
 
 Decoupled from `SUPPORTED_AGENT_VERSION` (the release tag) at v0.8.0. This is a
-per-fix build counter for traceability only: it is stamped into model.json as
-``agent_version`` and logged at startup, but it does NOT gate compatibility.
-The notebook-version preflight (`routes/_helpers._preflight_notebook_version`,
-`routes/config.check_agent_notebook`) gates on the release version, not this
-marker, so a patch bump here on the same release does not require a re-pin.
+per-fix build counter stamped into model.json as ``agent_version`` and logged at
+startup. For most operations, it is for traceability only and does NOT gate
+compatibility. Scoped vibe runs and Dry runs are gated separately: the
+configured notebook's marker must be at least
+``core._vibe_scope.MIN_AGENT_MARKER_FOR_SCOPE``, because older agents ignore
+the ``vibe_scope`` and ``run_type`` widgets and produce unfenced or deployed
+results. See D14 in the vibe-scope design.
 """
 
 

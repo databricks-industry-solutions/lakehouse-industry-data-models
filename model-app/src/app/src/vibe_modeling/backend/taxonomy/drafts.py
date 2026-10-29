@@ -1,8 +1,12 @@
 """In-process draft store. Drafting runs as asyncio background tasks so no HTTP
 request is held open for an LLM call; the browser polls GET /drafts/{id}.
 
-State is memory-only (prototype): lost on app restart -> the poll 404s and the
-UI offers a retry. The app runs uvicorn --workers 1, so one process owns all drafts.
+State is memory-only: lost on app restart -> the poll 404s and the UI offers
+Draft again, which seeds the parts the user already has (``create`` with
+``seed_tree`` / ``seed_sections``) so only the missing parts are drafted. The
+wizard itself is saved in the database (``saved_state.py``). A draft expires
+``ttl_seconds`` after its last activity (create, poll, retry). The app runs
+uvicorn --workers 1, so one process owns all drafts.
 
 Concurrency (design §4.4):
 
@@ -111,7 +115,8 @@ class _Draft:
     owner: str
     kind: DraftKind
     intake: TaxonomyIntake
-    created: float
+    # Last activity (create, poll, retry): the TTL counts from here.
+    touched: float
     parts: dict[str, _Part]
     condense: TaxonomyCondenseIn | None = None
     # Runner tasks of the current attempt. ``cancel`` empties it at once.
@@ -180,7 +185,7 @@ class DraftStore:
     # ---- lifecycle -------------------------------------------------------
     def _purge(self) -> None:
         now = self._clock()
-        for did in [d for d, v in self._drafts.items() if now - v.created > self._ttl]:
+        for did in [d for d, v in self._drafts.items() if now - v.touched > self._ttl]:
             self._drop_tasks(self._drafts.pop(did))
 
     def _apply_capacity(self, capacity: int | None) -> None:
@@ -194,7 +199,7 @@ class DraftStore:
         self._apply_capacity(capacity)
         self._supersede(owner, kind, keep=None)
         draft = _Draft(
-            draft_id=uuid.uuid4().hex, owner=owner, kind=kind, intake=intake, created=self._clock(),
+            draft_id=uuid.uuid4().hex, owner=owner, kind=kind, intake=intake, touched=self._clock(),
             parts={k: _Part() for k in keys}, attempt_started=self._access.now(),
         )
         self._drafts[draft.draft_id] = draft
@@ -227,8 +232,13 @@ class DraftStore:
         self._drop_tasks(d)
 
     def _lookup(self, draft_id: str, owner: str) -> _Draft | None:
+        """The owner's live draft, touched; expired drafts are purged first."""
+        self._purge()
         d = self._drafts.get(draft_id)
-        return d if d is not None and d.owner == owner else None
+        if d is None or d.owner != owner:
+            return None
+        d.touched = self._clock()
+        return d
 
     def _mark_busy(self, d: _Draft, part: str) -> None:
         """Report ``part`` busy without calling the model (the pre-draft test
@@ -243,12 +253,27 @@ class DraftStore:
     # ---- public API ------------------------------------------------------
     def create(
         self, owner: str, intake: TaxonomyIntake, llm: Any, *, capacity: int | None = None, busy: bool = False,
+        seed_tree: TaxonomyTree | None = None, seed_sections: dict[str, TaxonomySection] | None = None,
     ) -> str:
+        """Draft the tree, then the sections. Seeded parts start ``done``
+        without a model call: with ``seed_tree`` only the unseeded sections
+        are drafted, and with every part seeded nothing runs."""
         draft = self._new(owner, KIND_CREATE, intake, [PART_TREE, *SECTION_KEYS], capacity)
-        if busy:
-            self._mark_busy(draft, PART_TREE)
-        else:
-            self._spawn(draft, self._run_all(draft, llm))
+        if seed_tree is not None:
+            self._apply_tree(draft.parts[PART_TREE], seed_tree)
+        for k, section in (seed_sections or {}).items():
+            self._apply_section(draft.parts[k], section)
+        missing = [k for k in SECTION_KEYS if draft.parts[k].status == "pending"]
+        if seed_tree is None:
+            if busy:
+                self._mark_busy(draft, PART_TREE)
+            else:
+                self._spawn(draft, self._run_all(draft, llm))
+        elif busy:
+            for k in missing:
+                self._mark_busy(draft, k)
+        elif missing:
+            self._spawn(draft, self._run_sections(draft, missing, llm))
         return draft.draft_id
 
     def create_condense(

@@ -29,6 +29,8 @@ import pytest
 
 from vibe_modeling.backend import models as backend_models
 
+from ._source_scan import iter_files
+
 
 # Roots to search for `data.<field>` reads. Add new directories as the
 # project grows.
@@ -59,9 +61,7 @@ def _backend_files_using_splat(root: Path) -> set[Path]:
     positives. Returns the set of files that contain any splat pattern."""
     splat_re = re.compile(r"\*\*\s*(?:data|req|run_in|payload|body|cfg)\b")
     matches: set[Path] = set()
-    for py in root.rglob("*.py"):
-        if "__pycache__" in py.parts:
-            continue
+    for py, _rel in iter_files(root):
         try:
             text = py.read_text(encoding="utf-8")
         except Exception:
@@ -84,9 +84,7 @@ def _grep_field_reads(root: Path, field_name: str) -> int:
         rf"\b[a-z_][a-z0-9_]*\.{re.escape(field_name)}\b"
     )
     total = 0
-    for py in root.rglob("*.py"):
-        if "__pycache__" in py.parts:
-            continue
+    for py, _rel in iter_files(root):
         try:
             text = py.read_text(encoding="utf-8")
         except Exception:

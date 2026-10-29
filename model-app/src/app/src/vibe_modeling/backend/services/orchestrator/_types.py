@@ -8,9 +8,9 @@ types come from a separate Phase 1 slice and will be added there.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
-Severity = Literal["warning", "blocker"]
+Severity = Literal["warning", "blocker", "confirm"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,8 +20,9 @@ class Issue:
 
     ``blocker`` issues reject ``POST /runs`` with HTTP 400. ``warning``
     issues are echoed back to the UI so it can render a "Submit anyway"
-    confirmation; the run is still created. See §2.4 of the design doc for
-    the full validation flow.
+    confirmation; the run is still created. ``confirm`` issues carry a
+    ``subject`` key the request must list in ``RunIn.confirmed_issues``.
+    See §2.4 of the design doc for the full validation flow.
     """
 
     field_path: str
@@ -37,4 +38,15 @@ class Issue:
     """Human-readable description rendered inline in the form."""
 
     severity: Severity
-    """``"warning"`` or ``"blocker"``."""
+    """``"warning"``, ``"blocker"`` or ``"confirm"``."""
+
+    subject: Optional[str] = None
+    """Set on ``confirm`` issues only: the key bound to what the
+    confirmation is about (``install_over_newer:<head id>``,
+    ``install_replaces_in_catalog:<occupying version id>``)."""
+
+    versions: tuple[int, ...] = ()
+    """The version numbers the issue names, when it names some
+    (``install_over_newer``: the versions the install replaces;
+    ``vibe_scope_base``: the versions to delete first). The UI reads them
+    instead of parsing ``message``."""

@@ -7,6 +7,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "a
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from vibe_modeling.backend.job_launcher import (
     VIBE_INSTRUCTIONS_INLINE_LIMIT,
     build_job_tags,
@@ -86,9 +88,9 @@ class TestMapRunParams:
             business=business,
             catalog="my_catalog",
             session_id="test-session-id",
+            runtime_budget_seconds=21600,
             vibe_instructions="",
             model_size="small model",
-            generate_samples=False,
             business_context_path="/Volumes/test/ctx/ctx.json",
         )
         assert widgets["operation"] == "new base model"
@@ -97,7 +99,6 @@ class TestMapRunParams:
         assert widgets["context_file"] == "/Volumes/test/ctx/ctx.json"
         assert widgets["deployment_catalog"] == "my_catalog"
         assert widgets["data_model_scopes"] == "Minimum Viable Model - MVM"
-        assert widgets["generate_samples"] == "0"
         assert widgets["model_vibes"] == ""
         # Widget receives the BIGINT-as-string derivation (SHA-256 truncation),
         # not the raw UUID — agent's int(_raw_sid) parse needs an integer.
@@ -109,6 +110,7 @@ class TestMapRunParams:
         business = self._make_business()
         widgets = map_run_params_to_widgets(
             operation="new base model", business=business, catalog="c", session_id="s",
+            runtime_budget_seconds=21600,
             model_size="small model",
         )
         assert widgets["data_model_scopes"] == "Minimum Viable Model - MVM"
@@ -117,44 +119,42 @@ class TestMapRunParams:
         business = self._make_business()
         widgets = map_run_params_to_widgets(
             operation="new base model", business=business, catalog="c", session_id="s",
+            runtime_budget_seconds=21600,
             model_size="large model",
         )
         assert widgets["data_model_scopes"] == "Expanded Coverage Model - ECM"
 
-    def test_generate_samples_true(self):
+    def test_no_generate_samples_widget(self):
+        """Agent 5.3.3 has no ``generate_samples`` widget (X18), so the app sends none."""
         business = self._make_business()
         widgets = map_run_params_to_widgets(
             operation="new base model", business=business, catalog="c", session_id="s",
-            generate_samples=True,
+            runtime_budget_seconds=21600,
         )
-        assert widgets["generate_samples"] == "10"
-
-    def test_generate_samples_false(self):
-        business = self._make_business()
-        widgets = map_run_params_to_widgets(
-            operation="new base model", business=business, catalog="c", session_id="s",
-            generate_samples=False,
-        )
-        assert widgets["generate_samples"] == "0"
+        assert "generate_samples" not in widgets
 
     def test_business_name_normalized(self):
         business = self._make_business(name="Acme Telecom Corp")
         widgets = map_run_params_to_widgets(
             operation="new base model", business=business, catalog="c", session_id="s",
+            runtime_budget_seconds=21600,
         )
         assert widgets["business_name"] == "acme_telecom_corp"
 
 
 class TestBuildJobTags:
-    """Default behavior: collect_statistics=False, identity tags are NOT emitted.
+    """``collect_statistics=False`` (the builder's own default) emits no identity tags.
 
-    See backend/db_models.py:AgentConfig.collect_vibe_run_statistics — operator
-    must opt in via Settings before identity-bearing tags (business name,
-    session id, notebook filename) flow.
+    The flag is Settings -> Agent -> "Annotate jobs with run tags"
+    (``AgentConfig.collect_vibe_run_statistics``, on by default); when on, the
+    business name, session id and notebook filename are added. The app
+    identity tags are always on; outside the Apps runtime (the test default,
+    ``DATABRICKS_APP_NAME`` unset) the app name key is left out.
     """
 
     _NON_IDENTITY_KEYS = {
         "managed_by",
+        "dbx_vibe_modelling_app_version",
         "dbx_vibe_modelling_launcher_source",
         "dbx_vibe_modelling_model",
         "dbx_vibe_modelling_operation",
@@ -257,6 +257,40 @@ class TestBuildJobTags:
     def test_operation_sanitized(self):
         tags = build_job_tags(operation="new base model")
         assert tags["dbx_vibe_modelling_operation"] == "new_base_model"
+
+
+class TestJobTagsForConfig:
+    """The one reader of the run-tags setting and notebook path off an AgentConfig."""
+
+    _IDENTITY = {"dbx_vibe_modelling_business", "dbx_vibe_modelling_session_id", "dbx_vibe_modelling_notebook"}
+
+    def _cfg(self, collect):
+        from vibe_modeling.backend.db_models import AgentConfig
+        return AgentConfig(notebook_path="/Workspace/Users/me/agent_v27.py", collect_vibe_run_statistics=collect)
+
+    def test_setting_on_adds_identity_tags(self):
+        from vibe_modeling.backend.job_launcher import job_tags_for_config
+        tags = job_tags_for_config(self._cfg(True), business_name="Acme Corp", operation="op", session_id="abc")
+        assert tags["dbx_vibe_modelling_business"] == "Acme_Corp"
+        assert tags["dbx_vibe_modelling_session_id"] == "abc"
+        assert tags["dbx_vibe_modelling_notebook"] == "agent_v27.py"
+
+    def test_setting_off_leaves_identity_tags_out(self):
+        from vibe_modeling.backend.job_launcher import job_tags_for_config
+        tags = job_tags_for_config(self._cfg(False), business_name="Acme", operation="op", session_id="abc")
+        assert not (set(tags) & self._IDENTITY)
+        assert tags["managed_by"] == "vibe_modeling_app"
+
+    def test_no_config_reads_as_off(self):
+        from vibe_modeling.backend.job_launcher import job_tags_for_config
+        tags = job_tags_for_config(None, business_name="Acme", operation="op", session_id="abc")
+        assert not (set(tags) & self._IDENTITY)
+
+    def test_matches_build_job_tags(self):
+        from vibe_modeling.backend.job_launcher import job_tags_for_config
+        kw = dict(business_name="b", model_scope="MVM", version="2", operation="op", session_id="s")
+        assert job_tags_for_config(self._cfg(True), **kw) == build_job_tags(
+            notebook_path="/Workspace/Users/me/agent_v27.py", collect_statistics=True, **kw)
 
 
 class TestBuildJobTagsFromSession:
@@ -511,6 +545,7 @@ class TestVibeInstructionsVolume:
         business = Business(name="Acme", description="", industry_alignment="")
         widgets = map_run_params_to_widgets(
             operation="new base model", business=business, catalog="c", session_id="s",
+            runtime_budget_seconds=21600,
             vibe_instructions="/Volumes/c/_metamodel/vol_root/business/acme/_vibe_inputs/s.txt",
         )
         # The agent has a single `model_vibes` widget; a path value is routed
@@ -619,3 +654,61 @@ class TestLaunchRunEnsureProgressSchemaHook:
         assert result == 77
         mock_ws.jobs.run_now.assert_called_once()
 
+
+
+class TestEmptyDeploymentCatalog:
+    """A model-producing op with no ``deployment_catalog`` is refused: the
+    agent would derive a catalog from the business name (nb 55985-55992)."""
+
+    MODEL_OPS = ("new base model", "vibe modeling of version", "shrink ecm", "enlarge mvm")
+
+    def test_build_widget_map_refuses_every_model_producing_op(self):
+        from vibe_modeling.backend.core._widgets import empty_catalog_message
+        from vibe_modeling.backend.services.operations._generation_common import build_generation_widgets
+
+        business = Business(name="test_corp", description="d")
+        for op in self.MODEL_OPS:
+            for catalog in ("", "   "):
+                with pytest.raises(ValueError) as exc:
+                    map_run_params_to_widgets(
+                        operation=op, business=business, catalog=catalog, session_id="s",
+                        runtime_budget_seconds=60, model_version="1",
+                    )
+                assert str(exc.value) == empty_catalog_message(op)
+                with pytest.raises(ValueError, match="needs a deployment catalog"):
+                    build_generation_widgets(
+                        operation=op, data_model_scopes="Expanded Coverage Model - ECM", business=business,
+                        catalog=catalog, session_id="s", runtime_budget_seconds=60, vibe_instructions="",
+                        business_context_path="", business_description_override="", model_version="1",
+                        schema_prefix="", naming_convention="snake_case", primary_key_suffix="_id",
+                        schema_suffix="", tag_prefix="dbx_", tag_suffix="", table_id_type="BIGINT",
+                        boolean_format="", date_format="yyyy-MM-dd", timestamp_format="yyyy-MM-dd HH:mm:ss",
+                        cataloging_style="One Catalog", catalog_prefix="", catalog_suffix="",
+                        org_divisions="Operations", business_domains="", classification_levels="",
+                        housekeeping_columns="No", history_tracking_columns="No",
+                    )
+
+    def test_build_widget_map_keeps_lifecycle_ops(self):
+        widgets = map_run_params_to_widgets(
+            operation="install model", business=Business(name="test_corp", description="d"), catalog="",
+            session_id="s", runtime_budget_seconds=60, model_version="1",
+        )
+        assert widgets["deployment_catalog"] == ""
+
+    def test_launch_run_refuses_before_any_workspace_call(self):
+        for op in self.MODEL_OPS:
+            for params in ({"operation": op}, {"operation": op, "deployment_catalog": ""},
+                           {"operation": op, "deployment_catalog": "  "}):
+                mock_ws = MagicMock()
+                with patch("vibe_modeling.backend.job_launcher.ensure_progress_schema") as mock_ensure:
+                    with pytest.raises(ValueError, match="needs a deployment catalog"):
+                        launch_run(mock_ws, job_id=10, widget_params=params, job_tags={"k": "v"},
+                                   warehouse_id="wh-xyz")
+                mock_ensure.assert_not_called()
+                mock_ws.jobs.update.assert_not_called()
+                mock_ws.jobs.run_now.assert_not_called()
+
+    def test_launch_run_keeps_lifecycle_ops_without_a_catalog(self):
+        mock_ws = MagicMock()
+        mock_ws.jobs.run_now.return_value = MagicMock(run_id=5)
+        assert launch_run(mock_ws, job_id=10, widget_params={"operation": "install model"}) == 5

@@ -1,5 +1,5 @@
 {
-  "extraPaths": ["src/app/src", "scripts/dev", "scripts/smoke"],
+  "extraPaths": ["src/app/src", "scripts/dev", "scripts/smoke", "install"],
   "pythonVersion": "3.12",
   "include": ["src/app/src", "tests"],
   "exclude": ["**/node_modules", "**/__pycache__", "**/.venv", "src/app/src/vibe_modeling/__dist__", ".worktrees", "**/.worktrees"],

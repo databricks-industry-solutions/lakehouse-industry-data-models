@@ -85,7 +85,10 @@ def read_artifact_bytes(ws, path: str) -> bytes:
         resp = ws.files.download(path)
         return resp.contents.read()
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Could not read {path}: {e}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Could not read artifact file {artifact_filename(path)!r}: {e}",
+        )
 
 
 def build_artifact_content_response(

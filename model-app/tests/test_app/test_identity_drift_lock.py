@@ -26,9 +26,9 @@ not headers and are not matched.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-_BACKEND = Path(__file__).resolve().parents[2] / "src/app/src/vibe_modeling/backend"
+from ._source_scan import BACKEND as _BACKEND
+from ._source_scan import is_comment, iter_files, line_of
 
 _FIELD_EXEMPT = {"core/_identity.py", "core/_headers.py"}
 _LITERAL_EXEMPT = {"core/_headers.py"}
@@ -43,47 +43,31 @@ _HEADER_LITERAL = re.compile(
 )
 
 
-def _py_files():
-    for p in sorted(_BACKEND.rglob("*.py")):
-        rel = p.relative_to(_BACKEND).as_posix()
-        if "__pycache__" in rel:
-            continue
-        yield p, rel
-
-
-def _line_of(text: str, offset: int) -> int:
-    return text.count("\n", 0, offset) + 1
-
-
 def test_no_direct_identity_field_reads_outside_identity_module():
     offenders: list[str] = []
-    for path, rel in _py_files():
-        if rel in _FIELD_EXEMPT:
-            continue
+    for path, rel in iter_files(_BACKEND, exempt=_FIELD_EXEMPT):
         text = path.read_text()
         for i, line in enumerate(text.splitlines(), start=1):
-            if line.lstrip().startswith("#"):
+            if is_comment(line):
                 continue
             if _EMAIL_FIELD.search(line) or _HEADERS_USER_NAME.search(line):
                 offenders.append(f"{rel}:{i}: {line.strip()}")
         for m in _GETATTR_READ.finditer(text):
-            offenders.append(f"{rel}:{_line_of(text, m.start())}: {m.group(0)!r}")
+            offenders.append(f"{rel}:{line_of(text, m.start())}: {m.group(0)!r}")
     assert not offenders, (
         "Direct identity-header read found outside core/_identity.py. Use "
         "current_user_identity / actor_label / Dependencies.UserIdentity / "
-        "legacy_username_alias / current_user_profile instead:\n"
+        "current_user_profile instead:\n"
         + "\n".join(offenders)
     )
 
 
 def test_no_forwarded_identity_header_literals_outside_headers_module():
     offenders: list[str] = []
-    for path, rel in _py_files():
-        if rel in _LITERAL_EXEMPT:
-            continue
+    for path, rel in iter_files(_BACKEND, exempt=_LITERAL_EXEMPT):
         text = path.read_text()
         for m in _HEADER_LITERAL.finditer(text):
-            offenders.append(f"{rel}:{_line_of(text, m.start())}: {m.group(0)}")
+            offenders.append(f"{rel}:{line_of(text, m.start())}: {m.group(0)}")
     assert not offenders, (
         "Forwarded identity header literal found outside core/_headers.py. "
         "Read identity through core/_identity.py instead:\n" + "\n".join(offenders)

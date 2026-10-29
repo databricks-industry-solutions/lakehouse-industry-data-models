@@ -18,6 +18,7 @@ import {
   listSectorsKey,
   type DownloadIndustryModelOut,
 } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-error";
 import { invalidateBusinessLists } from "@/lib/business-cache";
 import { notifyConfigMissing } from "@/lib/notify";
 import { sourceErrorCopy } from "@/lib/source-error-copy";
@@ -119,7 +120,7 @@ export function DownloadIndustryDialog({
             setError(sourceErrorCopy(403).detail);
             return;
           }
-          setError(err instanceof Error ? err.message : "Download failed");
+          setError(apiErrorMessage(err, "Download failed"));
         },
       },
     );

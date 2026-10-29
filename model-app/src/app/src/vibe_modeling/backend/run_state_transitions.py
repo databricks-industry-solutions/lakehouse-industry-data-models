@@ -30,12 +30,11 @@ from typing import Any, Literal
 
 from sqlmodel import Session, select
 
+from .core._runs import OPEN_OPERATION_STATUSES
 from .db_models import Run, RunOperation, RunProgressEvent
 
 logger = logging.getLogger(__name__)
 
-# Statuses that are still in-flight — terminal transition resets these.
-_IN_FLIGHT_STATUSES: frozenset[str] = frozenset({"pending", "running"})
 
 # Run.status values that are terminal (no further transitions allowed).
 # "stale" is intentionally NOT here — the watchdog can promote stale → failed.
@@ -172,7 +171,7 @@ def transition_run(
         # Sanity check: caller should not invoke this for the success path
         # while there are still in-flight ops (that is the orchestrator's job).
         rows = _load_ops(session, run.id)
-        in_flight = [r for r in rows if r.status in _IN_FLIGHT_STATUSES]
+        in_flight = [r for r in rows if r.status in OPEN_OPERATION_STATUSES]
         if in_flight:
             names = ", ".join(r.operation_name for r in in_flight)
             raise ValueError(

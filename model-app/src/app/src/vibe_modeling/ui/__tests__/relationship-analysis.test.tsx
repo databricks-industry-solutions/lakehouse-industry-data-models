@@ -17,6 +17,7 @@ import { ErrorBoundary } from "react-error-boundary";
 
 import { RelationshipAnalysis } from "@/components/explorer/relationship-analysis";
 import { useStrictConsole } from "./helpers/strict-console";
+import { jsonResponse } from "./helpers/first-run";
 
 function makeClient() {
   return new QueryClient({
@@ -111,13 +112,7 @@ describe("RelationshipAnalysis", () => {
     // matches both fetch contracts.
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({
-        ok: false,
-        status: 404,
-        statusText: "Not Found",
-        text: async () => JSON.stringify({ detail: "not found" }),
-        json: async () => ({ detail: "not found" }),
-      })),
+      vi.fn(async () => jsonResponse(404, { detail: "not found" }, "Not Found")),
     );
     renderAnalysis();
     await waitFor(() =>

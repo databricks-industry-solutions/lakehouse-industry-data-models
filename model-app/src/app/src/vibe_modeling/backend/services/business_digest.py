@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
+from ..industry_resolve import industry_slug
 from ..models import BusinessDigest, FieldMismatch
 
 
@@ -217,6 +218,8 @@ def diff_business_digest(
     *,
     current_name: str,
     current_industry_alignment: str,
+    digest_industry_id: Optional[str] = None,
+    current_industry_id: Optional[str] = None,
 ) -> list[FieldMismatch]:
     """Return the fields where ``digest`` disagrees with the existing Business.
 
@@ -224,29 +227,29 @@ def diff_business_digest(
     are the two identity fields the user needs to confirm before
     importing into a business that may not match the file. Description +
     business-context fields are free-form prose and would generate noisy
-    false positives. Comparison is case-insensitive on both sides
-    (industry catalog has both ``Gaming`` and ``gaming`` flavors in the
-    wild).
+    false positives. Names compare case-insensitively. Industries agree
+    when the digest's alignment resolves to the business's ``industry_id``
+    (``digest_industry_id``, from ``industry_resolve``), else when their
+    industry slugs are equal: the import dialog stores the catalog name
+    ("Energy - Utilities") of the agent's slug ("energy-utilities").
     """
     mismatches: list[FieldMismatch] = []
 
-    def _ne(a: str, b: str) -> bool:
-        return (a or "").strip().casefold() != (b or "").strip().casefold()
-
-    if _ne(digest.business_name, current_name):
+    if (digest.business_name or "").strip().casefold() != (current_name or "").strip().casefold():
         mismatches.append(FieldMismatch(
             field="business_name",
             source_value=digest.business_name,
             current_value=current_name,
         ))
-    if _ne(digest.industry_alignment, current_industry_alignment):
-        # Skip when the file is silent — that's "I don't know", not a
-        # disagreement.
-        if digest.industry_alignment:
-            mismatches.append(FieldMismatch(
-                field="industry_alignment",
-                source_value=digest.industry_alignment,
-                current_value=current_industry_alignment,
-            ))
+    same_industry = (
+        digest_industry_id is not None and digest_industry_id == current_industry_id
+    ) or industry_slug(digest.industry_alignment) == industry_slug(current_industry_alignment)
+    # A silent file is "I don't know", not a disagreement.
+    if digest.industry_alignment and not same_industry:
+        mismatches.append(FieldMismatch(
+            field="industry_alignment",
+            source_value=digest.industry_alignment,
+            current_value=current_industry_alignment,
+        ))
 
     return mismatches

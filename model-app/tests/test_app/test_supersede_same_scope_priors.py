@@ -157,6 +157,7 @@ class TestVibeIterateRollback:
         primitive = VibeIterate()
         ctx = MagicMock()
         ctx.business_id = biz_a
+        ctx.run_id = "run-without-report"
         rollback_state = {
             "new_version_id": new_mv,
             "auto_superseded_ids": [prior],
@@ -187,6 +188,7 @@ class TestVibeIterateRollback:
         primitive = VibeIterate()
         ctx = MagicMock()
         ctx.business_id = biz_a
+        ctx.run_id = "run-without-report"
         with Session(engine) as s:
             primitive.rollback(
                 ctx,

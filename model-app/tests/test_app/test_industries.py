@@ -1,15 +1,16 @@
-"""Tests for the Industry catalog endpoints — focused on DELETE.
+"""Tests for the Industry catalog endpoints: DELETE and the create slug guard.
 
-The existing list / create / update paths are covered indirectly by the
-contracts + RBAC test suites; this file exists to gate the
-``deleteIndustry`` endpoint so a refactor can't silently turn it back
-into a 200 on the in-use case (which would let the user nuke an
-industry that businesses still reference and leave FKs dangling).
+The list and update paths are covered indirectly by the
+contracts + RBAC test suites. This file gates the ``deleteIndustry``
+endpoint so a refactor can't silently turn it back into a 200 on the
+in-use case (which would let the user nuke an industry that businesses
+still reference and leave FKs dangling), and ``createIndustry``'s refusal
+of a slug an active industry already has.
 """
 
 from __future__ import annotations
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from vibe_modeling.backend.db_models import Business, Industry
 
@@ -96,3 +97,31 @@ def test_delete_nonexistent_industry_returns_404(client):
     resp = client.delete("/api/industries/does-not-exist")
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Industry not found"
+
+
+def test_create_industry_refuses_a_slug_an_active_industry_has(client, engine):
+    with Session(engine) as s:
+        s.add(Industry(id="energy", name="Energy - Utilities", short_name="utilities"))
+        s.commit()
+    for body in (
+        {"name": "Energy Utilities", "short_name": "new"},
+        {"name": "Power", "short_name": "UTILITIES"},
+    ):
+        resp = client.post("/api/industries", json=body)
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error"] == "industry_slug_taken"
+        assert detail["industries"] == [{"id": "energy", "name": "Energy - Utilities"}]
+    with Session(engine) as s:
+        assert [i.id for i in s.exec(select(Industry)).all()] == ["energy"]
+
+
+def test_create_industry_allows_a_distinct_or_inactive_slug(client, engine):
+    with Session(engine) as s:
+        s.add(Industry(id="energy", name="Energy - Utilities", short_name="utilities"))
+        s.add(Industry(id="old", name="Mining", short_name="mining", is_active=False))
+        s.commit()
+    assert client.post("/api/industries", json={"name": "Mining", "short_name": "mining"}).status_code == 200
+    assert client.post(
+        "/api/industries", json={"name": "Utilities", "short_name": "utilities-2", "is_active": False},
+    ).status_code == 200

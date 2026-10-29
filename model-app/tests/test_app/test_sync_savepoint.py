@@ -90,6 +90,7 @@ class TestGenerateOpSavepoint:
     def _run(self, session, ws, biz_id, run_id, op_id):
         from vibe_modeling.backend.services.operations import OperationDispatchHandle
         from vibe_modeling.backend.services.operations._generation_common import (
+            AGENT_OP_NEW_BASE_MODEL,
             observe_generation_op,
         )
         ctx = make_ctx(
@@ -101,6 +102,7 @@ class TestGenerateOpSavepoint:
         )
         return observe_generation_op(
             handle=handle, ctx=ctx, ws=ws, session=session, scope_short="ecm",
+            agent_operation=AGENT_OP_NEW_BASE_MODEL,
         )
 
     def test_sync_failure_leaves_prior_active_and_unsuperseded(self):
@@ -135,7 +137,9 @@ class TestGenerateOpSavepoint:
             prior = session.get(ModelVersion, prior_id)
             assert prior is not None
             assert prior.status == "completed"
-            assert prior.deployment_status == "deployed"
+            # The agent deployed the new version there whatever our sync did,
+            # so the eviction stands outside the savepoint.
+            assert prior.deployment_status == "uninstalled"
 
             # Prior element rows untouched.
             assert _prior_element_count(session, prior_id) == before
@@ -174,7 +178,9 @@ class TestGenerateOpSavepoint:
             prior = session.get(ModelVersion, prior_id)
             assert prior is not None
             assert prior.status == "completed"
-            assert prior.deployment_status == "deployed"
+            # The agent deployed the new version there whatever our sync did,
+            # so the eviction stands outside the savepoint.
+            assert prior.deployment_status == "uninstalled"
             assert _prior_element_count(session, prior_id) == before
             assert obs.terminal_result.rollback_state.get("auto_superseded_ids") == []
 

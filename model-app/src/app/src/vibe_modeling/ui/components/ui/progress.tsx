@@ -11,6 +11,7 @@ const Progress = React.forwardRef<
 >(({ className, value, ...props }, ref) => (
   <ProgressPrimitive.Root
     ref={ref}
+    value={value}
     className={cn(
       // Thinner, squarer bar — DESIGN.md eschews pill-shaped UI.
       // Light mode: a darker-gold hairline bounds the track so the gold fill

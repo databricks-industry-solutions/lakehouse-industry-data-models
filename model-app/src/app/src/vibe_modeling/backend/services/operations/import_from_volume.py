@@ -25,20 +25,27 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import select
 
-from ...agent_compat import extract_version_provenance
+from ...agent_compat import (
+    extract_version_provenance,
+    extract_vibe_scope_facts,
+)
+from ...core._catalogs import volume_path_catalog
+from ...error_sanitization import recorded_error_text
 from ...db_models import Business, ModelVersion, RunOperation
+from ...import_model import ImportScopeError, import_scope
 from ..._query_helpers import (
     next_version_for_scope,
-    resolve_lineage_parent,
+    resolve_model_json_parent,
 )
 from ...core._warehouse import get_warehouse_id
 from ...model_sync import ModelSyncService
 from ._registry import register
+from ._version_lifecycle import mark_version_deployed
 from ._protocol import (
     Operation,
     OperationContext,
@@ -68,6 +75,8 @@ class ImportFromVolumeParams(BaseModel):
     business_name: str = ""
     deployment_catalog: str = ""
     volume_path: str = Field(min_length=1)
+    # The admin's ECM / MVM choice (``import_model.import_scope``).
+    scope: Optional[Literal["ecm", "mvm"]] = None
 
     @field_validator("volume_path")
     @classmethod
@@ -206,8 +215,19 @@ class ImportFromVolume(Operation):
                 ),
             )
 
-        # Derive scope from the volume path's `{scope}_v{N}` segment.
-        scope = _scope_from_volume_path(params.volume_path)
+        # The file's version, else the admin's choice, else its requirements,
+        # else its folder. The file is the agent's: it is not rewritten.
+        try:
+            scope = import_scope(doc, params.volume_path, params.scope)
+        except ImportScopeError as e:
+            return _emit_dispatch_error(
+                session,
+                ctx,
+                error=(
+                    str(e) if params.scope else
+                    f"Could not tell whether {params.volume_path} is an ECM or an MVM model; pass scope."
+                ),
+            )
 
         # Per-scope ordinal allocation: an imported MVM lands next to
         # MVM siblings (not after the global max) so the natural key
@@ -216,45 +236,42 @@ class ImportFromVolume(Operation):
             session, ctx.business_id, scope
         )
 
-        # Lineage from the agent's `generated_from_version` tag in the
-        # imported model.json (e.g. "v1_ecm" → look up the matching MV
-        # row and link as base_version_id). The volume-import path is
-        # the recovery surface for runs that succeeded on the agent
-        # side but lost the sync hop; the same lineage tag the
-        # orchestrator-driven runs rely on is available here.
+        # Lineage the imported model.json names (the 5.3.3 ``lineage``
+        # block, else the ``generated_from_version`` tag). The volume-import
+        # path is the recovery surface for runs that succeeded on the agent
+        # side but lost the sync hop.
         lineage_parent_id: Optional[str] = None
-        for blob in (model_payload, model_payload.get("model") or {}):
-            if not isinstance(blob, dict):
-                continue
-            tag = blob.get("generated_from_version")
-            if not tag:
-                continue
-            parent = resolve_lineage_parent(session, ctx.business_id, str(tag))
-            if parent is not None:
-                lineage_parent_id = parent.id
-                break
+        parent = resolve_model_json_parent(session, ctx.business_id, doc)
+        if parent is not None:
+            lineage_parent_id = parent.id
 
         # Version provenance from the FULL model.json envelope ``doc`` — the
         # top-level agent_version / release_version keys live there, not on the
         # unwrapped ``model_payload`` (``doc["model"]``).
         agent_version, release_version = extract_version_provenance(doc)
+        fence_mode, fence_base_version, fence_base_scope = extract_vibe_scope_facts(doc)
 
-        deployment_status = "deployed" if deployment_catalog else "draft"
         mv = ModelVersion(
             business_id=ctx.business_id,
             version=new_version_num,
             status="completed",
-            deployment_status=deployment_status,
             base_version_id=lineage_parent_id,
             vibe_instructions="",
             scope=scope,
-            uc_catalog=deployment_catalog,
+            # The registry rows a deployed import gets are written in its
+            # catalog; otherwise its files are where the path points.
+            files_catalog=deployment_catalog or volume_path_catalog(params.volume_path),
             completion_date=datetime.now(timezone.utc),
             agent_version=agent_version,
             release_version=release_version,
+            scope_fence_mode=fence_mode,
+            scope_base_version=fence_base_version,
+            scope_base_scope=fence_base_scope,
         )
         session.add(mv)
         session.flush()
+        if deployment_catalog:
+            mark_version_deployed(session, mv, deployment_catalog, run_id=ctx.run_id)
 
         # Sync structure into Lakebase. A sync failure here is reportable
         # via observe() so the orchestrator can roll back the version.
@@ -267,7 +284,8 @@ class ImportFromVolume(Operation):
                 "import_from_volume: sync_from_model_json failed for mv=%s",
                 mv.id,
             )
-            sync_error = str(e) or "lakebase sync failed"
+            sync_error = recorded_error_text(
+                e, f"Lakebase sync of version {mv.id}", str(e) or "lakebase sync failed")
 
         # Persist on the RunOperation row so a re-call returns the same
         # handle without duplicating the version.
@@ -409,44 +427,6 @@ class ImportFromVolume(Operation):
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
-
-
-def _scope_from_volume_path(volume_path: str) -> str:
-    """Pull the scope (``ecm`` / ``mvm``) out of a version-dir Volume path.
-
-    Handles every layout the app has written:
-
-    - Nested (agent 4.9.8+): ``.../v{N}/{scope}/...`` — the scope is a
-      standalone segment directly after a ``v{N}`` segment.
-    - Flat (pre-4.9.8): ``{scope}_v{N}`` (e.g. ``ecm_v1``).
-    - Legacy flat (pre-v0.5.9): ``v{N}_{scope}``.
-
-    Nested is checked first so a nested path never mis-parses; the flat forms
-    remain as fallbacks so an old folder that happens to be re-imported still
-    resolves. Falls back to ``ecm`` if the path doesn't match — the admin
-    endpoint has the same default. The orchestrator-driven path comes through
-    a DAG factory that should set scope explicitly upstream; this helper exists
-    so a hand-rolled DAG omitting the scope still works.
-    """
-    parts = [p for p in volume_path.split("/") if p]
-    # Nested layout: a standalone "ecm"/"mvm" segment following a "v{N}" segment.
-    for i, p in enumerate(parts):
-        if p in ("ecm", "mvm") and i > 0:
-            prev = parts[i - 1]
-            if prev.startswith("v") and prev[1:].isdigit():
-                return p
-    # Flat layouts.
-    for p in parts:
-        if "_" not in p:
-            continue
-        head, tail = p.split("_", 1)
-        # "{scope}_v{int}".
-        if head in ("ecm", "mvm") and tail.startswith("v") and tail[1:].isdigit():
-            return head
-        # Legacy "v{int}_{scope}".
-        if head.startswith("v") and head[1:].isdigit() and tail in ("ecm", "mvm"):
-            return tail
-    return "ecm"
 
 
 def _emit_dispatch_error(

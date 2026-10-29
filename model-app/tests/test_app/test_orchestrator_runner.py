@@ -38,6 +38,7 @@ import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 # Ensure the in-tree source wins over any installed wheel — same pattern
@@ -57,6 +58,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 from vibe_modeling.backend.db_models import (
     AgentConfig,
     Business,
+    Domain,
     ModelVersion,
     Run,
     RunOperation,
@@ -72,6 +74,7 @@ from vibe_modeling.backend.services.orchestrator.dag import (
     Dag,
     OperationStep,
 )
+from vibe_modeling.backend.services.orchestrator import CANCEL_REFUSED_PHASE_SUCCEEDED
 
 
 # ---------------------------------------------------------------------------
@@ -943,9 +946,9 @@ class TestCancelWithRollback:
         prior_status = run.status
 
         result = orch.cancel_with_rollback(run, session, mock_ws)
-        # Either dataclass or dict shape.
-        ok = getattr(result, "ok", result.get("ok") if hasattr(result, "get") else None)
-        assert ok is False
+        assert result.ok is False
+        assert result.refusal_reason == CANCEL_REFUSED_PHASE_SUCCEEDED
+        assert "finished successfully" in result.op_failures[0]["error"]
 
         session.refresh(run)
         # Run is untouched — same status as before the cancel call.
@@ -2058,6 +2061,10 @@ class TestDispatchExtrasRoundTrip:
         mock_run.response = MagicMock()
         mock_run.response.run_id = 555
         mock_ws.jobs.run_now.return_value = mock_run
+        from ._lifecycle_fixtures import agent_exits_ok, model_json_readable
+
+        agent_exits_ok(mock_ws)
+        model_json_readable(mock_ws)
 
         # First poll tick observes RUNNING (non-terminal); second poll
         # tick observes TERMINATED/SUCCESS. Two distinct ``get_run``
@@ -2212,3 +2219,78 @@ class TestDispatchExtrasRoundTrip:
         assert persisted.get("business_name") == "test_co"
         assert persisted.get("parent_version_int") == 1
         assert isinstance(persisted.get("session_id_bigint"), int)
+
+
+class TestUninstallWarningThroughRunner:
+    """E-14: an uninstall whose agent could not drop every schema ends the
+    run ``completed`` with the version uninstalled, and the run returns the
+    warning."""
+
+    def test_partial_drop_completes_the_run_with_a_warning(
+        self, engine, session, business, mock_ws, patched_registry_full, monkeypatch
+    ):
+        from vibe_modeling.backend.routes._helpers import _build_run_out
+        from vibe_modeling.backend.services.operations import uninstall as uninstall_op
+        from vibe_modeling.backend.services.operations.uninstall import Uninstall
+
+        from ._lifecycle_fixtures import UNINSTALL_EXIT_PARTIAL, install_output
+
+        released = []
+        monkeypatch.setattr(uninstall_op, "set_deploy_status", lambda *a: released.append(a))
+        patched_registry_full["uninstall"] = Uninstall()
+        session.add(AgentConfig(job_id=999, job_name="dbx_vibe_modelling", warehouse_id="wh-1"))
+        mv = ModelVersion(
+            business_id=business, version=1, scope="ecm", status="completed",
+            deployment_status="deployed", uc_catalog="business_1", files_catalog="business_1",
+        )
+        session.add(mv)
+        session.flush()
+        for db in ("ecm_sales", "ecm_intake"):
+            session.add(Domain(version_id=mv.id, name=db, database_name=db))
+        session.commit()
+        session.refresh(mv)
+        mock_ws.schemas.list.side_effect = lambda catalog_name: [
+            SimpleNamespace(name=n) for n in ("ecm_sales", "ecm_intake", "_metamodel")
+        ]
+
+        started = MagicMock()
+        started.run_id = 555
+        started.response = MagicMock()
+        started.response.run_id = 555
+        mock_ws.jobs.run_now.return_value = started
+        mock_ws.jobs.get_run_output.return_value = install_output(UNINSTALL_EXIT_PARTIAL)
+        done = MagicMock()
+        done.state.life_cycle_state.value = "TERMINATED"
+        done.state.result_state.value = "SUCCESS"
+        done.state.state_message = ""
+        mock_ws.jobs.get_run.return_value = done
+
+        run = _make_run(session, business)
+        dag = Dag(
+            intent="uninstall",
+            steps=(
+                OperationStep(
+                    name="uninstall",
+                    params={
+                        "scope": "ecm", "business_name": "terra_nova", "deployment_catalog": "business_1",
+                        "schema_prefix": "ecm_", "model_version": 1, "version_id": mv.id,
+                    },
+                ),
+            ),
+        )
+        orch = Orchestrator(ws=mock_ws)
+        orch.start(run, dag, session)
+        orch.advance(run, session)
+        session.commit()
+        session.refresh(run)
+        session.refresh(mv)
+
+        assert run.status == "completed" and run.error_message == ""
+        assert mv.deployment_status == "uninstalled"
+        out = _build_run_out(run, mock_ws, session)
+        [warning] = out.warnings
+        assert "still there: ecm_intake, ecm_sales." in warning["message"]
+        assert "2 more schemas could not be identified." in warning["message"]
+        assert warning["severity"] == "warning" and warning["step_index"] == 0
+        # A partial uninstall releases the version's registry rows too.
+        assert released == [(mock_ws, "wh-1", "business_1", "terra_nova", 1, "ecm", "dry_run")]

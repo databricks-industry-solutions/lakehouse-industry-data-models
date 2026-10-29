@@ -13,7 +13,7 @@ import { domainNameFromPath } from "./section-tree-model";
 
 /** Origin filter group. "import" is a client-side group matching any `*_import`
  *  origin (v1 generates none, but the control is forward-compatible). */
-export type OriginFilter = "all" | "user" | "agent_next_vibe" | "import";
+export type OriginFilter = "all" | "user" | "agent_next_vibe" | "change_rejection" | "import";
 export type StateFilter = "all" | "active" | "consumed" | "needs_link_review" | "deprecated";
 export type PriorityFilter = "all" | "high" | "medium" | "low";
 export type SelectedFilter = "all" | "selected" | "not_selected";
@@ -84,11 +84,17 @@ export interface FiltersBarProps {
   showOrigin?: boolean;
   /** Show the selection facet. Hidden where there is no run selection (Feedback tab). */
   showSelected?: boolean;
+  /** Offer the Deprecated state. Hidden where the list holds active inputs only
+   *  (Feedback tab), so the facet cannot be chosen into an empty list. */
+  showDeprecated?: boolean;
   /** Domain names for the domain facet. The facet renders when non-empty or
    *  while a domain filter is active, so the active filter can always be cleared. */
   domains?: string[];
   /** Noun for the count hint ("inputs" on compose, "feedback" on the tab). */
   noun?: string;
+  /** Offer the "Rejected change" origin: only while the run change review,
+   *  which makes that feedback, is on (`useRunChangeReviewEnabled`). */
+  offerRejectedOrigin?: boolean;
 }
 
 export function FiltersBar({
@@ -98,8 +104,10 @@ export function FiltersBar({
   total,
   showOrigin = true,
   showSelected = true,
+  showDeprecated = true,
   domains,
   noun = "inputs",
+  offerRejectedOrigin = false,
 }: FiltersBarProps) {
   const domainOptions =
     filters.domain === "all" ||
@@ -133,6 +141,7 @@ export function FiltersBar({
             <SelectItem value="all">All origins</SelectItem>
             <SelectItem value="user">User</SelectItem>
             <SelectItem value="agent_next_vibe">AI suggestion</SelectItem>
+            {offerRejectedOrigin && <SelectItem value="change_rejection">Rejected change</SelectItem>}
             <SelectItem value="import">Import</SelectItem>
           </SelectContent>
         </Select>
@@ -147,7 +156,7 @@ export function FiltersBar({
           <SelectItem value="active">Active</SelectItem>
           <SelectItem value="consumed">Consumed</SelectItem>
           <SelectItem value="needs_link_review">Needs link review</SelectItem>
-          <SelectItem value="deprecated">Deprecated</SelectItem>
+          {showDeprecated && <SelectItem value="deprecated">Deprecated</SelectItem>}
         </SelectContent>
       </Select>
 
@@ -208,7 +217,7 @@ export function FiltersBar({
  *  `applyFilters`. */
 export function filtersToQueryParams(filters: InputFilters): {
   q?: string;
-  origin?: "user" | "agent_next_vibe";
+  origin?: "user" | "agent_next_vibe" | "change_rejection";
   status?: "active" | "deprecated";
   consumed?: boolean;
   needs_link_review?: boolean;
@@ -216,7 +225,7 @@ export function filtersToQueryParams(filters: InputFilters): {
 } {
   const params: ReturnType<typeof filtersToQueryParams> = {};
   if (filters.q.trim()) params.q = filters.q.trim();
-  if (filters.origin === "user" || filters.origin === "agent_next_vibe") {
+  if (filters.origin !== "all" && filters.origin !== "import") {
     params.origin = filters.origin;
   }
   if (filters.priority !== "all") params.priority = filters.priority;

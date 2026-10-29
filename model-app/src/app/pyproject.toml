@@ -1,6 +1,6 @@
 [project]
 name = "vibe-modeling"
-version = "0.8.0"
+version = "0.9.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"

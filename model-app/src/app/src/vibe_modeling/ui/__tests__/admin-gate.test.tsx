@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { jsonResponse } from "./helpers/first-run";
 
 import { AdminGate } from "@/components/settings/admin-gate";
 
@@ -20,13 +21,9 @@ function withRole(role: string | null) {
       const u = typeof url === "string" ? url : (url as URL).toString();
       if (u.includes("/api/user/role")) {
         if (role == null) {
-          return { ok: false, status: 500, json: async () => ({}) } as Response;
+          return jsonResponse(500, {}) as Response;
         }
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ role, display_name: role }),
-        } as Response;
+        return jsonResponse(200, { role, display_name: role }) as Response;
       }
       return { ok: true, status: 200, json: async () => ({}) } as Response;
     }),

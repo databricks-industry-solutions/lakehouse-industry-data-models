@@ -1,6 +1,6 @@
 """Shared fixtures for app tests.
 
-Creates a FastAPI TestClient that uses the real router.py routes with
+Creates a FastAPI TestClient over ``_test_app.make_test_app()`` with
 dependency overrides: in-memory SQLite for Lakebase, mock Databricks SDK,
 and a test AppConfig.
 """
@@ -9,6 +9,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "app", "src"))
+sys.path.insert(0, os.path.dirname(__file__))
 
 # Tests assume the production behaviour where forwarded headers are honoured —
 # they pass X-Forwarded-* values directly to TestClient. Force the C-08 gate
@@ -17,57 +18,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "a
 os.environ.setdefault("TRUST_FORWARDED_HEADERS", "1")
 
 import pytest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from databricks.sdk.errors import NotFound
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlmodel import SQLModel, Session, create_engine
 from sqlalchemy.pool import StaticPool
 
-from vibe_modeling.backend.router import router
-from vibe_modeling.backend import explorer as _explorer  # noqa: F401 — register explorer routes
-from vibe_modeling.backend import diagram as _diagram  # noqa: F401 — register diagram routes
-from vibe_modeling.backend.routes import (
-    _dev_fixtures as _routes_dev_fixtures,
-    assessments as _routes_assessments,
-    businesses as _routes_businesses,
-    config as _routes_config,
-    deployment as _routes_deployment,
-    import_root as _routes_import_root,
-    industries as _routes_industries,
-    industry_models as _routes_industry_models,
-    platform as _routes_platform,
-    sectors as _routes_sectors,
-    sources as _routes_sources,
-    taxonomy as _routes_taxonomy,
-    uc_browse as _routes_uc_browse,
-    versions as _routes_versions,
-    vibe_inputs as _routes_vibe_inputs,
-)
+from _test_app import make_test_app
 
-# Routers registered on the per-resource modules (plan task #33). The legacy
-# `router` still owns /runs/* — see backend/router.py.
-_SUB_ROUTERS = (
-    _routes_platform.router,
-    _routes_industries.router,
-    _routes_sectors.router,
-    _routes_sources.router,
-    _routes_taxonomy.router,
-    _routes_industry_models.router,
-    _routes_config.router,
-    _routes_businesses.router,
-    _routes_versions.router,
-    _routes_deployment.router,
-    _routes_uc_browse.router,
-    _routes_import_root.router,
-    _routes_dev_fixtures.router,
-    _routes_vibe_inputs.router,
-    _routes_assessments.config_router,
-    _routes_assessments.router,
-)
 from vibe_modeling.backend.core._config import AppConfig
 from vibe_modeling.backend.core._defaults import (
     _ConfigDependency,
@@ -98,6 +60,14 @@ def _outside_apps_runtime_by_default(monkeypatch):
     in-runtime path set it themselves with ``monkeypatch.setenv``.
     """
     monkeypatch.delenv("DATABRICKS_APP_NAME", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _run_tags_install_default_unset(monkeypatch):
+    """Unset ``VIBE_MODELING_RUN_TAGS_DEFAULT`` (a shell or a local ``.env``
+    loaded by ``core/_config`` may set it), so "unset means on" holds for the
+    seed and ``v_0_9_0_2``. Tests of the opt-out set it themselves."""
+    monkeypatch.delenv("VIBE_MODELING_RUN_TAGS_DEFAULT", raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -133,6 +103,28 @@ def _isolate_diagram_prefetch(monkeypatch):
     )
     yield
     _clear()
+
+
+@pytest.fixture(autouse=True)
+def _run_preflight_isolation(monkeypatch):
+    """Start every test with empty run pre-flight caches (the 60 s notebook
+    read, the parent-metamodel counts) and with the app able to use every
+    catalog: the capability check reads grants on its own workspace client,
+    which tests don't have. Tests of the capability rule patch
+    ``_uc_privileges.app_catalog_capabilities`` themselves."""
+    from vibe_modeling.backend.core import _uc_privileges
+    from vibe_modeling.backend.routes._helpers import clear_notebook_access_cache
+    from vibe_modeling.backend.services.orchestrator.preflight import clear_preflight_caches
+
+    full = _uc_privileges.CatalogCapability(create_schema=True, use_metamodel=True)
+    monkeypatch.setattr(
+        _uc_privileges, "app_catalog_capabilities", lambda names: [(n, full) for n in names],
+    )
+    clear_notebook_access_cache()
+    clear_preflight_caches()
+    yield
+    clear_notebook_access_cache()
+    clear_preflight_caches()
 
 
 @pytest.fixture(autouse=True)
@@ -223,10 +215,7 @@ def fk_client_fixture(fk_engine, mock_ws, config):
     tracker.stop_tracking = _MagicMock()
     tracker.get_active_runs = _MagicMock(return_value=[])
 
-    app = FastAPI()
-    app.include_router(router)
-    for _r in _SUB_ROUTERS:
-        app.include_router(_r)
+    app = make_test_app()
 
     def override_session():
         with Session(fk_engine) as session:
@@ -286,8 +275,9 @@ def config_fixture():
 
     Carries non-empty ``deployment_catalog`` and ``warehouse_id`` so the lazy
     AgentConfig bootstrap can be observed end-to-end in route tests. The
-    optional headless assessment is installed, so the ``/assess*`` route tests
-    reach their handlers; the gating tests override it.
+    optional headless assessment is installed and the hidden run change review
+    is on, so the ``/assess*`` and run-change route tests reach their
+    handlers; the gating tests override them.
     """
     return AppConfig(
         app_name="test",
@@ -295,6 +285,7 @@ def config_fixture():
         deployment_catalog="test_deployment_catalog",
         poll_interval_seconds=1,
         assessment_enabled=True,
+        run_change_review_enabled=True,
     )
 
 @pytest.fixture(name="mock_tracker")
@@ -333,11 +324,8 @@ def mock_tracker_fixture(engine, mock_ws):
 
 @pytest.fixture(name="client")
 def client_fixture(engine, mock_ws, config, mock_tracker):
-    """FastAPI TestClient using the real router with dependency overrides."""
-    app = FastAPI()
-    app.include_router(router)
-    for _r in _SUB_ROUTERS:
-        app.include_router(_r)
+    """FastAPI TestClient over the app's routers with dependency overrides."""
+    app = make_test_app()
 
     def override_session():
         with Session(engine) as session:
@@ -371,14 +359,18 @@ def client_with_agent_fixture(engine, mock_ws, config, mock_tracker):
             # Warehouse is a run-preflight requirement (Track 4): a fully
             # configured agent has one, so run-path tests seed it here.
             warehouse_id="test-warehouse-id",
+            # The identity boot records for the bundled agent, so the
+            # marker gates read 5.3.3 from the cache instead of exporting
+            # the (mocked) notebook.
+            installed_release_version="v0.9.0",
+            installed_agent_version="5.3.3",
+            installed_checked_path="/Workspace/test/notebook",
+            installed_checked_at=datetime.now(timezone.utc),
         )
         session.add(ac)
         session.commit()
 
-    app = FastAPI()
-    app.include_router(router)
-    for _r in _SUB_ROUTERS:
-        app.include_router(_r)
+    app = make_test_app()
 
     def override_session():
         with Session(engine) as session:
@@ -463,6 +455,13 @@ def seed_agent_config(engine) -> str:
             # Warehouse is a run-preflight requirement (Track 4): a fully
             # configured agent has one, so run-path tests seed it here.
             warehouse_id="test-warehouse-id",
+            # The identity boot records for the bundled agent, so the
+            # marker gates read 5.3.3 from the cache instead of exporting
+            # the (mocked) notebook.
+            installed_release_version="v0.9.0",
+            installed_agent_version="5.3.3",
+            installed_checked_path="/Workspace/test/notebook",
+            installed_checked_at=datetime.now(timezone.utc),
         )
         session.add(ac)
         session.commit()
@@ -515,7 +514,7 @@ def seed_failed_run(engine, seed_business) -> tuple[str, str]:
             status="failed",
             error_message="Something went wrong",
             databricks_run_id=12345,
-            parameters_json='{"operation": "new base model"}',
+            parameters_json='{"operation": "new base model", "deployment_catalog": "test_catalog"}',
         )
         session.add(run)
         session.commit()

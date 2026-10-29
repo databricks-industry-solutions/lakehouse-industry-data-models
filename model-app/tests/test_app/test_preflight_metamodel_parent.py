@@ -11,11 +11,15 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from sqlmodel import Session
 
 from vibe_modeling.backend.db_models import AgentConfig, Business, ModelVersion
 from vibe_modeling.backend.models import Intent, RunIn
-from vibe_modeling.backend.router import _check_metamodel_parent_version_present
+from vibe_modeling.backend.services.orchestrator.preflight import _check_metamodel_parent_version_present
+
+from _sql_fakes import response
 
 
 def _seed(engine, *, catalog="deploy_cat", warehouse="wh-1"):
@@ -34,10 +38,7 @@ def _seed(engine, *, catalog="deploy_cat", warehouse="wh-1"):
 
 def _ws_count(n: int) -> MagicMock:
     ws = MagicMock()
-    resp = MagicMock()
-    resp.status.error = None
-    resp.result.data_array = [[n]]
-    ws.statement_execution.execute_statement.return_value = resp
+    ws.statement_execution.execute_statement.return_value = response([[str(n)]])
     return ws
 
 
@@ -52,9 +53,9 @@ def test_gated_intent_zero_rows_blocks(engine):
         data = RunIn(intent=intent, version_id=parent_id)
         with Session(engine) as s:
             blocker = _check_metamodel_parent_version_present(
-                biz_id, data, _agent_config(), s, ws
+                biz_id, data, _agent_config(), s, ws, live=True
             )
-        assert blocker is not None, intent
+        assert blocker is not None and blocker.severity == "blocker", intent
         assert blocker.field_path != "business_id"  # → 400, not the 409 lock
         assert "metamodel" in blocker.message.lower()
 
@@ -65,7 +66,7 @@ def test_gated_intent_nonzero_rows_passes(engine):
     data = RunIn(intent=Intent.VIBE_ITERATE, version_id=parent_id)
     with Session(engine) as s:
         assert _check_metamodel_parent_version_present(
-            biz_id, data, _agent_config(), s, ws
+            biz_id, data, _agent_config(), s, ws, live=True
         ) is None
 
 
@@ -74,12 +75,11 @@ def test_non_gated_intents_never_blocked(engine):
     ws = _ws_count(0)  # even with zero rows
     for intent in (
         Intent.NEW_BASE_MODEL, Intent.INSTALL, Intent.UNINSTALL,
-        Intent.GENERATE_SAMPLES, Intent.REVERT,
     ):
         data = RunIn(intent=intent, version_id=parent_id)
         with Session(engine) as s:
             assert _check_metamodel_parent_version_present(
-                biz_id, data, _agent_config(), s, ws
+                biz_id, data, _agent_config(), s, ws, live=True
             ) is None, intent
 
 
@@ -90,7 +90,7 @@ def test_new_base_model_with_parent_version_id_not_triggered(engine):
     data = RunIn(intent=Intent.NEW_BASE_MODEL, parent_version_id=parent_id)
     with Session(engine) as s:
         assert _check_metamodel_parent_version_present(
-            biz_id, data, _agent_config(), s, ws
+            biz_id, data, _agent_config(), s, ws, live=True
         ) is None
     # And the SQL was never even issued for a non-gated intent.
     ws.statement_execution.execute_statement.assert_not_called()
@@ -103,7 +103,7 @@ def test_unconfigured_catalog_passes_through(engine):
     with Session(engine) as s:
         # No deployment catalog on the agent config → lenient pass-through.
         assert _check_metamodel_parent_version_present(
-            biz_id, data, _agent_config(catalog=""), s, ws
+            biz_id, data, _agent_config(catalog=""), s, ws, live=True
         ) is None
     ws.statement_execution.execute_statement.assert_not_called()
 
@@ -114,7 +114,7 @@ def test_unconfigured_warehouse_passes_through(engine):
     data = RunIn(intent=Intent.VIBE_ITERATE, version_id=parent_id)
     with Session(engine) as s:
         assert _check_metamodel_parent_version_present(
-            biz_id, data, _agent_config(), s, ws
+            biz_id, data, _agent_config(), s, ws, live=True
         ) is None
     ws.statement_execution.execute_statement.assert_not_called()
 
@@ -127,7 +127,7 @@ def test_preflight_uses_lower_comparison(engine):
     ws = _ws_count(1)
     data = RunIn(intent=Intent.VIBE_ITERATE, version_id=parent_id)
     with Session(engine) as s:
-        _check_metamodel_parent_version_present(biz_id, data, _agent_config(), s, ws)
+        _check_metamodel_parent_version_present(biz_id, data, _agent_config(), s, ws, live=True)
     call_args = ws.statement_execution.execute_statement.call_args
     sql = call_args.kwargs.get("statement", "")
     assert "LOWER(business)" in sql, (
@@ -191,7 +191,7 @@ def test_seed_to_preflight_roundtrip_invariant(engine):
     ws = _ws_count(1)
     data = RunIn(intent=Intent.VIBE_ITERATE, version_id=parent_id)
     with Session(engine) as s:
-        result = _check_metamodel_parent_version_present(biz_id, data, _agent_config(), s, ws)
+        result = _check_metamodel_parent_version_present(biz_id, data, _agent_config(), s, ws, live=True)
     assert result is None, "preflight with count=1 must return no blocker (row found)"
 
     sql = ws.statement_execution.execute_statement.call_args.kwargs.get("statement", "")
@@ -217,6 +217,35 @@ def test_query_error_is_lenient(engine):
     ws.statement_execution.execute_statement.side_effect = RuntimeError("boom")
     data = RunIn(intent=Intent.VIBE_ITERATE, version_id=parent_id)
     with Session(engine) as s:
-        assert _check_metamodel_parent_version_present(
-            biz_id, data, _agent_config(), s, ws
-        ) is None
+        issue = _check_metamodel_parent_version_present(
+            biz_id, data, _agent_config(), s, ws, live=True
+        )
+    # Lenient: a count that could not be read is a "couldn't check" warning.
+    assert issue is not None and issue.severity == "warning"
+
+
+@pytest.mark.parametrize("answer", [
+    response(error="[INSUFFICIENT_PERMISSIONS] no SELECT on business"),
+    response(state="CANCELED", statement_id="s1"),
+    response(error="[TABLE_OR_VIEW_NOT_FOUND] `deploy_cat`.`_metamodel`.`business`"),
+], ids=["failed", "timeout", "missing_table"])
+def test_an_unreadable_count_is_a_warning_never_a_blocker(engine, answer):
+    """Lenient by design: only a count that came back zero blocks. A failed
+    count, one the server cancelled at the end of its wait, or a missing
+    business table is a "couldn't check" warning, and nothing else is called
+    (the server cancels; no client cancel, no extra read)."""
+    biz_id, parent_id = _seed(engine)
+    ws = MagicMock()
+    ws.statement_execution.execute_statement.return_value = answer
+    data = RunIn(intent=Intent.VIBE_ITERATE, version_id=parent_id)
+    with Session(engine) as s:
+        issue = _check_metamodel_parent_version_present(
+            biz_id, data, _agent_config(), s, ws, live=True
+        )
+    assert issue is not None and issue.severity == "warning"
+    assert "Couldn't check" in issue.message
+    kwargs = ws.statement_execution.execute_statement.call_args.kwargs
+    assert kwargs["wait_timeout"] == "30s"
+    assert kwargs["on_wait_timeout"].value == "CANCEL"
+    ws.statement_execution.cancel_execution.assert_not_called()
+    ws.statement_execution.get_statement.assert_not_called()

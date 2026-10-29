@@ -3,11 +3,11 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
+from _test_app import make_test_app
 from vibe_modeling.backend.core._config import AppConfig
 from vibe_modeling.backend.core._defaults import _ConfigDependency
 from vibe_modeling.backend.core._identity import LOCAL_DEV_IDENTITY
@@ -70,8 +70,7 @@ def _make_tc(
     the AgentConfig row carries a model service unless told otherwise. Use as
     `with _make_tc() as c:` so the event loop (and background tasks) outlive
     each request."""
-    app = FastAPI()
-    app.include_router(taxonomy_routes.router)
+    app = make_test_app(taxonomy_routes.router)
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     SQLModel.metadata.create_all(engine)
     with Session(engine) as s:
@@ -177,6 +176,8 @@ def test_headerless_inside_apps_is_401_and_creates_nothing(monkeypatch):
         assert c.get("/api/taxonomy/drafts/x").status_code == 401
         assert c.post("/api/taxonomy/drafts/x/cancel").status_code == 401
         assert c.post("/api/taxonomy/drafts/x/parts/tree/retry").status_code == 401
+        r = c.get("/api/taxonomy/saved")
+        assert r.status_code == 401 and r.json()["detail"]["error"] == "identity_missing"
         assert store._drafts == {}
         assert llm.probes == 0
         did =c.post("/api/taxonomy/drafts", json=INTAKE_ACME, headers=A).json()["draft_id"]
@@ -256,8 +257,10 @@ def test_llm_client_uses_short_timeout_and_one_second_retry_budget(monkeypatch):
             self.config = config
             made.append(self)
 
-    monkeypatch.setattr(llm_module, "Config", FakeConfig)
-    monkeypatch.setattr(llm_module, "WorkspaceClient", FakeWS)
+    from vibe_modeling.backend import _workspace_clients
+
+    monkeypatch.setattr(_workspace_clients, "Config", FakeConfig)
+    monkeypatch.setattr(_workspace_clients, "WorkspaceClient", FakeWS)
     monkeypatch.setattr(llm_module, "_LLM_WS", None)
     settings = taxonomy_routes.TaxonomyLLMSettings(SERVICE, 6)
     llm = taxonomy_routes.get_taxonomy_llm(settings)
@@ -280,6 +283,9 @@ ALL_ROUTES = [
     ("POST", "/api/taxonomy/condense", CONDENSE_BODY),
     ("POST", "/api/taxonomy/compile", COMPILE_BODY),
     ("GET", "/api/taxonomy/example", None),
+    ("GET", "/api/taxonomy/saved", None),
+    ("PUT", "/api/taxonomy/saved", {"revision": 0, "step": 0, "intake": INTAKE}),
+    ("DELETE", "/api/taxonomy/saved", None),
 ]
 LLM_ROUTES = [
     ("POST", "/api/taxonomy/drafts", INTAKE),
@@ -337,7 +343,7 @@ def test_retry_of_an_unknown_part_is_400_before_any_probe():
     assert llm.probes == 1  # only the create's probe
 
 
-def test_retry_refused_by_the_probe_is_422_and_changes_nothing():
+def test_retry_refused_by_the_probe_is_400_and_changes_nothing():
     llm = FakeLLM(fail_once={"terminology"})
     with _make_tc(llm=llm) as c:
         did = c.post("/api/taxonomy/drafts", json=INTAKE, headers=A).json()["draft_id"]
@@ -345,7 +351,8 @@ def test_retry_refused_by_the_probe_is_422_and_changes_nothing():
         MODEL_SERVICE_ACCESS.clear()
         llm.probe_result = ProbeResult("denied", "probe said denied")
         r = c.post(f"/api/taxonomy/drafts/{did}/parts/terminology/retry", headers=A)
-        assert r.status_code == 422
+        assert r.status_code == 400
+        assert r.json()["detail"]["error"] == "model_service_refused"
         assert r.json()["detail"]["message"] == "probe said denied"
         assert c.get(f"/api/taxonomy/drafts/{did}", headers=A).json()["parts"]["terminology"]["status"] == "failed"
 
@@ -380,11 +387,10 @@ def test_failed_probe_refuses_with_its_message_before_any_draft(status, method, 
     store, llm = DraftStore(), FakeLLM(probe=(status, f"probe said {status}"))
     with _make_tc(store=store, llm=llm) as c:
         r = _call(c, method, path, body)
-    assert r.status_code == 422
-    detail = r.json()["detail"]
-    assert detail["error"] == "config_missing"
-    assert detail["message"] == f"probe said {status}"
-    assert [m["key"] for m in detail["missing"]] == ["taxonomy_llm"]
+    assert r.status_code == 400
+    assert r.json()["detail"] == {
+        "error": "model_service_refused", "key": "taxonomy_llm", "status": status, "message": f"probe said {status}",
+    }
     assert store._drafts == {}
     assert MODEL_SERVICE_ACCESS.last_check(SERVICE).status == status
     assert not MODEL_SERVICE_ACCESS.is_cached(SERVICE)
@@ -484,8 +490,162 @@ def test_non_admin_gets_403_before_config_checks():
 
 
 def test_router_is_registered_in_app():
-    # app.routes only exposes a mount here, so check the registration in source.
-    from pathlib import Path
+    from vibe_modeling.backend._routers import ROUTERS
 
-    src = (Path(taxonomy_routes.__file__).parent.parent / "app.py").read_text()
-    assert "taxonomy.router" in src
+    assert taxonomy_routes.router in ROUTERS
+
+
+# --- seeded drafts (POST /taxonomy/drafts with seed_tree / seed_sections) -------
+
+
+class CountingLLM(FakeLLM):
+    def __init__(self):
+        super().__init__()
+        self.calls: list[str] = []
+
+    def complete_json(self, system, user, model):
+        self.calls.append("tree" if model is TaxonomyTree else "section")
+        return super().complete_json(system, user, model)
+
+
+def test_seeded_create_makes_no_tree_call_and_skips_seeded_sections():
+    llm = CountingLLM()
+    body = {
+        **INTAKE_ACME,
+        "seed_tree": EX.tree.model_dump(),
+        "seed_sections": {"company": EX.sections["company"].model_dump()},
+    }
+    with _make_tc(llm=llm) as c:
+        r = c.post("/api/taxonomy/drafts", json=body, headers=A)
+        assert r.status_code == 200, r.text
+        out = _poll(c, r.json()["draft_id"])
+    assert out["status"] == "done"
+    assert out["parts"]["tree"]["tree"] == EX.tree.model_dump()
+    assert out["parts"]["company"]["section"] == EX.sections["company"].model_dump()
+    assert llm.calls == ["section"] * (len(SECTION_KEYS) - 1)
+
+
+def test_seed_with_an_unknown_section_key_is_422(tc):
+    body = {**INTAKE_ACME, "seed_sections": {"nope": EX.sections["company"].model_dump()}}
+    r = tc.post("/api/taxonomy/drafts", json=body, headers=A)
+    assert r.status_code == 422
+
+
+# --- saved wizard (GET / PUT / DELETE /taxonomy/saved) ---------------------------
+
+
+def _wizard(revision=0, **kw):
+    return {"revision": revision, "step": 1, "intake": INTAKE_ACME, **kw}
+
+
+def test_saved_wizard_round_trip(tc):
+    r = tc.get("/api/taxonomy/saved", headers=A)
+    assert r.status_code == 200 and r.json() == {"saved": None}
+
+    body = _wizard(step=2, strictness="guided", tree=EX.tree.model_dump(),
+                   sections={"company": EX.sections["company"].model_dump()})
+    r = tc.put("/api/taxonomy/saved", json=body, headers=A)
+    assert r.status_code == 200, r.text
+    saved = r.json()
+    assert (saved["revision"], saved["step"], saved["strictness"]) == (1, 2, "guided")
+    assert saved["tree"] == EX.tree.model_dump()
+    assert saved["updated_at"].endswith(("+00:00", "Z"))
+
+    r = tc.get("/api/taxonomy/saved", headers=A)
+    assert r.status_code == 200 and r.json() == {"saved": saved}
+
+    r = tc.delete("/api/taxonomy/saved", headers=A)
+    assert r.status_code == 200 and r.json() == {"discarded": True}
+    r = tc.get("/api/taxonomy/saved", headers=A)
+    assert r.status_code == 200 and r.json() == {"saved": None}
+    r = tc.delete("/api/taxonomy/saved", headers=A)
+    assert r.status_code == 200 and r.json() == {"discarded": False}
+
+
+def test_saved_wizard_stale_revision_is_409_and_keeps_the_newer_save(tc):
+    assert tc.put("/api/taxonomy/saved", json=_wizard(0, step=1), headers=A).status_code == 200
+    assert tc.put("/api/taxonomy/saved", json=_wizard(1, step=2), headers=A).status_code == 200
+    r = tc.put("/api/taxonomy/saved", json=_wizard(1, step=3), headers=A)
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["error"] == "stale_revision" and detail["revision"] == 2
+    assert detail["message"] == taxonomy_routes.STALE_REVISION_MESSAGE
+    saved = tc.get("/api/taxonomy/saved", headers=A).json()["saved"]
+    assert (saved["revision"], saved["step"]) == (2, 2)
+
+
+def test_saved_wizard_is_per_user(tc):
+    assert tc.put("/api/taxonomy/saved", json=_wizard(0, step=3), headers=A).status_code == 200
+    r = tc.get("/api/taxonomy/saved", headers=B)
+    assert r.status_code == 200 and r.json() == {"saved": None}
+    r = tc.delete("/api/taxonomy/saved", headers=B)
+    assert r.status_code == 200 and r.json() == {"discarded": False}
+    # B's first save does not collide with A's row.
+    r = tc.put("/api/taxonomy/saved", json=_wizard(0, step=1), headers=B)
+    assert r.status_code == 200 and r.json()["revision"] == 1
+    assert tc.get("/api/taxonomy/saved", headers=A).json()["saved"]["step"] == 3
+
+
+def test_saved_wizard_rejects_an_invalid_document(tc):
+    r = tc.put("/api/taxonomy/saved", json=_wizard(step=9), headers=A)
+    assert r.status_code == 422
+    r = tc.put("/api/taxonomy/saved", json=_wizard(tree={"domains": []}), headers=A)
+    assert r.status_code == 422
+    assert tc.get("/api/taxonomy/saved", headers=A).json() == {"saved": None}
+
+
+@pytest.mark.parametrize("role", [UserRole.MODELER, UserRole.VIEWER])
+def test_non_business_admin_gets_403_on_the_saved_wizard(role):
+    with _make_tc(role=role) as c:
+        assert c.get("/api/taxonomy/saved", headers=A).status_code == 403
+        assert c.put("/api/taxonomy/saved", json=_wizard(), headers=A).status_code == 403
+        assert c.delete("/api/taxonomy/saved", headers=A).status_code == 403
+
+
+def test_saved_wizard_works_without_a_model_service():
+    with _make_tc(model_service="") as c:
+        r = c.put("/api/taxonomy/saved", json=_wizard(), headers=A)
+        assert r.status_code == 200, r.text
+        assert c.get("/api/taxonomy/saved", headers=A).json()["saved"]["revision"] == 1
+
+
+def test_fully_seeded_create_makes_no_test_call_and_no_model_call():
+    llm = CountingLLM()
+    body = {
+        **INTAKE_ACME, "seed_tree": EX.tree.model_dump(),
+        "seed_sections": {k: v.model_dump() for k, v in EX.sections.items()},
+    }
+    with _make_tc(llm=llm) as c:
+        r = c.post("/api/taxonomy/drafts", json=body, headers=A)
+        assert r.status_code == 200, r.text
+        out = _poll(c, r.json()["draft_id"])
+    assert out["status"] == "done"
+    assert llm.probes == 0 and llm.calls == []
+
+
+def test_partly_seeded_create_still_runs_the_test_call():
+    llm = CountingLLM()
+    with _make_tc(llm=llm) as c:
+        r = c.post("/api/taxonomy/drafts", json={**INTAKE_ACME, "seed_tree": EX.tree.model_dump()}, headers=A)
+        assert r.status_code == 200, r.text
+        _poll(c, r.json()["draft_id"])
+    assert llm.probes == 1
+
+
+def test_a_save_after_the_save_was_cleared_says_so(tc):
+    assert tc.put("/api/taxonomy/saved", json=_wizard(0), headers=A).status_code == 200
+    assert tc.delete("/api/taxonomy/saved", headers=A).status_code == 200
+    r = tc.put("/api/taxonomy/saved", json=_wizard(1), headers=A)
+    assert r.status_code == 409
+    detail = r.json()["detail"]
+    assert detail["revision"] == 0 and detail["message"] == taxonomy_routes.SAVE_CLEARED_MESSAGE
+
+
+def test_an_oversized_wizard_is_413_and_writes_nothing(tc, monkeypatch):
+    from vibe_modeling.backend.taxonomy import saved_state
+
+    monkeypatch.setattr(saved_state, "MAX_DOCUMENT_BYTES", 2_000)
+    r = tc.put("/api/taxonomy/saved", json=_wizard(intake={**INTAKE_ACME, "pasted_doc": "x" * 3_000}), headers=A)
+    assert r.status_code == 413
+    assert "too large to save" in r.json()["detail"]
+    assert tc.get("/api/taxonomy/saved", headers=A).json() == {"saved": None}

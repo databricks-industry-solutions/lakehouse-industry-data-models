@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { AlertTriangle } from "lucide-react";
-import { useUserRole } from "@/lib/hooks";
+import { useUserRole, isBusinessAdmin } from "@/lib/hooks";
 
 /** Which privilege level a gated Settings tab requires. */
 type AdminScope = "app" | "business";
@@ -14,10 +14,10 @@ type AdminScope = "app" | "business";
  * the section renders a "Requires admin access" notice and a
  * `<fieldset disabled>` - which natively disables every input, select, and
  * button inside, so the whole tab becomes view-only in one place instead of
- * per-field wiring. When the role is unknown (still loading, RBAC disabled so
+ * per-field wiring. When the role is unknown (still loading, roles disabled so
  * everyone resolves to app_admin, or the endpoint errored) the section stays
  * fully editable: gating only ever tightens on a positive non-admin signal, so
- * the default deploy (RBAC off) and the offline/error cases never lock a user
+ * the current app (roles off) and the offline/error cases never lock a user
  * out.
  *
  * `scope="app"` gates to app admins (Agent, Platform, Sources);
@@ -36,7 +36,7 @@ export function AdminGate({
     role != null &&
     (scope === "app"
       ? role !== "app_admin"
-      : role !== "app_admin" && role !== "business_admin");
+      : !isBusinessAdmin(role));
 
   return (
     <fieldset disabled={readOnly} className="m-0 min-w-0 space-y-4 border-0 p-0">

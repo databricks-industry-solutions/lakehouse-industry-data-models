@@ -1,24 +1,56 @@
 import type { IndustryOut } from "@/lib/api";
 
-/**
- * Minimal shape needed to resolve an industry display name. Accepts the
- * full ``IndustryOut`` rows from ``useListIndustriesSuspense`` (or any
- * subset carrying ``name`` + ``short_name``).
- */
-export type IndustryLike = Pick<IndustryOut, "name" | "short_name">;
+/** The fields industry resolution reads; ``IndustryOut`` rows carry them. */
+export type IndustryLike = Pick<
+  IndustryOut,
+  "name" | "short_name" | "is_active" | "is_auto_created"
+>;
 
 /**
- * Canonicalize an industry string for case-insensitive, hyphen↔space
- * insensitive comparison: lowercased, hyphens/underscores → spaces,
- * collapsed whitespace, trimmed. ``"Food-And-Beverage "`` and
- * ``"food and beverage"`` both canonicalize to ``"food and beverage"``.
+ * The industry slug rule of ``backend/industry_resolve.py``: lowercase, every
+ * run of non-alphanumerics becomes one hyphen, hyphens trimmed.
+ * ``"Energy - Utilities"`` and ``"energy_utilities"`` both give
+ * ``"energy-utilities"``. Both sides test against
+ * ``tests/fixtures/industry_slug_fixture.json``.
  */
-function canonical(value: string): string {
-  return value
+export function industrySlug(value: string | null | undefined): string {
+  return (value ?? "")
     .trim()
     .toLowerCase()
-    .replace(/[-_]+/g, " ")
-    .replace(/\s+/g, " ");
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * The backend's ``matching_industries``: every active industry whose ``name``
+ * or ``short_name`` slug equals the slug of ``text``; empty for an empty slug.
+ */
+export function matchingIndustries<T extends IndustryLike>(
+  industries: readonly T[] | null | undefined,
+  text: string | null | undefined,
+): T[] {
+  const slug = industrySlug(text);
+  if (!slug) return [];
+  return (industries ?? []).filter(
+    (i) =>
+      i.is_active &&
+      (industrySlug(i.name) === slug || industrySlug(i.short_name) === slug),
+  );
+}
+
+/**
+ * The backend's ``pick_industry``: the one industry of ``matchingIndustries``.
+ * A curated industry wins over an auto-created one; two matches of the same
+ * kind are ambiguous and give ``undefined``, as do no match and an empty slug.
+ */
+export function pickIndustry<T extends IndustryLike>(
+  industries: readonly T[] | null | undefined,
+  text: string | null | undefined,
+): T | undefined {
+  const matches = matchingIndustries(industries, text);
+  const curated = matches.filter((i) => !i.is_auto_created);
+  const best = curated.length > 0 ? curated : matches;
+  return best.length === 1 ? best[0] : undefined;
 }
 
 const LOWER_WORDS = new Set([
@@ -71,15 +103,12 @@ function looksLikeSlug(value: string): boolean {
 
 /**
  * Resolve a stored ``industry_alignment`` value to a user-facing display
- * name. Render-time only — never mutates stored data.
+ * name. Render-time only; never mutates stored data.
  *
- * Resolution order:
- *  1. If ``value`` matches a catalog entry's ``name`` or ``short_name``
- *     (case-insensitive, hyphen↔space insensitive), return that entry's
- *     curated ``name`` — humanized if the catalog name is itself a raw slug
- *     (auto-created import industries store a slug as their name).
- *  2. Otherwise title-case the raw hyphenated/underscored slug
- *     (``"food-and-beverage"`` → ``"Food and Beverage"``).
+ *  1. The catalog industry ``pickIndustry`` resolves it to gives its
+ *     ``name``, humanized when that name is itself a raw slug.
+ *  2. Otherwise the raw hyphenated/underscored slug is title-cased
+ *     (``"food-and-beverage"`` -> ``"Food and Beverage"``).
  *
  * Falsy / blank input is returned as-is so callers can guard rendering.
  */
@@ -89,13 +118,23 @@ export function industryDisplayName(
 ): string {
   if (!value || !value.trim()) return value ?? "";
 
-  const target = canonical(value);
-  const match = (industries ?? []).find(
-    (i) => canonical(i.name) === target || canonical(i.short_name) === target,
-  );
+  const match = pickIndustry(industries, value);
   if (match) {
     return looksLikeSlug(match.name) ? titleCaseSlug(match.name) : match.name;
   }
 
   return titleCaseSlug(value);
+}
+
+/**
+ * "<industry> v<n>" for the industry a business was kickstarted from, or
+ * "an industry" when its row is gone (``source_industry_id`` is cleared when
+ * the industry is deleted, and the list may not have loaded yet).
+ */
+export function kickstartSourceLabel(
+  sourceName: string | null | undefined,
+  sourceVersion: number | null | undefined,
+): string {
+  if (!sourceName) return "an industry";
+  return sourceVersion != null ? `${sourceName} v${sourceVersion}` : sourceName;
 }

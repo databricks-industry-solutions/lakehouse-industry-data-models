@@ -5,18 +5,41 @@ Three workspace groups define permissions:
   - vibe-business-admins: manage businesses, approve syncs, manage model versions
   - vibe-modelers: navigate, run vibes, provide feedback
 
-Users not in any group get read-only access.
+With RBAC on, users in none of these groups resolve to ``VIEWER``: read-only,
+except that the 16 ``vibe_inputs`` write routes still accept them until
+``VIBE_INPUT_ROLE_GUARDS_ENFORCED`` is turned on (see the two switches below).
 
 The role resolver queries SCIM group membership via the SP client on first
 request and caches the result for the session duration (per-request scope
 in FastAPI means per HTTP request, which is fine — no mid-request user switch).
+
+Two kinds of guard:
+  - Enforced guards (``require_admin``, ``require_business_admin``,
+    ``require_modeler``) answer 403 when the caller's role is below theirs.
+  - Declared guards (``declared_role``) name the role a route needs but answer
+    403 only while ``VIBE_INPUT_ROLE_GUARDS_ENFORCED`` is True. While it is
+    False they let every caller through and log at debug level when a caller
+    would have been refused. The ``vibe_inputs`` routes use them until role
+    assignment exists; setting the constant to True enforces them with no
+    route change.
+
+The two switches combine:
+  - ``RBAC_ENABLED`` False (hard-off, see below): every caller resolves to
+    ``APP_ADMIN``, so every guard passes whatever the constant says.
+  - RBAC on, constant False: enforced guards refuse by group role; declared
+    guards pass and log.
+  - RBAC on, constant True: every guard refuses a caller whose group role
+    is below its own.
+  - RBAC on and the request carries no user identity header (local dev, no
+    proxy): the caller resolves to ``APP_ADMIN``, so every guard passes
+    whatever the constant says. Behind the Apps proxy the header is always set.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 from enum import Enum
+from collections.abc import Callable
 from typing import Annotated, TypeAlias
 
 from databricks.sdk import WorkspaceClient
@@ -27,9 +50,13 @@ from ._identity import current_user_identity
 
 logger = logging.getLogger(__name__)
 
-# Feature flag: set VIBE_MODELING_RBAC_ENABLED=true to enforce group-based roles.
-# When disabled (default), all users are treated as APP_ADMIN.
-RBAC_ENABLED = os.environ.get("VIBE_MODELING_RBAC_ENABLED", "").lower() == "true"
+# Group-based roles are disabled pending a product redesign: every caller resolves to APP_ADMIN, and no
+# environment variable turns them on. The role code below stays for that redesign.
+RBAC_ENABLED = False
+
+# Whether ``declared_role`` guards refuse callers below their role (see the
+# module docstring). False until role assignment is implemented.
+VIBE_INPUT_ROLE_GUARDS_ENFORCED = False
 
 
 class UserRole(str, Enum):
@@ -119,28 +146,82 @@ UserRoleDependency: TypeAlias = Annotated[UserRole, Depends(resolve_user_role)]
 # Permission guards — use as FastAPI dependencies
 # ---------------------------------------------------------------------------
 
+_ROLE_RANK = {
+    UserRole.VIEWER: 0,
+    UserRole.MODELER: 1,
+    UserRole.BUSINESS_ADMIN: 2,
+    UserRole.APP_ADMIN: 3,
+}
+
+_DENIED_DETAIL = {
+    UserRole.APP_ADMIN: "App admin access required",
+    UserRole.BUSINESS_ADMIN: "Business admin access required",
+    UserRole.MODELER: "Modeler access required",
+}
+
+
+def _has_role(role: UserRole, min_role: UserRole) -> bool:
+    return _ROLE_RANK[role] >= _ROLE_RANK[min_role]
+
+
+def _deny(min_role: UserRole) -> HTTPException:
+    return HTTPException(status_code=403, detail=_DENIED_DETAIL[min_role])
+
+
 def require_admin(role: UserRoleDependency) -> UserRole:
     """Guard: only app admins."""
-    if role != UserRole.APP_ADMIN:
-        raise HTTPException(status_code=403, detail="App admin access required")
+    if not _has_role(role, UserRole.APP_ADMIN):
+        raise _deny(UserRole.APP_ADMIN)
     return role
 
 
 def require_business_admin(role: UserRoleDependency) -> UserRole:
     """Guard: app admins or business admins."""
-    if role not in (UserRole.APP_ADMIN, UserRole.BUSINESS_ADMIN):
-        raise HTTPException(status_code=403, detail="Business admin access required")
+    if not _has_role(role, UserRole.BUSINESS_ADMIN):
+        raise _deny(UserRole.BUSINESS_ADMIN)
     return role
 
 
 def require_modeler(role: UserRoleDependency) -> UserRole:
     """Guard: app admins, business admins, or modelers."""
-    if role == UserRole.VIEWER:
-        raise HTTPException(status_code=403, detail="Modeler access required")
+    if not _has_role(role, UserRole.MODELER):
+        raise _deny(UserRole.MODELER)
     return role
+
+
+def declared_role(min_role: UserRole) -> Callable[[UserRole], UserRole]:
+    """Build a declared guard for ``min_role`` (see the module docstring).
+
+    The guard resolves the caller's role through ``resolve_user_role`` and
+    returns it. It refuses a caller below ``min_role`` only while
+    ``VIBE_INPUT_ROLE_GUARDS_ENFORCED`` is True; otherwise it logs the would-be
+    refusal at debug level. ``declared_min_role`` on the guard lets the RBAC
+    coverage test tell declared guards from enforced ones.
+    """
+
+    def guard(role: UserRoleDependency) -> UserRole:
+        if not _has_role(role, min_role):
+            if VIBE_INPUT_ROLE_GUARDS_ENFORCED:
+                raise _deny(min_role)
+            logger.debug(
+                "Declared guard would refuse role %s (needs %s); not enforced",
+                role.value,
+                min_role.value,
+            )
+        return role
+
+    guard.__name__ = f"declared_{min_role.value}"
+    guard.declared_min_role = min_role  # type: ignore[attr-defined]
+    return guard
+
+
+require_modeler_declared = declared_role(UserRole.MODELER)
+require_viewer_declared = declared_role(UserRole.VIEWER)
 
 
 # Dependency type aliases for use in route signatures
 RequireAdmin: TypeAlias = Annotated[UserRole, Depends(require_admin)]
 RequireBusinessAdmin: TypeAlias = Annotated[UserRole, Depends(require_business_admin)]
 RequireModeler: TypeAlias = Annotated[UserRole, Depends(require_modeler)]
+RequireModelerDeclared: TypeAlias = Annotated[UserRole, Depends(require_modeler_declared)]
+RequireViewerDeclared: TypeAlias = Annotated[UserRole, Depends(require_viewer_declared)]

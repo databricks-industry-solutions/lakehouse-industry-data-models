@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { MarkdownEditor } from "@/components/ui/markdown-editor";
 import {
   Command,
@@ -32,24 +33,40 @@ import {
 import { VolumePicker } from "@/components/import/volume-picker";
 import { ImportPreviewCard } from "@/components/import/import-dialog";
 import {
+  ImportScopeChoice,
+  importScope,
+  importScopeBody,
+  initialScopeChoice,
+  type ImportScope,
+} from "@/components/import/import-scope-choice";
+import {
   analyzeImportRoot,
   createBusinessAndExecuteImport,
   getImportPreview,
   getImportPreviewKey,
+  listIndustriesKey,
   useListIndustries,
   type ImportAnalyzeOut,
   type ImportPreviewOut,
   type IndustryOut,
 } from "@/lib/api";
 import { invalidateBusinessLists } from "@/lib/business-cache";
-import { parse409 } from "@/lib/api-error";
-import { notifyConfigMissing } from "@/lib/notify";
+import { apiErrorMessage, parse409 } from "@/lib/api-error";
+import { notifyConfigMissing, notifyWarnings } from "@/lib/notify";
+import { industrySlug, matchingIndustries, pickIndustry } from "@/lib/industry";
 
 interface Props {
   trigger: React.ReactNode;
 }
 
 const SUMMARY_MAX_LENGTH = 2000;
+
+/** The 409 body when the alignment would share its slug with catalog industries. */
+interface IndustryAmbiguousBody {
+  error: "industry_ambiguous";
+  industries: { id: string; name: string }[];
+  message: string;
+}
 
 /** Shape of the 409 conflict body the backend returns on a name clash. */
 interface BusinessAlreadyExistsBody {
@@ -81,6 +98,11 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [nameConflict, setNameConflict] = useState<string | null>(null);
   const [industryOpen, setIndustryOpen] = useState(false);
+  const [addIndustry, setAddIndustry] = useState(false);
+  // The industry the backend resolved or the user picked from the list; typing
+  // clears it, so the typed text resolves again.
+  const [selectedIndustryId, setSelectedIndustryId] = useState<string | null>(null);
+  const [chosenScope, setChosenScope] = useState<ImportScope | null>(null);
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -108,15 +130,28 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
     () => (industriesResp?.data ?? []).filter((i) => i.is_active),
     [industriesResp],
   );
-
-  /** Resolve an alignment string (slug or name) to its catalog display name. */
-  const resolveIndustryDisplay = (raw: string): string => {
-    if (!raw) return "";
-    const v = raw.trim().toLowerCase();
-    const match = activeIndustries.find(
-      (i) => i.short_name.toLowerCase() === v || i.name.toLowerCase() === v,
-    );
-    return match ? match.name : raw;
+  // The picked industry, else the backend's rule (``industry_resolve``) over
+  // the typed alignment. Sending the id keeps a pick whose name is ambiguous.
+  const matchedIndustry =
+    activeIndustries.find((i) => i.id === selectedIndustryId) ??
+    pickIndustry(activeIndustries, industryAlignment);
+  // Several active industries share the alignment's slug: the user picks one;
+  // adding another would match nothing either.
+  const ambiguousIndustries = matchedIndustry
+    ? []
+    : matchingIndustries(activeIndustries, industryAlignment);
+  const canAddIndustry =
+    !matchedIndustry && ambiguousIndustries.length === 0 && industrySlug(industryAlignment) !== "";
+  const pickIndustryFromList = (ind: { id: string; name: string }) => {
+    setIndustryAlignment(ind.name);
+    setSelectedIndustryId(ind.id);
+    setAddIndustry(false);
+    setError(null);
+  };
+  const typeIndustry = (value: string) => {
+    setIndustryAlignment(value);
+    setSelectedIndustryId(null);
+    if (industrySlug(value) === "") setAddIndustry(false);
   };
 
   const analyzeMutation = useMutation({
@@ -126,14 +161,20 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
       setAnalysis(out);
       setError(null);
       setNameConflict(null);
+      setChosenScope(initialScopeChoice(out));
       const digest = out.business_digest;
       setBusinessName(digest?.business_name ?? "");
-      setIndustryAlignment(resolveIndustryDisplay(digest?.industry_alignment ?? ""));
+      // The backend resolved the alignment; show its catalog name when the
+      // list has it, the raw alignment otherwise.
+      const resolved = activeIndustries.find((i) => i.id === digest?.industry_id);
+      setIndustryAlignment(resolved?.name ?? digest?.industry_alignment ?? "");
+      setSelectedIndustryId(digest?.industry_id ?? null);
+      setAddIndustry(false);
       setDescription(digest?.description ?? "");
       setBusinessVibes(digest?.business_vibes ?? "");
     },
     onError: (err: unknown) => {
-      setError(err instanceof Error ? err.message : "Failed to analyze");
+      setError(apiErrorMessage(err, "Failed to analyze"));
       setAnalysis(null);
     },
   });
@@ -144,10 +185,14 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
         volume_path: volumePath,
         business_name_override: businessName || null,
         industry_alignment_override: industryAlignment,
+        industry_id: matchedIndustry?.id ?? null,
+        create_industry: addIndustry && canAddIndustry,
         description_override: description,
         business_vibes_override: businessVibes,
+        scope: importScopeBody(analysis, chosenScope),
       }),
     onSuccess: (response) => {
+      notifyWarnings("Imported with warnings", response.data.warnings);
       invalidateBusinessLists(queryClient);
       reset();
       setOpen(false);
@@ -172,7 +217,16 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
       if (notifyConfigMissing(err)) {
         return;
       }
-      setError(err instanceof Error ? err.message : "Create + import failed");
+      const ambiguous = parse409<IndustryAmbiguousBody>(err, "industry_ambiguous");
+      if (ambiguous) {
+        // The catalog changed since the list loaded: refresh it so the
+        // candidates show up to pick from.
+        setAddIndustry(false);
+        setError(ambiguous.message);
+        queryClient.invalidateQueries({ queryKey: listIndustriesKey() });
+        return;
+      }
+      setError(apiErrorMessage(err, "Create + import failed"));
     },
   });
 
@@ -181,10 +235,13 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
     setAnalysis(null);
     setBusinessName("");
     setIndustryAlignment("");
+    setSelectedIndustryId(null);
+    setAddIndustry(false);
     setDescription("");
     setBusinessVibes("");
     setError(null);
     setNameConflict(null);
+    setChosenScope(null);
   };
 
   const digest = analysis?.business_digest;
@@ -192,16 +249,13 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
   const industryMatches = useMemo(() => {
     const q = industryAlignment.trim().toLowerCase();
     if (!q) return activeIndustries;
-    return activeIndustries.filter((i) => i.name.toLowerCase().includes(q));
-  }, [industryAlignment, activeIndustries]);
-
-  const industryIsExisting = useMemo(() => {
-    const v = industryAlignment.trim().toLowerCase();
-    if (!v) return false;
-    return activeIndustries.some(
-      (i) => i.short_name.toLowerCase() === v || i.name.toLowerCase() === v,
+    return activeIndustries.filter(
+      (i) =>
+        i === matchedIndustry ||
+        ambiguousIndustries.includes(i) ||
+        i.name.toLowerCase().includes(q),
     );
-  }, [industryAlignment, activeIndustries]);
+  }, [industryAlignment, activeIndustries, matchedIndustry, ambiguousIndustries]);
 
   return (
     <Dialog
@@ -365,12 +419,12 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
                         <CommandInput
                           placeholder="Search or type an industry…"
                           value={industryAlignment}
-                          onValueChange={setIndustryAlignment}
+                          onValueChange={typeIndustry}
                         />
                         <CommandList>
                           {industryMatches.length === 0 && (
                             <CommandEmpty>
-                              No match — "{industryAlignment}" will be used as a new industry.
+                              No catalog industry matches "{industryAlignment}".
                             </CommandEmpty>
                           )}
                           {industryMatches.length > 0 && (
@@ -380,14 +434,13 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
                                   key={ind.id}
                                   value={ind.name}
                                   onSelect={() => {
-                                    setIndustryAlignment(ind.name);
+                                    pickIndustryFromList(ind);
                                     setIndustryOpen(false);
                                   }}
                                 >
                                   <Check
                                     className={`mr-2 h-4 w-4 ${
-                                      industryAlignment.trim().toLowerCase() ===
-                                      ind.name.toLowerCase()
+                                      matchedIndustry?.id === ind.id
                                         ? "opacity-100"
                                         : "opacity-0"
                                     }`}
@@ -401,17 +454,44 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
                       </Command>
                     </PopoverContent>
                   </Popover>
-                  {digest.industry_will_be_created &&
-                    industryAlignment &&
-                    !industryIsExisting && (
-                      <p
-                        data-testid="industry-will-be-created-note"
-                        className="text-[10px] text-warning"
-                      >
-                        Note: industry "{industryAlignment}" is not in the
-                        catalog — it will be added on import.
+                  {ambiguousIndustries.length > 0 && (
+                    <div data-testid="industry-ambiguous" className="space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        "{industryAlignment}" matches {ambiguousIndustries.length} catalog
+                        industries. Pick the one this business belongs to:
                       </p>
-                    )}
+                      <div className="flex flex-wrap gap-1.5">
+                        {ambiguousIndustries.map((ind) => (
+                          <Button
+                            key={ind.id}
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() => pickIndustryFromList(ind)}
+                          >
+                            {ind.name}
+                          </Button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {canAddIndustry && (
+                    <div data-testid="industry-not-in-catalog" className="space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        "{industryAlignment}" is not in the industry catalog. The
+                        business is created without an industry unless you add it.
+                      </p>
+                      <label className="flex items-center gap-2 text-xs">
+                        <Checkbox
+                          data-testid="add-industry-checkbox"
+                          checked={addIndustry}
+                          onCheckedChange={(v) => setAddIndustry(v === true)}
+                        />
+                        Add "{industryAlignment}" to the industry catalog
+                      </label>
+                    </div>
+                  )}
                 </div>
 
                 <div className="space-y-1.5">
@@ -448,6 +528,13 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
                 <p className="text-[10px] text-muted-foreground">* required</p>
               </div>
 
+              <ImportScopeChoice
+                analysis={analysis}
+                chosen={chosenScope}
+                onChoose={setChosenScope}
+                disabled={createMutation.isPending}
+              />
+
               {preview && <ImportPreviewCard preview={preview} compact />}
 
               <div className="flex justify-end gap-2 pt-1">
@@ -465,6 +552,7 @@ export function ImportNewBusinessDialog({ trigger }: Props) {
                   disabled={
                     !businessName.trim() ||
                     !description.trim() ||
+                    importScope(analysis, chosenScope) == null ||
                     createMutation.isPending
                   }
                 >

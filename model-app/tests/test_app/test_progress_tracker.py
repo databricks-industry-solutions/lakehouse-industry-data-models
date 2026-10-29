@@ -605,6 +605,128 @@ class TestStartStopTracking:
             tracker.stop_tracking(run_id)
             assert run_id not in tracker._tasks
 
+    @pytest.mark.asyncio
+    async def test_start_on_never_tracked_run_spawns_one(self, tracker):
+        async def hang(rid):
+            await asyncio.sleep(999)
+
+        with patch.object(tracker, "_poll_loop", side_effect=hang) as mock_poll:
+            tracker.start_tracking("never-tracked")
+            assert mock_poll.call_count == 1
+            assert not tracker._tasks["never-tracked"].done()
+            tracker.stop_tracking("never-tracked")
+
+    @pytest.mark.asyncio
+    async def test_start_after_finished_loop_spawns_new_task(self, tracker):
+        """Retry regression: a poll loop that returned (terminal run) leaves
+        its done task in ``_tasks``; start_tracking must replace it."""
+        with patch.object(tracker, "_poll_loop", new_callable=AsyncMock) as mock_poll:
+            tracker.start_tracking("r1")
+            first_task = tracker._tasks["r1"]
+            await asyncio.sleep(0.05)
+            assert first_task.done()
+
+            tracker.start_tracking("r1")
+            assert tracker._tasks["r1"] is not first_task
+            assert mock_poll.call_count == 2
+            await asyncio.sleep(0.05)
+
+    @pytest.mark.asyncio
+    async def test_start_while_loop_alive_does_not_double_poll(self, tracker):
+        async def hang(rid):
+            await asyncio.sleep(999)
+
+        with patch.object(tracker, "_poll_loop", side_effect=hang) as mock_poll:
+            tracker.start_tracking("r1")
+            await asyncio.sleep(0.05)
+            first_task = tracker._tasks["r1"]
+            tracker.start_tracking("r1")
+            assert tracker._tasks["r1"] is first_task
+            assert mock_poll.call_count == 1
+            tracker.stop_tracking("r1")
+
+    @pytest.mark.asyncio
+    async def test_start_after_cancelled_loop_spawns_new_task(self, tracker):
+        async def hang(rid):
+            await asyncio.sleep(999)
+
+        with patch.object(tracker, "_poll_loop", side_effect=hang) as mock_poll:
+            tracker.start_tracking("r1")
+            first_task = tracker._tasks["r1"]
+            await asyncio.sleep(0.05)
+            # Cancelled without going through stop_tracking, so the entry stays.
+            first_task.cancel()
+            await asyncio.sleep(0.05)
+            assert first_task.cancelled()
+
+            tracker.start_tracking("r1")
+            assert tracker._tasks["r1"] is not first_task
+            assert mock_poll.call_count == 2
+            tracker.stop_tracking("r1")
+
+    @pytest.mark.asyncio
+    async def test_resume_after_loop_ended_tracks_the_run_again(
+        self, tracker, engine, seed_business,
+    ):
+        """Resume regression (``6hpx2hrXwcC4Wppq``): a run whose poll loop
+        ended on its own (it failed) leaves a done task in ``_tasks``; the
+        resume route must start a new poll loop for it."""
+        from vibe_modeling.backend.router import _resume_run_impl
+
+        with Session(engine) as s:
+            run = _make_run(seed_business, status="running")
+            s.add(run)
+            s.commit()
+            run_id = run.id
+
+        def _resume(run, session):
+            run.status = "running"
+            session.add(run)
+
+        with patch.object(tracker, "_poll_loop", new_callable=AsyncMock) as mock_poll:
+            tracker.start_tracking(run_id)
+            first_task = tracker._tasks[run_id]
+            await asyncio.sleep(0.05)
+            assert first_task.done()
+            with Session(engine) as s:
+                failed = s.get(Run, run_id)
+                failed.status = "failed"
+                s.add(failed)
+                s.commit()
+
+            with Session(engine) as s, patch.object(
+                tracker.orchestrator, "resume", side_effect=_resume,
+            ):
+                out = _resume_run_impl(seed_business, run_id, s, tracker)
+
+            assert out.status == "running"
+            assert tracker._tasks[run_id] is not first_task
+            assert mock_poll.call_count == 2
+            await asyncio.sleep(0.05)
+
+    @pytest.mark.asyncio
+    async def test_watchdog_exit_keeps_newer_loop_entry(self, tracker):
+        """The exiting loop's watchdog must not pop a replacement loop's
+        entry registered for the same run."""
+        newer = asyncio.get_running_loop().create_task(asyncio.sleep(999))
+
+        async def exiting_loop():
+            tracker._tasks["r1"] = newer
+            tracker._handle_watchdog_exit("r1")
+
+        await asyncio.get_running_loop().create_task(exiting_loop())
+        assert tracker._tasks.get("r1") is newer
+        newer.cancel()
+
+    @pytest.mark.asyncio
+    async def test_watchdog_exit_pops_own_entry(self, tracker):
+        async def exiting_loop():
+            tracker._tasks["r1"] = asyncio.current_task()
+            tracker._handle_watchdog_exit("r1")
+
+        await asyncio.get_running_loop().create_task(exiting_loop())
+        assert "r1" not in tracker._tasks
+
 
 # ---------------------------------------------------------------------------
 # 2. get_active_runs
@@ -667,6 +789,39 @@ class TestResumeRunningRuns:
             assert stale_id in tracked_ids
             assert completed_id not in tracked_ids
 
+
+    @pytest.mark.asyncio
+    async def test_startup_does_not_wait_for_the_post_install_delete_sweep(self, tracker):
+        """The boot sweep runs on the tick executor and startup returns
+        before it ends (run on the loop, or awaited, this times out)."""
+        import threading
+
+        started, release = threading.Event(), threading.Event()
+        threads: list[str] = []
+
+        def slow_sweep():
+            threads.append(threading.current_thread().name)
+            started.set()
+            release.wait(5)
+
+        with patch.object(tracker, "_sweep_post_install_deletes", side_effect=slow_sweep):
+            try:
+                await asyncio.wait_for(tracker.resume_running_runs(), timeout=1)
+                assert await asyncio.get_running_loop().run_in_executor(None, started.wait, 2)
+                assert threads and threads[0].startswith("tracker-tick")
+            finally:
+                release.set()
+            await tracker._boot_sweep
+
+    @pytest.mark.asyncio
+    async def test_a_boot_sweep_that_cannot_start_is_logged(self, tracker, caplog):
+        with patch.object(tracker, "_sweep_post_install_deletes", side_effect=RuntimeError("no db")):
+            with caplog.at_level("ERROR", logger="vibe_modeling.backend.progress_tracker"):
+                await tracker.resume_running_runs()
+                with pytest.raises(RuntimeError):
+                    await tracker._boot_sweep
+                await asyncio.sleep(0)
+        assert "boot sweep failed" in caplog.text
 
 
 # ---------------------------------------------------------------------------

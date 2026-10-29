@@ -6,7 +6,9 @@ import { ReactNode } from "react";
 // We're testing pure rendering + click handlers, not network calls.
 // Mock the API layer so tests don't need a backend.
 vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
+    ApiError: actual.ApiError,
     createVibeInput: vi.fn().mockResolvedValue({ data: { id: "vi1", text: "mock" } }),
     listVibeInputsKey: (params: unknown) => ["/api/businesses/{business_id}/inputs", params],
     VibeInputOrigin: { user: "user", agent_next_vibe: "agent_next_vibe" },
@@ -14,7 +16,7 @@ vi.mock("@/lib/api", async () => {
   };
 });
 
-import { createVibeInput } from "@/lib/api";
+import { createVibeInput, type FeedbackContext } from "@/lib/api";
 import { FeedbackDialog } from "@/components/feedback/feedback-dialog";
 import { AddFeedbackButton } from "@/components/feedback/add-feedback-button";
 
@@ -26,7 +28,16 @@ function withQuery(ui: ReactNode) {
 }
 
 describe("FeedbackDialog", () => {
-  it("renders title and context badge when open", () => {
+  it.each([
+    [{ selected_node_id: "sales.orders", selected_attribute: "amount" }, "sales.orders.amount"],
+    [{ selected_node_id: "sales.orders" }, "sales.orders"],
+    [
+      { selected_edge_id: "fk:sales.orders.cust_id>sales.customers.id" },
+      "the relationship sales.orders.cust_id → sales.customers.id",
+    ],
+    [{ domain_filter: "sales" }, "the sales domain"],
+    [{}, "the whole model"],
+  ])("shows what the feedback is about: %j", (context, about) => {
     render(
       withQuery(
         <FeedbackDialog
@@ -34,21 +45,35 @@ describe("FeedbackDialog", () => {
           onOpenChange={() => {}}
           businessId="b1"
           versionId="v1"
-          context={{
-            context_version: 1,
-            view_mode: "er",
-            domain_filter: "sales",
-            selected_node_id: "sales.orders",
-          }}
+          context={context}
         />,
       ),
     );
     expect(screen.getByText("Add feedback")).toBeInTheDocument();
-    // Context badges surface key:value pairs
-    expect(screen.getByText(/view: er/i)).toBeInTheDocument();
-    expect(screen.getByText(/domain: sales/i)).toBeInTheDocument();
-    // Key renamed node → table (a node in the diagram *is* a table).
-    expect(screen.getByText(/table: sales.orders/i)).toBeInTheDocument();
+    expect(screen.getByTestId("feedback-about")).toHaveTextContent(`About: ${about}`);
+  });
+
+  it("never shows view state, even from a legacy context object", () => {
+    const legacy = {
+      selected_node_id: "sales.orders",
+      view_mode: "relationships",
+      column_mode: "all",
+      hide_cross_domain: true,
+    } as unknown as FeedbackContext;
+    render(
+      withQuery(
+        <FeedbackDialog
+          open={true}
+          onOpenChange={() => {}}
+          businessId="b1"
+          versionId="v1"
+          context={legacy}
+        />,
+      ),
+    );
+    expect(screen.getByTestId("feedback-about")).toHaveTextContent("About: sales.orders");
+    expect(screen.queryByText(/relationships/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/view:/i)).not.toBeInTheDocument();
   });
 
   it("disables Save button when textarea is empty", () => {
@@ -59,7 +84,7 @@ describe("FeedbackDialog", () => {
           onOpenChange={() => {}}
           businessId="b1"
           versionId="v1"
-          context={{ context_version: 1, view_mode: "" }}
+          context={{}}
         />,
       ),
     );
@@ -75,7 +100,7 @@ describe("FeedbackDialog", () => {
           onOpenChange={() => {}}
           businessId="b1"
           versionId="v1"
-          context={{ context_version: 1, view_mode: "" }}
+          context={{}}
         />,
       ),
     );
@@ -92,7 +117,7 @@ describe("FeedbackDialog", () => {
           open={true}
           onOpenChange={() => {}}
           businessId="b1"
-          context={{ context_version: 1, view_mode: "" }}
+          context={{}}
         />,
       ),
     );
@@ -104,12 +129,7 @@ describe("FeedbackDialog", () => {
   });
 
   it("creates a VibeInput with text, version_id, origin, origin_context and default priority", async () => {
-    const context = {
-      context_version: 1,
-      view_mode: "er",
-      domain_filter: "sales",
-      selected_node_id: "sales.orders",
-    };
+    const context = { selected_node_id: "sales.orders" };
     render(
       withQuery(
         <FeedbackDialog
@@ -151,7 +171,7 @@ describe("FeedbackDialog", () => {
           onOpenChange={() => {}}
           businessId="b1"
           versionId="v1"
-          context={{ context_version: 1, view_mode: "er" }}
+          context={{}}
         />,
       ),
     );
@@ -185,7 +205,7 @@ describe("FeedbackDialog", () => {
           onOpenChange={() => {}}
           businessId="b1"
           versionId="v1"
-          context={{ context_version: 1, view_mode: "er" }}
+          context={{}}
         />
       </QueryClientProvider>,
     );
@@ -218,7 +238,7 @@ describe("FeedbackDialog", () => {
           onOpenChange={onOpenChange}
           businessId="b1"
           versionId="v1"
-          context={{ context_version: 1, view_mode: "er" }}
+          context={{}}
         />,
       ),
     );
@@ -269,7 +289,7 @@ describe("FeedbackDialog fullscreen portal (item 5A, 0.6.6)", () => {
           onOpenChange={() => {}}
           businessId="b1"
           versionId="v1"
-          context={{ context_version: 1, view_mode: "" }}
+          context={{}}
         />,
       ),
     );
@@ -289,7 +309,7 @@ describe("FeedbackDialog fullscreen portal (item 5A, 0.6.6)", () => {
           onOpenChange={() => {}}
           businessId="b1"
           versionId="v1"
-          context={{ context_version: 1, view_mode: "" }}
+          context={{}}
         />,
       ),
     );
@@ -309,7 +329,7 @@ describe("FeedbackDialog fullscreen portal (item 5A, 0.6.6)", () => {
           onOpenChange={() => {}}
           businessId="b1"
           versionId="v1"
-          context={{ context_version: 1, view_mode: "" }}
+          context={{}}
         />,
       ),
     );
@@ -338,7 +358,7 @@ describe("FeedbackDialog fullscreen portal (item 5A, 0.6.6)", () => {
           onOpenChange={() => {}}
           businessId="b1"
           versionId="v1"
-          context={{ context_version: 1, view_mode: "" }}
+          context={{}}
         />,
       ),
     );
@@ -352,10 +372,7 @@ describe("FeedbackDialog fullscreen portal (item 5A, 0.6.6)", () => {
 
 describe("AddFeedbackButton", () => {
   it("captures context lazily at click time", () => {
-    const getContext = vi.fn().mockReturnValue({
-      context_version: 1,
-      view_mode: "overview",
-    });
+    const getContext = vi.fn().mockReturnValue({});
     render(
       withQuery(
         <AddFeedbackButton businessId="b1" versionId="v1" getContext={getContext} />,

@@ -8,6 +8,11 @@ ensure the target workspace has:
   4. A Postgres **Database** named after `--catalog`, **owned by the app SP**
   5. Optional Postgres **Roles** for human operators (via `--grant-user`)
 
+Capacity: a new project's compute autoscales between `--min-cu` and `--max-cu`
+(defaults in `install/_feature_defaults.sh`, validated by
+`deploy_settings.check_capacity`). For an existing project the script prints the
+primary endpoint's current range and changes it only with `--resize`.
+
 The app's Lakebase Postgres holds control-plane state (businesses, runs,
 agent_config, model_versions) — internal to the app, never exposed to UC. The
 `--catalog` flag also drives the UC catalog name where the agent stores its
@@ -28,6 +33,7 @@ The script is **idempotent** and **non-destructive**:
     BY` while connected as the installing user (who holds
     `databricks_superuser` membership by virtue of being the project creator).
   - No `delete_*` / `force=True` / `purge=True` is ever called
+  - An existing endpoint's autoscaling range changes only with `--resize`
 
 Designed to run against any Databricks workspace (AWS or Azure) using the
 standard CLI profile. See `INSTALL.md` and `install/install.sh` for end-to-end
@@ -38,7 +44,8 @@ Usage:
         --profile my-workspace \\
         --project  vibe-modeling \\
         --catalog  vibe_modeling \\
-        --app-sp   <app-service-principal-application-id>
+        --app-sp   <app-service-principal-application-id> \\
+        [--min-cu 1 --max-cu 4] [--resize]
 """
 
 from __future__ import annotations
@@ -73,17 +80,8 @@ from databricks.sdk.service.postgres import (
 )
 from google.protobuf.field_mask_pb2 import FieldMask
 
-
-def _project_name(project_id: str) -> str:
-    return f"projects/{project_id}"
-
-
-def _branch_name(project_id: str, branch_id: str = "production") -> str:
-    return f"{_project_name(project_id)}/branches/{branch_id}"
-
-
-def _endpoint_name(project_id: str, branch_id: str = "production", endpoint_id: str = "primary") -> str:
-    return f"{_branch_name(project_id, branch_id)}/endpoints/{endpoint_id}"
+from _install_common import lakebase_branch_name, lakebase_endpoint_name, lakebase_project_name, workspace_client
+from deploy_settings import MAX_CU, MIN_CU, check_capacity, load_defaults
 
 
 def get_or_create_project(
@@ -92,8 +90,8 @@ def get_or_create_project(
     *,
     display_name: str | None = None,
     pg_version: int = 16,
-    min_cu: float = 1.0,
-    max_cu: float = 4.0,
+    min_cu: float,
+    max_cu: float,
 ) -> Project:
     """Return the existing Autoscaling project or create a new one.
 
@@ -101,7 +99,7 @@ def get_or_create_project(
     compute endpoint sized for autoscaling (min_cu..max_cu). Wait for the LRO.
     """
     try:
-        proj = w.postgres.get_project(name=_project_name(project_id))
+        proj = w.postgres.get_project(name=lakebase_project_name(project_id))
         print(f"[ok] project '{project_id}' exists")
         return proj
     except NotFound:
@@ -136,6 +134,49 @@ def get_or_create_project(
         return op.wait()
 
 
+def reconcile_capacity(
+    w: WorkspaceClient,
+    *,
+    project_id: str,
+    min_cu: float,
+    max_cu: float,
+    resize: bool,
+) -> bool:
+    """Report the primary endpoint's autoscaling range; set ``min_cu..max_cu`` only with ``resize``.
+
+    Returns True when the endpoint was updated.
+    """
+    name = lakebase_endpoint_name(project_id)
+    ep = w.postgres.get_endpoint(name=name)
+    status = ep.status
+    current = (status.autoscaling_limit_min_cu, status.autoscaling_limit_max_cu) if status else (None, None)
+    shown = f"{current[0]:g}-{current[1]:g} CU" if None not in current else "not reported yet"
+    if current == (min_cu, max_cu):
+        print(f"[ok] compute autoscaling {shown}")
+        return False
+    if not resize and None in current:
+        print(f"[info] compute autoscaling range not reported yet (requested {min_cu:g}-{max_cu:g} CU)")
+        return False
+    if not resize:
+        print(f"[info] compute autoscaling is {shown}; requested {min_cu:g}-{max_cu:g} CU. "
+              f"Re-run with --lakebase-resize (install.sh) or --resize to change it.")
+        return False
+    print(f"[update] compute autoscaling {shown} -> {min_cu:g}-{max_cu:g} CU")
+    op = w.postgres.update_endpoint(
+        name=name,
+        # endpoint_type is a required field of the spec; the mask leaves it unchanged.
+        endpoint=Endpoint(spec=EndpointSpec(
+            endpoint_type=(status.endpoint_type if status and status.endpoint_type
+                           else EndpointType.ENDPOINT_TYPE_READ_WRITE),
+            autoscaling_limit_min_cu=min_cu,
+            autoscaling_limit_max_cu=max_cu,
+        )),
+        update_mask=FieldMask(paths=["spec.autoscaling_limit_min_cu", "spec.autoscaling_limit_max_cu"]),
+    )
+    op.wait()
+    return True
+
+
 def get_or_create_endpoint(
     w: WorkspaceClient,
     *,
@@ -145,14 +186,14 @@ def get_or_create_endpoint(
 ) -> Endpoint:
     """Return the primary endpoint (created by `initial_endpoint_spec`) or create one."""
     try:
-        ep = w.postgres.get_endpoint(name=_endpoint_name(project_id, branch_id, endpoint_id))
+        ep = w.postgres.get_endpoint(name=lakebase_endpoint_name(project_id, branch_id, endpoint_id))
         host = ep.status.hosts.host if ep.status and ep.status.hosts else "(no host)"
         print(f"[ok] endpoint '{endpoint_id}' on '{branch_id}' exists (host={host})")
         return ep
     except NotFound:
         print(f"[create] endpoint '{endpoint_id}' on branch '{branch_id}'")
         op = w.postgres.create_endpoint(
-            parent=_branch_name(project_id, branch_id),
+            parent=lakebase_branch_name(project_id, branch_id),
             endpoint=Endpoint(
                 spec=EndpointSpec(endpoint_type=EndpointType.ENDPOINT_TYPE_READ_WRITE),
             ),
@@ -183,7 +224,7 @@ def ensure_database_owned_by(
     names (`db-<random>`); the user-visible Postgres database name lives in
     `status.postgres_database`. We list existing DBs and match on that.
     """
-    parent = _branch_name(project_id, branch_id)
+    parent = lakebase_branch_name(project_id, branch_id)
     existing: Database | None = None
     for d in w.postgres.list_databases(parent=parent):
         full = w.postgres.get_database(name=d.name)
@@ -268,7 +309,7 @@ def get_or_create_role(
     Matches an existing role by its `status.postgres_role` (the Postgres
     role name, usually the SP application_id or user email).
     """
-    parent = _branch_name(project_id, branch_id)
+    parent = lakebase_branch_name(project_id, branch_id)
     for r in w.postgres.list_roles(parent=parent):
         full = w.postgres.get_role(name=r.name)
         existing_pg_role = full.status.postgres_role if full.status else None
@@ -296,7 +337,7 @@ def _generate_pg_token(w: WorkspaceClient, project_id: str, branch_id: str = "pr
     can both obtain tokens this way to authenticate via pg OAuth.
     """
     cred = w.postgres.generate_database_credential(
-        endpoint=_endpoint_name(project_id, branch_id),
+        endpoint=lakebase_endpoint_name(project_id, branch_id),
     )
     if not cred.token:
         sys.exit(f"[abort] generate_database_credential returned empty token for '{project_id}'")
@@ -387,7 +428,7 @@ def _normalize_host(w: WorkspaceClient, profile: str | None) -> WorkspaceClient:
         clean = urlunsplit((split.scheme, split.netloc, "", "", ""))
         if clean != raw_host:
             print(f"[info] normalizing host '{raw_host}' -> '{clean}'")
-            return WorkspaceClient(profile=profile, host=clean) if profile else WorkspaceClient(host=clean)
+            return workspace_client(profile, host=clean)
     return w
 
 
@@ -400,7 +441,7 @@ def _endpoint_host_or_wait(
     """Return the endpoint host, polling until it's assigned."""
     deadline = time.time() + timeout_seconds
     while True:
-        ep = w.postgres.get_endpoint(name=_endpoint_name(project_id))
+        ep = w.postgres.get_endpoint(name=lakebase_endpoint_name(project_id))
         host = ep.status.hosts.host if ep.status and ep.status.hosts else None
         if host:
             return host
@@ -456,6 +497,13 @@ def main() -> None:
             "need any human role to function. May be repeated."
         ),
     )
+    defaults = load_defaults()
+    p.add_argument("--min-cu", default=defaults[MIN_CU],
+                   help="Autoscaling minimum in CU for a new project (default: %(default)s)")
+    p.add_argument("--max-cu", default=defaults[MAX_CU],
+                   help="Autoscaling maximum in CU for a new project (default: %(default)s)")
+    p.add_argument("--resize", action="store_true",
+                   help="Also apply --min-cu/--max-cu to an existing project's primary endpoint")
     # Back-compat alias: accept --instance (the legacy flag from the deprecated
     # `w.database.create_database_instance` API path)
     p.add_argument(
@@ -467,8 +515,12 @@ def main() -> None:
 
     if args.instance and not args.project:
         args.project = args.instance
+    try:
+        min_cu, max_cu = check_capacity(args.min_cu, args.max_cu)
+    except ValueError as exc:
+        p.error(str(exc))
 
-    w = WorkspaceClient(profile=args.profile) if args.profile else WorkspaceClient()
+    w = workspace_client(args.profile)
     w = _normalize_host(w, args.profile)
     print(f"[info] targeting workspace: {w.config.host}")
 
@@ -478,10 +530,12 @@ def main() -> None:
     #    The installer is the project creator and gets `databricks_superuser`
     #    membership automatically, which is what allows them to run the
     #    ownership-transfer SQL in step 4 if needed.
-    get_or_create_project(w, args.project)
+    get_or_create_project(w, args.project, min_cu=min_cu, max_cu=max_cu)
 
-    # 2. Primary endpoint (verify / create if somehow missing).
+    # 2. Primary endpoint (verify / create if somehow missing), and its
+    #    autoscaling range (changed on an existing project only with --resize).
     get_or_create_endpoint(w, project_id=args.project)
+    reconcile_capacity(w, project_id=args.project, min_cu=min_cu, max_cu=max_cu, resize=args.resize)
     endpoint_host = _endpoint_host_or_wait(w, project_id=args.project)
 
     # 3. Postgres role for the app service principal. Created before the

@@ -84,6 +84,8 @@ describe("ImportModelDialog — happy path", () => {
         attribute_count: 25,
         fk_count: 3,
         inferred_version: "v0.5.8",
+        inferred_scope: "ecm",
+        scope_settled: true,
         warnings: [],
       },
     } as Awaited<ReturnType<typeof analyzeImport>>);
@@ -138,10 +140,12 @@ describe("ImportModelDialog — execute error path", () => {
         warnings: [],
         action: "import_as_is",
         inferred_version: "v1_ecm",
+        inferred_scope: "ecm",
+        scope_settled: true,
       },
     } as unknown as Awaited<ReturnType<typeof analyzeImport>>);
-    // Step 2: execute fails with a server error. The component reads
-    // `err.message`, so an Error suffices to reach the onError branch.
+    // Step 2: execute fails with a plain Error, whose message
+    // `apiErrorMessage` shows as is.
     const httpErr = Object.assign(new Error("HTTP 500: Import failed on server"), {
       status: 500,
     });
@@ -215,6 +219,8 @@ describe("ImportModelDialog — execute error path", () => {
         warnings: [],
         action: "import_as_is",
         inferred_version: "v1_ecm",
+        inferred_scope: "ecm",
+        scope_settled: true,
       },
     } as unknown as Awaited<ReturnType<typeof analyzeImport>>);
     mockedExecute.mockRejectedValue(
@@ -275,6 +281,8 @@ describe("ImportModelDialog — execute error path", () => {
         warnings: [],
         action: "import_as_is",
         inferred_version: "v1_ecm",
+        inferred_scope: "ecm",
+        scope_settled: true,
         business_digest_diff: {
           digest: {
             business_name: "Gaming",
@@ -304,6 +312,7 @@ describe("ImportModelDialog — execute error path", () => {
         products: 2,
         attributes: 5,
         fk_links: 0,
+        warnings: ["Seeding the agent's registry (_metamodel) failed."],
       },
     } as unknown as Awaited<ReturnType<typeof executeImport>>);
 
@@ -352,9 +361,16 @@ describe("ImportModelDialog — execute error path", () => {
         {
           volume_path: "/Volumes/cat/sch/vibes/model.json",
           accept_business_mismatch: true,
+          scope: null,
         },
       );
     });
+    // The response's warnings reach the user.
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith("Imported with warnings", {
+        description: "Seeding the agent's registry (_metamodel) failed.",
+      }),
+    );
   });
 
   it("surfaces the error and offers a retry path when analyze rejects with 500", async () => {
@@ -394,5 +410,95 @@ describe("ImportModelDialog — execute error path", () => {
       screen.getByRole("button", { name: /Try again/i }),
     ).toBeInTheDocument();
     expect(mockedExecute).not.toHaveBeenCalled();
+  });
+});
+
+describe("ImportModelDialog - the server's message reaches the user", () => {
+  const VALID_ANALYSIS = {
+    data: {
+      valid: true,
+      message: "Looks good - 1 domain, 2 tables.",
+      domain_count: 1,
+      product_count: 2,
+      attribute_count: 5,
+      fk_count: 0,
+      warnings: [],
+      action: "import_as_is",
+      inferred_version: "v1_ecm",
+      inferred_scope: "ecm",
+      scope_settled: true,
+    },
+  } as unknown as Awaited<ReturnType<typeof analyzeImport>>;
+
+  async function openAndAnalyze() {
+    render(
+      withQuery(
+        <ImportModelDialog
+          businessId="b-1"
+          trigger={<button type="button">Open import</button>}
+        />,
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /open import/i }));
+    fireEvent.change(await screen.findByPlaceholderText(/\/Volumes\/catalog/), {
+      target: { value: "/Volumes/cat/sch/vibes/model.json" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^Analyze$/i }));
+    });
+  }
+
+  it.each([
+    [
+      "the occupied-folder 409",
+      new ApiError(409, "Conflict", {
+        detail: {
+          error: "import_folder_occupied",
+          message: "The app's folder for this business's v3 ECM, business/acme/v3/ecm in the volume meta._metamodel.vol_root, already holds files. Delete that folder in Catalog Explorer, then import again.",
+          path: "/Volumes/meta/_metamodel/vol_root/business/acme/v3/ecm",
+        },
+      }),
+      "The app's folder for this business's v3 ECM, business/acme/v3/ecm in the volume meta._metamodel.vol_root, already holds files. Delete that folder in Catalog Explorer, then import again.",
+    ],
+    [
+      "a failed copy (502)",
+      new ApiError(502, "Bad Gateway", {
+        detail: "2 of the model's 5 file(s) could not be copied into the app's folder, so nothing was imported. Import again.",
+      }),
+      "2 of the model's 5 file(s) could not be copied into the app's folder, so nothing was imported. Import again.",
+    ],
+    [
+      "a copy past its budget (504)",
+      new ApiError(504, "Gateway Timeout", {
+        detail: "The model's folder holds 900 file(s), too many to copy into the app's folder within 120 s, so nothing was imported.",
+      }),
+      "The model's folder holds 900 file(s), too many to copy into the app's folder within 120 s, so nothing was imported.",
+    ],
+    [
+      "a scope refusal (400)",
+      new ApiError(400, "Bad Request", {
+        detail: "The import's scope is not known: choose ECM or MVM.",
+      }),
+      "The import's scope is not known: choose ECM or MVM.",
+    ],
+  ])("shows %s on execute", async (_label, err, message) => {
+    mockedAnalyze.mockResolvedValue(VALID_ANALYSIS);
+    mockedExecute.mockRejectedValue(err);
+    await openAndAnalyze();
+    const importBtn = await screen.findByRole("button", { name: /Import as new version/i });
+    await act(async () => {
+      fireEvent.click(importBtn);
+    });
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByText(/^HTTP \d{3}/)).not.toBeInTheDocument();
+  });
+
+  it("shows the server's message when analyze is refused", async () => {
+    mockedAnalyze.mockRejectedValue(
+      new ApiError(400, "Bad Request", { detail: "No model.json at /Volumes/cat/sch/vibes/model.json." }),
+    );
+    await openAndAnalyze();
+    expect(await screen.findByText("No model.json at /Volumes/cat/sch/vibes/model.json.")).toBeInTheDocument();
+    expect(screen.queryByText(/HTTP 400/)).not.toBeInTheDocument();
   });
 });

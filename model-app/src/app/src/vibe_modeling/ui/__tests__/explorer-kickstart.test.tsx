@@ -13,6 +13,7 @@
  * dialog reads the industry's versions via useGetExplorerVersions; we mock both.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import {
   fireEvent,
   render,
@@ -23,6 +24,7 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense } from "react";
+import { toast } from "sonner";
 import {
   createMemoryHistory,
   createRootRoute,
@@ -64,6 +66,10 @@ vi.mock("@/lib/api", async () => {
     useListIndustriesSuspense: () => ({ data: [] }),
     useListBusinessesSuspense: () => ({ data: businessesList }),
     useGetExplorerVersionsSuspense: () => ({ data: explorerVersions }),
+    // The explorer joins the lifecycle columns from the versions list and
+    // lists unfinished metamodel cleanups.
+    useListVersionsSuspense: () => ({ data: [] }),
+    useListMetamodelCleanups: () => ({ data: { data: [] } }),
     useListSectorsSuspense: () => ({ data: [] }),
     useGetExplorerVersions: () => ({ data: { data: explorerVersions }, isLoading: false }),
     useKickstartFromIndustry: () => ({
@@ -155,6 +161,8 @@ async function openKickstartDialog() {
   });
 }
 
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.explorer"));
+
 describe("Explorer page — Kickstart from industry", () => {
   it("shows the Kickstart button only when kind === 'industry'", async () => {
     await renderExplorer();
@@ -213,6 +221,12 @@ describe("Explorer page — Kickstart from industry", () => {
       expect(navigateMock).toHaveBeenCalledWith({
         to: "/businesses/$businessId/explorer",
         params: { businessId: "new-biz" },
+      }),
+    );
+    expect(toast.success).toHaveBeenCalledWith(
+      "Kickstart started",
+      expect.objectContaining({
+        description: expect.stringContaining("Acme Retail"),
       }),
     );
   });
@@ -398,16 +412,13 @@ describe("Explorer page — Kickstart from industry", () => {
     });
 
     // The first attempt 502'd; the wrapper retries and the second resolves.
-    await waitFor(() => expect(kickstartMock).toHaveBeenCalledTimes(2), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(kickstartMock).toHaveBeenCalledTimes(2));
     await waitFor(
       () =>
         expect(navigateMock).toHaveBeenCalledWith({
           to: "/businesses/$businessId/explorer",
           params: { businessId: "new-biz" },
         }),
-      { timeout: 3000 },
     );
     // Never surfaced the raw gateway status.
     expect(screen.queryByText(/HTTP 502/i)).toBeNull();
@@ -433,15 +444,12 @@ describe("Explorer page — Kickstart from industry", () => {
     });
 
     // 1 initial + 2 retries = 3 attempts, then the friendly copy.
-    await waitFor(() => expect(kickstartMock).toHaveBeenCalledTimes(3), {
-      timeout: 3000,
-    });
+    await waitFor(() => expect(kickstartMock).toHaveBeenCalledTimes(3));
     await waitFor(
       () =>
         expect(
           screen.getByText(/temporarily unavailable/i),
         ).toBeInTheDocument(),
-      { timeout: 3000 },
     );
     expect(screen.queryByText(/HTTP 502/i)).toBeNull();
     expect(navigateMock).not.toHaveBeenCalled();
@@ -475,7 +483,6 @@ describe("Explorer page — Kickstart from industry", () => {
         expect(
           screen.getByText(/may already have been created/i),
         ).toBeInTheDocument(),
-      { timeout: 3000 },
     );
     // Not the plain field-level "already exists" message.
     expect(screen.queryByText(/A business with this name already exists/i)).toBeNull();

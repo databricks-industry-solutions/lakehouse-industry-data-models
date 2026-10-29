@@ -101,10 +101,14 @@ OBO forwarding (`X-Forwarded-Access-Token`) is gated by a workspace-admin settin
 
 The **`github_pr` connection app resource** is declared in the DAB bundle (`databricks.yml`) but
 is **off by default** so fresh installs stay portable. It is applied only when you deploy the
-**`github-publish`** target (`databricks bundle deploy --target github-publish ...`), which adds
-the `USE_CONNECTION` grant to the app's `resources`; the default `dev` target declares no app
-resources. Once you deploy that target, the grant is re-applied on every deploy.
-Before a plain `databricks bundle deploy`, export the same `VIBE_MODELING_*` values your install uses (Lakebase project, database, deployment catalog, warehouse, and the taxonomy and assessment settings) and run `bash install/build_and_render.sh`. The variables and their meaning are listed in [Deploying without `install.sh`](../INSTALL.md#deploying-without-installsh). If the deploy's build step stops with "The app's user API scopes changed", re-run the deploy.
+**`github-publish`** target, which adds the `USE_CONNECTION` grant to the app's `resources`; the
+default `dev` target declares no app resources. Install with
+`bash install/install.sh --profile <your-profile> --app-name <app-name> --enable-github-publish`
+(after Step B creates the connection). The installer records the target, so re-runs keep it and
+the grant is re-applied on every deploy. On an app installed with the `dev` target, the same command
+switches it to `github-publish` as an update of the same app; `--disable-github-publish` switches it
+back and removes the grant. For a deploy
+by hand, see [Deploying without `install.sh`](../INSTALL.md#deploying-without-installsh).
 You do **not** add it in the app UI; a resource added in the UI is wiped on the next deploy.
 The app resolves the connection by its **name** (`github_pr`); the bundle resource `name` is
 cosmetic. The `USE CONNECTION` grant (Step C) is what authorizes the OBO publish call.

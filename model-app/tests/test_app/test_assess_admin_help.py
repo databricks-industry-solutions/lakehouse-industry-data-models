@@ -12,6 +12,7 @@ from _assess_helpers import ready_config, run, seed_domain_run  # noqa: E402
 from test_assess_next_vibe_feedback import WHO, assess_next_vibe_data  # noqa: E402,F401
 from vibe_modeling.backend.assessment.status import map_status  # noqa: E402
 from vibe_modeling.backend.db_models import AssessBatch, AssessDomainRun  # noqa: E402
+from vibe_modeling.backend.error_sanitization import DB_ERROR_MESSAGE  # noqa: E402
 
 HOST = "https://test-workspace.databricks.com"
 
@@ -61,7 +62,7 @@ def test_preflight_failure_text_is_kept():
     assert u.error_message == "Pre-flight failed — no EXECUTE on model"
 
 
-def test_launch_bundle_failure_is_502_with_job_url(client, mock_ws, engine, monkeypatch):
+def test_launch_bundle_failure_is_409_with_job_url(client, mock_ws, engine, monkeypatch):
     from _assess_helpers import ws_ok
     from vibe_modeling.backend.assessment import launch
     from vibe_modeling.backend.db_models import Business, Domain, ModelVersion
@@ -80,7 +81,7 @@ def test_launch_bundle_failure_is_502_with_job_url(client, mock_ws, engine, monk
     monkeypatch.setattr(launch, "read_versions", no_bundle)
     r = client.post(f"/api/businesses/{bid}/assessments", json={"version_id": vid, "domains": [
         {"domain_id": did, "sources": [{"source_name": "s", "catalog_name": "b", "schema_name": "x"}]}]})
-    assert r.status_code == 502
+    assert r.status_code == 409
     assert r.json()["detail"] == {"error": "admin_help",
                                   "message": "Launch failed: Vendored assessment assets are not packaged with this build.",
                                   "job_url": f"{HOST}/jobs/99"}
@@ -99,13 +100,13 @@ def test_feedback_caller_errors_are_a_plain_message(client, assess_next_vibe_dat
     assert r.status_code == 422 and r.json()["detail"] == {"message": "Unknown urgency: someday"}
 
 
-def test_cancel_failure_is_502_with_the_runs_links_and_a_sanitized_error(client, engine, mock_ws):
+def test_cancel_failure_is_409_with_the_runs_links_and_a_sanitized_error(client, engine, mock_ws):
     from databricks.sdk.errors.platform import DatabricksError
     dr_id = seed_domain_run(engine, databricks_run_id=1000, status="assessing")
     _pin(engine, dr_id, job_id=99, job_reader="reader-1")
     mock_ws.jobs.cancel_run.side_effect = DatabricksError("denied for dana@example.com")
     r = client.post(f"/api/assessment-domain-runs/{dr_id}/cancel")
-    assert r.status_code == 502
+    assert r.status_code == 409
     assert r.json()["detail"] == {"error": "admin_help",
                                   "message": "Databricks could not cancel run 1000: denied for [REDACTED]",
                                   "job_url": f"{HOST}/jobs/99", "run_url": f"{HOST}/jobs/99/runs/1000",
@@ -114,18 +115,22 @@ def test_cancel_failure_is_502_with_the_runs_links_and_a_sanitized_error(client,
         assert s.get(AssessDomainRun, dr_id).status == "assessing"
 
 
-def test_single_feedback_db_failure_is_500_with_message(client, assess_next_vibe_data, monkeypatch):
+def test_single_feedback_db_failure_is_409_admin_help(client, assess_next_vibe_data, monkeypatch):
     from sqlalchemy.exc import OperationalError
 
     import vibe_modeling.backend.routes.assessments as routes
 
     def boom(*a, **k):
-        raise OperationalError("INSERT", {}, Exception("db gone"))
+        raise OperationalError("INSERT INTO vibe_inputs (a) VALUES (%(a)s)", {"a": "secret-value"}, Exception("db gone"))
     monkeypatch.setattr(routes, "create_vibe_input_with_anchor", boom)
     dr_id, nv = assess_next_vibe_data.dr_id, assess_next_vibe_data.vibe_ids[0]
     r = client.post(f"/api/assessment-domain-runs/{dr_id}/next-vibes/{nv}/feedback", json={}, headers=WHO)
-    assert r.status_code == 500 and r.json()["detail"]["error"] == "admin_help"
-    assert r.json()["detail"]["message"].startswith("Couldn't add the next vibe to feedback")
+    assert r.status_code == 409 and r.json()["detail"]["error"] == "admin_help"
+    message = r.json()["detail"]["message"]
+    assert message.startswith("Couldn't add the next vibe to feedback: " + DB_ERROR_MESSAGE)
+    assert "Reference: " in message
+    for leaked in ("INSERT", "secret-value", "db gone", "[SQL"):
+        assert leaked not in message
 
 
 def test_bulk_feedback_db_failure_lands_in_failures_and_the_rest_commit(client, engine, assess_next_vibe_data,
@@ -144,7 +149,7 @@ def test_bulk_feedback_db_failure_lands_in_failures_and_the_rest_commit(client, 
         calls["n"] += 1
         vi = real(*a, **k)
         if calls["n"] == 2:
-            raise OperationalError("INSERT", {}, Exception("db gone"))
+            raise OperationalError("INSERT INTO vibe_inputs (a) VALUES (%(a)s)", {"a": "secret-value"}, Exception("db gone"))
         return vi
 
     monkeypatch.setattr(routes, "create_vibe_input_with_anchor", flaky)
@@ -155,6 +160,9 @@ def test_bulk_feedback_db_failure_lands_in_failures_and_the_rest_commit(client, 
     assert [f["next_vibe_id"] for f in body["failures"]] == [bad]
     assert body["failures"][0]["message"].startswith("Couldn't add this next vibe to feedback")
     assert body["failures"][0]["message"].endswith("Please contact your administrator with these details.")
+    assert DB_ERROR_MESSAGE in body["failures"][0]["message"] and "Reference: " in body["failures"][0]["message"]
+    for leaked in ("INSERT", "secret-value", "db gone", "[SQL"):
+        assert leaked not in body["failures"][0]["message"]
     assert body["count_created"] == len(ids) - 1 and [i["next_vibe_id"] for i in body["items"]] == [i for i in ids if i != bad]
     with Session(engine) as s:
         links = {nv.id: nv.vibe_input_id for nv in s.exec(select(AssessNextVibe).where(AssessNextVibe.id.in_(ids)))}

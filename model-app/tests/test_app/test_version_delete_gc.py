@@ -18,8 +18,10 @@ that keeps anchored ``vibe_input_context_links`` correct across a rewrite.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "app", "src"))
 
@@ -215,8 +217,14 @@ def test_audit_runs_deleted_but_non_audit_zero_op_run_detached(fk_client, fk_eng
 
 
 def test_audit_intents_membership():
-    """(e) Regression lock on the audit-intent set itself."""
-    assert AUDIT_INTENTS == frozenset({"download-industry", "kickstart-from-industry"})
+    """(e) Regression lock on the audit-intent set itself. The UI's
+    ``lib/intent.isSetupRunIntent`` reads the same fixture
+    (``ui/__tests__/setup-run-intents-parity.test.ts``)."""
+    fixture = json.loads(
+        (Path(__file__).resolve().parents[1] / "fixtures" / "setup_run_intents.json").read_text()
+    )
+    assert AUDIT_INTENTS == frozenset({"download-industry", "kickstart-from-industry", "uninstall-orphan-schemas"})
+    assert AUDIT_INTENTS == frozenset(fixture["intents"])
 
 
 # --- B. Anchored-input version delete --------------------------------------

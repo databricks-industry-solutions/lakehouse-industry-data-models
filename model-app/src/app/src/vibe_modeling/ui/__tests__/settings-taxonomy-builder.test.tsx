@@ -1,5 +1,6 @@
 /**
- * Settings → Platform "Domain Taxonomy Builder" card: hidden unless installed;
+ * Settings → Platform, Optional features, the "Domain Taxonomy Builder" card:
+ * installed / not installed, last saved by, the settings only while installed;
  * model-service picker with free-text fallback; concurrency 1-16; Test; the
  * last_check line (green ok, amber busy, red refusals); Save shows a refusal
  * inline; "Reset to install default" vs "Clear".
@@ -8,7 +9,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
-import { TaxonomyBuilderCard } from "@/components/settings/taxonomy-builder-card";
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children, to, params, search, hash, ...rest }: any) => (
+    <a href={`${String(to).replace("$topic", params?.topic ?? "")}${search?.tab ? `?tab=${search.tab}` : ""}${hash ? `#${hash}` : ""}`} {...rest}>
+      {children}
+    </a>
+  ),
+}));
+
+import { getTaxonomyConfigKey } from "@/lib/api";
+import { AssessmentFeatureCard, TaxonomyFeatureCard } from "@/components/settings/optional-features";
 
 type Route = { status: number; body: unknown };
 type Call = { method: string; url: string; body: unknown };
@@ -38,9 +48,10 @@ function renderCard() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
-      <TaxonomyBuilderCard />
+      <TaxonomyFeatureCard />
     </QueryClientProvider>,
   );
+  return qc;
 }
 
 const check = (status: string, message: string) => ({ status, message, checked_at: "2026-10-19T10:00:00Z" });
@@ -58,22 +69,55 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const findCard = () => screen.findByTestId("taxonomy-builder-card");
+const findCard = () => screen.findByTestId("taxonomy-builder-form");
 
-describe("TaxonomyBuilderCard", () => {
-  it("renders nothing when the feature is not installed", async () => {
+describe("Domain Taxonomy Builder feature card", () => {
+  it("not installed: says so and how to turn it on, with no settings", async () => {
     routes["GET /api/config/taxonomy"] = { status: 200, body: { ...BASE, installed: false, ready: false } };
-    renderCard();
-    await waitFor(() => expect(calls.some((c) => c.url === "/api/config/taxonomy")).toBe(true));
-    expect(screen.queryByTestId("taxonomy-builder-card")).toBeNull();
+    const qc = renderCard();
+    await waitFor(() => expect(qc.getQueryState(getTaxonomyConfigKey())?.status).toBe("success"));
+    const card = await screen.findByTestId("feature-card-taxonomy");
+    expect(card).toHaveTextContent("Not installed");
+    expect(screen.getByTestId("feature-status-taxonomy")).toHaveTextContent("--enable-taxonomy-builder");
+    expect(screen.getByTestId("feature-status-taxonomy").getAttribute("data-tone")).toBe("off");
+    expect(screen.queryByTestId("taxonomy-builder-form")).toBeNull();
+    expect(screen.queryByTestId("feature-saved-taxonomy")).toBeNull();
     expect(calls.some((c) => c.url.includes("model-services"))).toBe(false);
+    expect(card.id).toBe("feature-taxonomy");
   });
 
-  it("renders nothing when the config read fails", async () => {
+  it("a failed config read shows the error with a retry, not 'not installed'", async () => {
     routes["GET /api/config/taxonomy"] = { status: 500, body: { detail: "down" } };
+    const qc = renderCard();
+    await waitFor(() => expect(qc.getQueryState(getTaxonomyConfigKey())?.status).toBe("error"));
+    expect(await screen.findByTestId("feature-config-error")).toHaveTextContent("down");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+    expect(screen.getByTestId("feature-card-taxonomy")).not.toHaveTextContent("Not installed");
+  });
+
+  it("installed and ready: badges, ok status and who saved it last", async () => {
+    routes["GET /api/config/taxonomy"] = {
+      status: 200, body: { ...BASE, updated_by: "ada@example.com", updated_at: "2026-10-20T08:00:00Z" },
+    };
     renderCard();
-    await waitFor(() => expect(calls.length).toBeGreaterThan(0));
-    expect(screen.queryByTestId("taxonomy-builder-card")).toBeNull();
+    await findCard();
+    const card = screen.getByTestId("feature-card-taxonomy");
+    expect(card).toHaveTextContent("Installed");
+    expect(card).toHaveTextContent("Ready");
+    expect(screen.getByTestId("feature-status-taxonomy").getAttribute("data-tone")).toBe("ok");
+    expect(screen.getByTestId("feature-saved-taxonomy")).toHaveTextContent(/Last saved by ada@example\.com on 2026-10-20/);
+    expect(screen.getByTestId("help-link-taxonomy-builder").getAttribute("href")).toBe("/help/taxonomy-builder");
+  });
+
+  it("installed, never saved and not ready: warns and says it was not saved in the app", async () => {
+    routes["GET /api/config/taxonomy"] = {
+      status: 200, body: { ...BASE, ready: false, model_service: "", updated_by: null, updated_at: null },
+    };
+    renderCard();
+    await findCard();
+    expect(screen.getByTestId("feature-card-taxonomy")).toHaveTextContent("Not ready");
+    expect(screen.getByTestId("feature-status-taxonomy").getAttribute("data-tone")).toBe("warn");
+    expect(screen.getByTestId("feature-saved-taxonomy")).toHaveTextContent("Not saved in the app yet.");
   });
 
   it("offers the listed services in a picker", async () => {
@@ -187,5 +231,33 @@ describe("TaxonomyBuilderCard", () => {
     expect(screen.getByRole("button", { name: /^test$/i })).toBeTruthy();
     fireEvent.change(await screen.findByTestId("taxonomy-model-service-fallback-input"), { target: { value: "x.y.z" } });
     expect(screen.getByRole("button", { name: /^test saved service$/i })).toBeTruthy();
+  });
+});
+
+describe("Bronze assessment feature card", () => {
+  const ASSESS = {
+    installed: true, ready: true, missing: [], job_url: "", reader_application_id: "app-1", reader_display_name: "reader",
+    job_id: 42, workspace_path: "/Workspace/x", max_concurrent_runs: 2, default_reasoning_effort: "high", warehouse_id: "",
+    genie_version: "v0.1.0", skills_ref: "4c709f704d4e4bc977aeb4379409fb709f2ab7e4", skills_version: "0.4.0",
+    app_application_id: "", updated_by: "grace@example.com", updated_at: "2026-10-21T09:30:00Z",
+  };
+  const renderAssess = () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><AssessmentFeatureCard /></QueryClientProvider>);
+  };
+
+  it("saved: shows who saved it last and when, and its help link in sentence case", async () => {
+    routes["GET /api/assess/config"] = { status: 200, body: ASSESS };
+    renderAssess();
+    expect(await screen.findByTestId("feature-saved-assessment")).toHaveTextContent(/Last saved by grace@example\.com on 2026-10-21/);
+    expect(screen.getByTestId("feature-status-assessment").getAttribute("data-tone")).toBe("ok");
+    expect(screen.getByTestId("help-link-assessment").getAttribute("aria-label")).toBe("Help: bronze assessment");
+  });
+
+  it("never saved (no updated_by): says it was not saved in the app", async () => {
+    routes["GET /api/assess/config"] = { status: 200, body: { ...ASSESS, ready: false, missing: ["No reader"], updated_by: "" } };
+    renderAssess();
+    expect(await screen.findByTestId("feature-saved-assessment")).toHaveTextContent("Not saved in the app yet.");
+    expect(screen.getByTestId("feature-status-assessment").getAttribute("data-tone")).toBe("warn");
   });
 });

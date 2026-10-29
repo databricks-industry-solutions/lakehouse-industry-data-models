@@ -6,6 +6,7 @@ of :class:`OperationStep`s through their primitive sequence (see
 """
 
 from ._runner import (
+    CANCEL_REFUSED_PHASE_SUCCEEDED,
     AdvanceOutcome,
     CancelResult,
     Orchestrator,
@@ -16,6 +17,7 @@ from .dag_factories import dag_for_new_base_model, dag_for_vibe_new_ecm_mvm
 from .validate import ValidationResult, validate_dag, validate_dag_request
 
 __all__ = [
+    "CANCEL_REFUSED_PHASE_SUCCEEDED",
     "AdvanceOutcome",
     "CancelResult",
     "Dag",

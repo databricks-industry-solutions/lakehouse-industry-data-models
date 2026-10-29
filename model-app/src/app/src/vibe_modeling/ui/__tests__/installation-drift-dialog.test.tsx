@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { jsonResponse } from "./helpers/first-run";
 
 import { InstallationDriftDialog } from "@/components/explorer/installation-drift-dialog";
 
@@ -88,6 +89,29 @@ describe("InstallationDriftDialog", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("names each catalog that is missing schemas", async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () =>
+        makeStatus({
+          deployment_catalog: "cat_b",
+          also_installed_in: ["cat_a"],
+          missing_schemas: ["cat_a.ecm_customer", "cat_a.ecm_inventory"],
+        }),
+    });
+    render(<InstallationDriftDialog versionId="mv-1" enabled />);
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("2 of 2 from cat_a");
+    expect(dialog.textContent).not.toContain("from cat_b");
+  });
+
+  it("names the install catalog for its own missing schemas", async () => {
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => makeStatus({ missing_schemas: ["ecm_customer"] }) });
+    render(<InstallationDriftDialog versionId="mv-1" enabled />);
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("1 of 2 from vibe_modeling_test");
+  });
+
   it("pops the dialog and reconciles on user click", async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
@@ -136,11 +160,7 @@ describe("InstallationDriftDialog", () => {
       ok: true,
       json: async () => makeStatus(),
     });
-    fetchMock.mockResolvedValueOnce({
-      ok: false,
-      status: 502,
-      text: async () => "could not list schemas",
-    });
+    fetchMock.mockResolvedValueOnce(jsonResponse(502, "could not list schemas"));
 
     render(<InstallationDriftDialog versionId="mv-1" enabled={true} />);
 
@@ -173,11 +193,7 @@ describe("InstallationDriftDialog", () => {
       ok: true,
       json: async () => makeStatus(),
     });
-    fetchMock.mockResolvedValueOnce({
-      ok: false,
-      status: 502,
-      text: async () => "boom",
-    });
+    fetchMock.mockResolvedValueOnce(jsonResponse(502, "boom"));
 
     render(<InstallationDriftDialog versionId="mv-1" enabled={true} />);
     await waitFor(() => {

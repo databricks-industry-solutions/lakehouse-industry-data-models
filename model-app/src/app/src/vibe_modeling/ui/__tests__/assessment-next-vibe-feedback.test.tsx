@@ -32,7 +32,7 @@ const sonner = vi.hoisted(() => ({
 }));
 vi.mock("sonner", () => sonner);
 
-import { NextVibesList } from "@/components/assessment/next-vibes-list";
+import { NextVibesList, bulkAddLabel } from "@/components/assessment/next-vibes-list";
 
 const vibe = (over: Record<string, unknown>) => ({
   id: "v",
@@ -184,7 +184,15 @@ describe("NextVibesList feedback functionality", () => {
       );
 
       // One unlinked before_build vibe (a), one linked (b)
-      expect(screen.getByRole("button", { name: /Add all 1 before-build vibes/ })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Add the remaining before-build vibe" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Add all 1/ })).not.toBeInTheDocument();
+    });
+
+    it("counts the bulk button by what is left to add", () => {
+      expect(bulkAddLabel(1, 1)).toBe("Add the before-build vibe");
+      expect(bulkAddLabel(3, 3)).toBe("Add all 3 before-build vibes");
+      expect(bulkAddLabel(1, 2)).toBe("Add the remaining before-build vibe");
+      expect(bulkAddLabel(2, 3)).toBe("Add the remaining 2 before-build vibes");
     });
 
     it("hides bulk button when all before_build vibes are linked", () => {
@@ -203,7 +211,7 @@ describe("NextVibesList feedback functionality", () => {
         ),
       );
 
-      expect(screen.queryByRole("button", { name: /Add all/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /before-build vibe/ })).not.toBeInTheDocument();
     });
 
     it("hides bulk button when no before_build vibes exist", () => {
@@ -219,14 +227,14 @@ describe("NextVibesList feedback functionality", () => {
         ),
       );
 
-      expect(screen.queryByRole("button", { name: /Add all/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /before-build vibe/ })).not.toBeInTheDocument();
     });
   });
 
   describe("Failures", () => {
     const adminHelp = async () => {
       const { ApiError } = await import("@/lib/api");
-      return new ApiError(500, "Internal Server Error", { detail: { error: "admin_help", message: "Couldn't add the next vibe to feedback: database unavailable" } });
+      return new ApiError(409, "Conflict", { detail: { error: "admin_help", message: "Couldn't add the next vibe to feedback: database unavailable" } });
     };
 
     it("single add: an admin_help error shows the block on that card, not a toast", async () => {
@@ -251,7 +259,7 @@ describe("NextVibesList feedback functionality", () => {
       const err = await adminHelp();
       api.useAddNextVibesToFeedback.mockReturnValue({ mutate: vi.fn((_v, opts) => opts.onError(err)) });
       render(withQuery(<NextVibesList vibes={vibes} verdict="iterate_first" domainRunId="r1" />));
-      fireEvent.click(screen.getByRole("button", { name: /Add all 1 before-build vibes/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Add the remaining before-build vibe" }));
       expect(await screen.findByTestId("bulk-feedback-admin-help")).toHaveTextContent("database unavailable");
       expect(notify.notifyError).not.toHaveBeenCalled();
     });
@@ -292,7 +300,7 @@ describe("NextVibesList feedback functionality", () => {
       const single = vi.fn();
       api.useAddNextVibeToFeedback.mockReturnValue({ mutate: single });
       render(withQuery(<NextVibesList vibes={vibes} verdict="iterate_first" domainRunId="r1" />));
-      fireEvent.click(screen.getByRole("button", { name: /Add all 1 before-build vibes/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Add the remaining before-build vibe" }));
       expect(await screen.findByTestId("vibe-retry-a")).toHaveTextContent("not a next vibe of this run");
       expect(screen.queryByTestId("vibe-retry-c")).toBeNull();
       expect(screen.queryByTestId("bulk-feedback-admin-help")).toBeNull();
@@ -308,7 +316,7 @@ describe("NextVibesList feedback functionality", () => {
         ),
       });
       render(withQuery(<NextVibesList vibes={vibes} verdict="iterate_first" domainRunId="r1" />));
-      fireEvent.click(screen.getByRole("button", { name: /Add all 1 before-build vibes/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Add the remaining before-build vibe" }));
       expect(sonner.toast.success).not.toHaveBeenCalled();
       expect(screen.getByTestId("vibe-retry-a")).toHaveTextContent("x");
     });
@@ -318,7 +326,7 @@ describe("NextVibesList feedback functionality", () => {
         mutate: vi.fn((_v, opts) => opts.onSuccess({ data: { count_created: 1, count_reused: 0, items: [], failures: [] } })),
       });
       render(withQuery(<NextVibesList vibes={vibes} verdict="iterate_first" domainRunId="r1" />));
-      fireEvent.click(screen.getByRole("button", { name: /Add all 1 before-build vibes/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Add the remaining before-build vibe" }));
       expect(screen.queryByTestId("bulk-feedback-admin-help")).toBeNull();
       expect(sonner.toast.success).toHaveBeenCalledWith("Added 1 vibe as feedback");
     });

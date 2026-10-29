@@ -5,6 +5,7 @@
  * "After you publish" phase have their own tests.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense } from "react";
@@ -31,6 +32,7 @@ vi.mock("@/lib/api", async () => {
     }),
     useListIndustriesSuspense: () => ({ data: [] }),
     useGetExplorerVersionsSuspense: () => ({ data: [] }),
+    useListVersions: () => ({ data: { data: [] }, isSuccess: true }),
     useListSectorsSuspense: () => ({ data: [] }),
     useGetAssessConfig: () => ({ data: assess.data }),
   };
@@ -66,6 +68,8 @@ async function renderExplorer() {
   );
   await screen.findByRole("heading", { name: "Acme Co" });
 }
+
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.explorer"));
 
 describe("Explorer Assessments link", () => {
   it("is hidden while the assessment config is loading", async () => {

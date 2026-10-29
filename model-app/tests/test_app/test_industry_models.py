@@ -15,10 +15,12 @@ Two layers:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from sqlmodel import Session, select
 
+from _test_app import make_test_app
 from vibe_modeling.backend.db_models import (
     AgentConfig,
     Business,
@@ -132,27 +134,14 @@ def _patch_connector(monkeypatch, conn):
 
 
 def test_scope_from_model_id_validates_against_valid_scopes():
-    from vibe_modeling.backend.services.industry_download import (
-        DEFAULT_DOWNLOAD_SCOPE,
-        _scope_from_model_id,
-    )
+    from vibe_modeling.backend.services.industry_download import _scope_from_model_id
 
-    # Explicit scope segment honoured when it is a known scope.
     assert _scope_from_model_id("v1_ecm") == "ecm"
     assert _scope_from_model_id("v2_mvm") == "mvm"
-    # A known-but-different-shaped id whose scope segment is not a valid scope
-    # falls back; ditto a malformed id with no scope segment.
-    assert _scope_from_model_id("v1_bogus") == DEFAULT_DOWNLOAD_SCOPE
-    assert _scope_from_model_id("weird_model") == DEFAULT_DOWNLOAD_SCOPE
-    assert _scope_from_model_id("ecm") == DEFAULT_DOWNLOAD_SCOPE
-
-
-def test_default_download_scope_is_valid():
-    from vibe_modeling.backend.core import _paths
-    from vibe_modeling.backend.services.industry_download import DEFAULT_DOWNLOAD_SCOPE
-
-    # Fallback must be acceptable to _paths._validate_scope (ecm|mvm only).
-    assert _paths._validate_scope(DEFAULT_DOWNLOAD_SCOPE) == DEFAULT_DOWNLOAD_SCOPE
+    # No known scope segment: no scope (the download refuses it).
+    assert _scope_from_model_id("v1_bogus") is None
+    assert _scope_from_model_id("weird_model") is None
+    assert _scope_from_model_id("ecm") is None
 
 
 # ---------------------------------------------------------------------------
@@ -197,25 +186,67 @@ def test_download_creates_industry_business_and_version(
         assert {d.name for d in domains} == {"sales", "inventory"}
 
 
-def test_download_scope_fallback_when_uninferrable(
+def test_a_model_id_without_a_scope_is_refused_and_writes_nothing(
     engine, mock_ws, config, seed_sector, monkeypatch,
 ):
+    from fastapi import HTTPException
+
+    from vibe_modeling.backend.services.industry_download import download_industry_model
+
+    from ._assess_helpers import table_digests
+
     conn = _FakeConnector()
     _patch_connector(monkeypatch, conn)
-    from vibe_modeling.backend.services.industry_download import (
-        DEFAULT_DOWNLOAD_SCOPE,
-        download_industry_model,
-    )
-
+    before = table_digests(engine)
     with Session(engine) as session:
-        # model_id "weird_model" -> _infer_scope None -> fallback ecm.
-        result = download_industry_model(
+        with pytest.raises(HTTPException) as exc:
+            download_industry_model(
+                session, mock_ws, config=config,
+                sector_id=seed_sector, industry_id="retail", model_id="weird_model",
+            )
+    assert exc.value.status_code == 422
+    assert "is not an ECM or an MVM model" in str(exc.value.detail)
+    assert table_digests(engine) == before
+    mock_ws.files.upload.assert_not_called()
+    mock_ws.statement_execution.execute_statement.assert_not_called()
+
+
+def test_download_prefixes_the_apps_copy_rows_and_seed(
+    engine, mock_ws, config, seed_sector, monkeypatch,
+):
+    """The real agriculture MVM (blank prefix): the Volume model.json, the
+    Domain rows and the seed name ``mvm_<domain>`` and ``mvm_<view>``; the
+    version records the markers; the seed's location is the version folder."""
+    from vibe_modeling.backend.core._paths import version_dir_in_volume
+    from vibe_modeling.backend.services import industry_download as mod
+
+    from ._fake_volume import FakeVolume
+
+    fixture = json.loads((Path(__file__).parent.parent / "fixtures" / "industry_agriculture_v1_trimmed.json").read_text())
+    root = fixture["mvm"]
+    root["model"].update({"type": "business", "version": "v1_mvm", "description": "Agriculture."})
+    conn = _FakeConnector(model_json=root, artifacts=[])
+    _patch_connector(monkeypatch, conn)
+    volume = FakeVolume(mock_ws)
+    seeds = []
+    monkeypatch.setattr(mod, "seed_metamodel_one", lambda ws, **kw: seeds.append(kw) or None)
+    with Session(engine) as session:
+        result = mod.download_industry_model(
             session, mock_ws, config=config,
-            sector_id=seed_sector, industry_id="retail", model_id="weird_model",
+            sector_id=seed_sector, industry_id="agriculture", model_id="v1_mvm",
         )
         session.commit()
         mv = session.get(ModelVersion, result.version_id)
-        assert mv.scope == DEFAULT_DOWNLOAD_SCOPE
+        assert (mv.import_schema_prefix_added, mv.import_view_prefix_added) == ("mvm_", "mvm_")
+        rows = {d.database_name for d in session.exec(select(Domain).where(Domain.version_id == mv.id)).all()}
+        folder = version_dir_in_volume(mv.files_catalog, result.business_name, 1, "mvm")
+    assert len(rows) == 14 and all(n.startswith("mvm_") for n in rows)
+    copy = volume.json(f"{folder}/model.json")
+    assert copy["model"]["version"] == "v1_mvm"
+    assert {d["database_name"] for d in copy["model"]["domains"]} == rows
+    assert all(v["view_name"].startswith("mvm_") for v in copy["model"]["metric_views"])
+    assert [kw["location"] for kw in seeds] == [folder]
+    assert {d["database_name"] for d in seeds[0]["model_json"]["domains"]} == rows
 
 
 def test_download_infers_scope_from_model_id(
@@ -707,7 +738,6 @@ def _seed_publishable(engine):
 
 
 def _publish_app(engine):
-    from fastapi import FastAPI
 
     from vibe_modeling.backend.core._defaults import _get_user_ws
     from vibe_modeling.backend.core._roles import require_modeler
@@ -715,8 +745,7 @@ def _publish_app(engine):
     from vibe_modeling.backend.routes.industry_models import router as im_router
     from .test_github_publish import _FakeUserWs
 
-    app = FastAPI()
-    app.include_router(im_router)
+    app = make_test_app(im_router)
 
     def override_session():
         with Session(engine) as session:

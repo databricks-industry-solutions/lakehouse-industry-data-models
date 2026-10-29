@@ -72,6 +72,7 @@ def test_terminal_success_indexes_volume_artifacts_onto_new_version():
     orchestrator-driven runs (#55).
     """
     from vibe_modeling.backend.services.operations._generation_common import (
+        AGENT_OP_NEW_BASE_MODEL,
         _terminal_success,
     )
 
@@ -127,6 +128,7 @@ def test_terminal_success_indexes_volume_artifacts_onto_new_version():
         )
 
         obs = _terminal_success(
+            agent_operation=AGENT_OP_NEW_BASE_MODEL,
             ctx=ctx, ws=ws, session=session, warehouse_id="",
             catalog=catalog, business_name=business_name,
             agent_business=business_name, agent_version="",
@@ -180,6 +182,7 @@ def test_terminal_success_artifact_indexing_does_not_fail_run():
     still terminate as successful — the agent's artifacts landed even if
     we can't read the directory listing right now."""
     from vibe_modeling.backend.services.operations._generation_common import (
+        AGENT_OP_NEW_BASE_MODEL,
         _terminal_success,
     )
 
@@ -208,6 +211,7 @@ def test_terminal_success_artifact_indexing_does_not_fail_run():
         )
 
         obs = _terminal_success(
+            agent_operation=AGENT_OP_NEW_BASE_MODEL,
             ctx=ctx, ws=ws, session=session, warehouse_id="",
             catalog="deploy_cat", business_name="test_corp",
             agent_business="test_corp", agent_version="",

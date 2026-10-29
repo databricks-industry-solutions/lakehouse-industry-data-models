@@ -1,0 +1,55 @@
+{
+  "_doc": "Shared BE/FE cases for the catalog an install-target prefill resolves from a version row: core/_catalogs.resolve_install_target_catalog with no explicit request catalog and no run default, and ui/lib/install-catalog.installTargetCatalog. home_cat is where the agent wrote the files, other_cat and third_cat are install catalogs.",
+  "cases": [
+    {
+      "name": "Dry Run draft: files only, never installed",
+      "version": {"deployment_status": "draft", "uc_catalog": "", "files_catalog": "home_cat"},
+      "expected": "home_cat"
+    },
+    {
+      "name": "kickstart: born with a files catalog and no install catalog",
+      "version": {"deployment_status": "draft", "uc_catalog": "", "files_catalog": "home_cat"},
+      "expected": "home_cat"
+    },
+    {
+      "name": "installed in the home catalog",
+      "version": {"deployment_status": "deployed", "uc_catalog": "home_cat", "files_catalog": "home_cat"},
+      "expected": "home_cat"
+    },
+    {
+      "name": "installed in another catalog: the install catalog, not the files",
+      "version": {"deployment_status": "deployed", "uc_catalog": "other_cat", "files_catalog": "home_cat"},
+      "expected": "other_cat"
+    },
+    {
+      "name": "installed in two catalogs: uc_catalog is the latest open install",
+      "version": {"deployment_status": "deployed", "uc_catalog": "third_cat", "files_catalog": "home_cat"},
+      "expected": "third_cat"
+    },
+    {
+      "name": "uninstalled: uc_catalog is only the last install location, so the files catalog",
+      "version": {"deployment_status": "uninstalled", "uc_catalog": "other_cat", "files_catalog": "home_cat"},
+      "expected": "home_cat"
+    },
+    {
+      "name": "deployed row from before files catalogs: no files catalog, install catalog wins",
+      "version": {"deployment_status": "deployed", "uc_catalog": "other_cat", "files_catalog": null},
+      "expected": "other_cat"
+    },
+    {
+      "name": "deployed without an install catalog falls to the files catalog",
+      "version": {"deployment_status": "deployed", "uc_catalog": "", "files_catalog": "home_cat"},
+      "expected": "home_cat"
+    },
+    {
+      "name": "names are trimmed",
+      "version": {"deployment_status": "deployed", "uc_catalog": "  other_cat ", "files_catalog": " home_cat "},
+      "expected": "other_cat"
+    },
+    {
+      "name": "nothing recorded: empty, the server then uses the installation catalog",
+      "version": {"deployment_status": "draft", "uc_catalog": "", "files_catalog": null},
+      "expected": ""
+    }
+  ]
+}

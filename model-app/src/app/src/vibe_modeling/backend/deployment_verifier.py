@@ -4,6 +4,11 @@ Provides three operations:
 1. Catalog check — verify the UC catalog exists and is accessible
 2. UC schema introspection — query information_schema for deployed tables/columns/PKs/FKs
 3. Compare — diff logical (Lakebase) vs deployed (UC) at table and column level
+
+Every result carries ``verification_error``: ``None`` when every query
+succeeded, else the sanitized reason a query failed. A failed read never
+reads as "nothing deployed": the result then carries no deployed objects
+and no diffs, only the error.
 """
 
 import logging
@@ -12,7 +17,9 @@ from typing import Optional
 from databricks.sdk import WorkspaceClient
 from sqlmodel import Session, select
 
+from .core._sql import SqlStatementError, rows
 from .db_models import Attribute, Domain, ForeignKeyLink, ModelVersion, Product
+from .services.schema_names import domain_schema_name
 
 logger = logging.getLogger(__name__)
 
@@ -32,23 +39,32 @@ class DeploymentVerifier:
     def check_catalog(self, catalog: str) -> dict:
         """Check if the UC catalog exists and is accessible.
 
-        Returns {"exists": bool, "catalog": str, "error": str | None}.
+        Returns {"exists": bool, "catalog": str, "error": str | None,
+        "verification_error": str | None}. ``SHOW CATALOGS`` first, then
+        ``information_schema.schemata``; only when both fail is the catalog
+        unverified, with the last failure as ``verification_error``.
         """
         sql = f"SHOW CATALOGS LIKE '{catalog}'"
-        result = self._execute_sql(sql)
-        if result is not None:
-            return {"exists": len(result) > 0, "catalog": catalog, "error": None}
+        try:
+            result = self._execute_sql(sql)
+        except SqlStatementError as exc:
+            logger.warning("SHOW CATALOGS for %r failed: %s", catalog, exc)
+        else:
+            return {"exists": len(result) > 0, "catalog": catalog, "error": None, "verification_error": None}
 
         # Fallback: try information_schema.schemata
         fallback_sql = (
             f"SELECT DISTINCT catalog_name "
             f"FROM `{catalog}`.`information_schema`.`schemata` LIMIT 1"
         )
-        result = self._execute_sql(fallback_sql)
-        if result is not None:
-            return {"exists": len(result) > 0, "catalog": catalog, "error": None}
-
-        return {"exists": False, "catalog": catalog, "error": "Could not verify catalog"}
+        try:
+            result = self._execute_sql(fallback_sql)
+        except SqlStatementError as exc:
+            return {
+                "exists": False, "catalog": catalog, "error": "Could not verify catalog",
+                "verification_error": _failure(f"Could not verify catalog '{catalog}'", exc),
+            }
+        return {"exists": len(result) > 0, "catalog": catalog, "error": None, "verification_error": None}
 
     # ------------------------------------------------------------------
     # 2. UC schema introspection
@@ -57,29 +73,38 @@ class DeploymentVerifier:
     def get_uc_schema(self, catalog: str, schemas: list[str]) -> dict:
         """Query information_schema for deployed tables, columns, PKs.
 
-        Returns:
+        Returns (``verification_error`` set and every list empty when a query
+        failed):
         {
             "tables": [{"schema": str, "table": str, "type": str}],
             "columns": [{"schema": str, "table": str, "column": str, "type": str, "ordinal": int}],
             "primary_keys": [{"schema": str, "table": str, "column": str}],
             "foreign_keys": [{"schema": str, "table": str, "column": str,
                               "ref_schema": str, "ref_table": str, "ref_column": str}],
+            "verification_error": str | None,
         }
         """
+        empty = {"tables": [], "columns": [], "primary_keys": [], "foreign_keys": [], "verification_error": None}
         schema_filter = ", ".join(f"'{s}'" for s in schemas)
         if not schema_filter:
-            return {"tables": [], "columns": [], "primary_keys": [], "foreign_keys": []}
+            return empty
 
-        tables = self._query_tables(catalog, schema_filter)
-        columns = self._query_columns(catalog, schema_filter)
-        pks = self._query_primary_keys(catalog, schema_filter)
-        fks = self._query_foreign_keys(catalog, schema_filter)
+        try:
+            tables = self._query_tables(catalog, schema_filter)
+            columns = self._query_columns(catalog, schema_filter)
+            pks = self._query_primary_keys(catalog, schema_filter)
+            fks = self._query_foreign_keys(catalog, schema_filter)
+        except SqlStatementError as exc:
+            return {**empty, "verification_error": _failure(
+                f"Could not read the deployed schema in catalog '{catalog}'", exc,
+            )}
 
         return {
-            "tables": tables or [],
-            "columns": columns or [],
-            "primary_keys": pks or [],
-            "foreign_keys": fks or [],
+            "tables": tables,
+            "columns": columns,
+            "primary_keys": pks,
+            "foreign_keys": fks,
+            "verification_error": None,
         }
 
     def _query_tables(self, catalog: str, schema_filter: str) -> list[dict]:
@@ -89,12 +114,10 @@ class DeploymentVerifier:
             f"WHERE table_schema IN ({schema_filter}) "
             f"ORDER BY table_schema, table_name"
         )
-        rows = self._execute_sql(sql)
-        if not rows:
-            return []
+        found = self._execute_sql(sql)
         return [
             {"schema": r[0], "table": r[1], "type": r[2]}
-            for r in rows
+            for r in found
         ]
 
     def _query_columns(self, catalog: str, schema_filter: str) -> list[dict]:
@@ -104,12 +127,10 @@ class DeploymentVerifier:
             f"WHERE table_schema IN ({schema_filter}) "
             f"ORDER BY table_schema, table_name, ordinal_position"
         )
-        rows = self._execute_sql(sql)
-        if not rows:
-            return []
+        found = self._execute_sql(sql)
         return [
             {"schema": r[0], "table": r[1], "column": r[2], "type": r[3], "ordinal": r[4]}
-            for r in rows
+            for r in found
         ]
 
     def _query_primary_keys(self, catalog: str, schema_filter: str) -> list[dict]:
@@ -123,12 +144,10 @@ class DeploymentVerifier:
             f"WHERE tc.constraint_type = 'PRIMARY KEY' "
             f"AND tc.table_schema IN ({schema_filter})"
         )
-        rows = self._execute_sql(sql)
-        if not rows:
-            return []
+        found = self._execute_sql(sql)
         return [
             {"schema": r[0], "table": r[1], "column": r[2]}
-            for r in rows
+            for r in found
         ]
 
     def _query_foreign_keys(self, catalog: str, schema_filter: str) -> list[dict]:
@@ -145,15 +164,13 @@ class DeploymentVerifier:
             f"AND rc.unique_constraint_schema = kcu2.constraint_schema "
             f"WHERE rc.constraint_schema IN ({schema_filter})"
         )
-        rows = self._execute_sql(sql)
-        if not rows:
-            return []
+        found = self._execute_sql(sql)
         return [
             {
                 "schema": r[0], "table": r[1], "column": r[2],
                 "ref_schema": r[3], "ref_table": r[4], "ref_column": r[5],
             }
-            for r in rows
+            for r in found
         ]
 
     # ------------------------------------------------------------------
@@ -172,18 +189,16 @@ class DeploymentVerifier:
             },
             "summary": {"model_tables": int, "uc_tables": int, "matching": int,
                          "model_only": int, "uc_only": int, "with_diffs": int},
+            "verification_error": str | None,
         }
+
+        When the deployed schema could not be read, ``verification_error``
+        says why and nothing is compared: no table is listed as model-only.
         """
         # Load logical model from Lakebase
         logical = self._load_logical_model(version_id)
         if not logical:
-            return {
-                "tables": {"model_only": [], "uc_only": [], "both": []},
-                "summary": {
-                    "model_tables": 0, "uc_tables": 0, "matching": 0,
-                    "model_only": 0, "uc_only": 0, "with_diffs": 0,
-                },
-            }
+            return _empty_comparison(0, None)
 
         # Collect schemas from the logical model
         schemas = list({t["schema"] for t in logical})
@@ -193,6 +208,8 @@ class DeploymentVerifier:
 
         # Build lookup sets: (schema, table)
         logical_set = {(t["schema"], t["table"]) for t in logical}
+        if uc["verification_error"]:
+            return _empty_comparison(len(logical_set), uc["verification_error"])
         uc_set = {(t["schema"], t["table"]) for t in uc["tables"]}
 
         # Build column lookups
@@ -230,6 +247,7 @@ class DeploymentVerifier:
                 "uc_only": len(uc_only),
                 "with_diffs": with_diffs,
             },
+            "verification_error": None,
         }
 
     def _load_logical_model(self, version_id: str) -> list[dict]:
@@ -244,7 +262,7 @@ class DeploymentVerifier:
             ).all()
             for product in products:
                 tables.append({
-                    "schema": domain.database_name or domain.name,
+                    "schema": domain_schema_name(domain.database_name, domain.name),
                     "table": product.table_name or product.name,
                 })
         return tables
@@ -256,7 +274,7 @@ class DeploymentVerifier:
             select(Domain).where(Domain.version_id == version_id)
         ).all()
         for domain in domains:
-            schema_name = domain.database_name or domain.name
+            schema_name = domain_schema_name(domain.database_name, domain.name)
             products = self._session.exec(
                 select(Product).where(Product.domain_id == domain.id)
             ).all()
@@ -296,22 +314,22 @@ class DeploymentVerifier:
     # SQL helper
     # ------------------------------------------------------------------
 
-    def _execute_sql(self, sql: str) -> Optional[list[list]]:
-        """Execute SQL via Statement Execution API. Returns raw rows or None."""
-        try:
-            result = self._ws.statement_execution.execute_statement(
-                warehouse_id=self._warehouse_id,
-                statement=sql,
-                wait_timeout="30s",
-            )
-            status = result.status
-            if status and status.error:
-                logger.warning(f"SQL error: {status.error.message}")
-                return None
-            data = result.result
-            if not data or not data.data_array:
-                return []
-            return data.data_array
-        except Exception as e:
-            logger.warning(f"SQL execution failed: {e}")
-            return None
+    def _execute_sql(self, sql: str) -> list[list]:
+        """Rows of an ``information_schema`` / ``SHOW`` query: one 30 s wait,
+        no polls. Every failure raises ``SqlStatementError``."""
+        return rows(self._ws, self._warehouse_id, sql, wait_timeout="30s")
+
+
+def _failure(what: str, exc: SqlStatementError) -> str:
+    return f"{what}: {exc.message}"
+
+
+def _empty_comparison(model_tables: int, verification_error: Optional[str]) -> dict:
+    return {
+        "tables": {"model_only": [], "uc_only": [], "both": []},
+        "summary": {
+            "model_tables": model_tables, "uc_tables": 0, "matching": 0,
+            "model_only": 0, "uc_only": 0, "with_diffs": 0,
+        },
+        "verification_error": verification_error,
+    }

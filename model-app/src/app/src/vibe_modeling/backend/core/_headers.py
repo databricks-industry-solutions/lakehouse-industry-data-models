@@ -45,6 +45,14 @@ _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off", ""}
 
 
+def databricks_app_name() -> str:
+    """The deployed App's resource name (``DATABRICKS_APP_NAME``), ``""`` outside the Apps runtime.
+
+    Not ``AppConfig.app_name``, which is the package name.
+    """
+    return os.environ.get("DATABRICKS_APP_NAME", "")
+
+
 def _is_databricks_app_runtime() -> bool:
     """Detect whether the process is running inside the Databricks Apps runtime.
 
@@ -52,7 +60,7 @@ def _is_databricks_app_runtime() -> bool:
     the app process. Either is a sufficient signal — DATABRICKS_APP_NAME is
     the conventional one.
     """
-    return bool(os.environ.get("DATABRICKS_APP_NAME"))
+    return bool(databricks_app_name())
 
 
 def should_trust_forwarded_headers() -> bool:

@@ -22,6 +22,7 @@ the upstream diff. Treat them as metadata that feeds the monitor UI.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Literal
 
 
@@ -516,3 +517,112 @@ def extract_version_provenance(model_json: object) -> tuple[str | None, str | No
     else:
         release_version = release_tag or None
     return agent_version, release_version
+
+
+def extract_vibe_scope_facts(
+    model_json: object,
+) -> tuple[str | None, int | None, str | None]:
+    """Return ``(fence_mode, base_version, base_scope)`` from a model.json's
+    root ``_vibe_scope`` block.
+
+    The agent writes the block on a vibe run (``mode`` is ``all`` for an
+    All-domains run, ``some_domains`` for a scoped one) with the base it
+    scoped against (``base_version`` as a string, ``base_scope`` short and
+    lowercase). Each value is ``None`` when the file has no block or the key
+    is missing or unreadable.
+    """
+    block = model_json_block(model_json, "_vibe_scope")
+    if not isinstance(block, dict):
+        return None, None, None
+    mode = block.get("mode")
+    mode = mode.strip() if isinstance(mode, str) and mode.strip() else None
+    try:
+        base_version: int | None = int(float(str(block.get("base_version")).strip()))
+    except (TypeError, ValueError):
+        base_version = None
+    scope = block.get("base_scope")
+    base_scope = scope.strip().lower() if isinstance(scope, str) and scope.strip() else None
+    return mode, base_version, base_scope
+
+
+@dataclass(frozen=True)
+class CompatGate:
+    """The compatibility verdict on one model.json, as every import applies it.
+
+    ``refused``: ``breaking`` or ``unknown``; the import must not proceed.
+    ``needs_adapter``: it proceeds with :attr:`adapter_warning`.
+    """
+
+    tag: str
+    verdict: Verdict
+
+    @property
+    def refused(self) -> bool:
+        return self.verdict in ("breaking", "unknown")
+
+    @property
+    def needs_adapter(self) -> bool:
+        return self.verdict == "needs-adapter"
+
+    @property
+    def refusal_message(self) -> str:
+        return describe_incompatibility(self.tag, self.verdict)
+
+    @property
+    def adapter_warning(self) -> str:
+        return (
+            f"Agent tag {self.tag!r} is classified needs-adapter and no adapter exists yet, "
+            f"so the import uses the compatible code path. Check the model before installing it."
+        )
+
+    def refusal_detail(self) -> dict:
+        """The 422 ``incompatible_agent_tag`` detail the import routes answer."""
+        return {
+            "error": "incompatible_agent_tag",
+            "detected_agent_tag": self.tag,
+            "compat_verdict": self.verdict,
+            "latest_supported_tag": latest_supported_tag(),
+            "supported_tags": sorted(SUPPORTED_TAGS),
+            "message": self.refusal_message,
+        }
+
+
+def gate_model_json(model_json: object, *, fallback: str | None) -> CompatGate:
+    """Detect the agent release of ``model_json`` and classify it.
+
+    ``fallback`` is the tag assumed when the file names none (the import
+    routes pass ``SUPPORTED_AGENT_VERSION`` for a valid file, ``None`` for an
+    invalid one, which then classifies as ``unknown``).
+    """
+    tag = detect_tag_from_model_json(model_json, fallback=fallback) if isinstance(model_json, dict) else ""
+    return CompatGate(tag=tag, verdict=classify_tag(tag))
+
+
+def model_json_block(model_json: object, key: str, default: object = None) -> object:
+    """The ``key`` block of an agent model.json, read at the root only.
+
+    The agent writes its run blocks (``_vibe_scope``, ``input_outcomes``,
+    ``lineage``, ``entity_changes``) at the top level of the file, next to the
+    ``model`` envelope (nb 100448-100451), so a key inside ``model`` is not
+    one of them. ``default`` when ``model_json`` is not a dict or has no
+    ``key``; pass a sentinel to tell a missing key from a ``null`` value.
+    """
+    if not isinstance(model_json, dict):
+        return default
+    return model_json.get(key, default)
+
+
+def generated_from_version_tag(model_json: object) -> str:
+    """The ``generated_from_version`` lineage tag of a model.json, or ``""``.
+
+    Read at the root, then in the ``model`` envelope (hand-edited and older
+    files carry it in either place). Agent exports keep theirs inside
+    ``_vibe_session_metadata``, which this does not read: there it labels the
+    run's output, not its parent.
+    """
+    if not isinstance(model_json, dict):
+        return ""
+    for blob in (model_json, model_json.get("model")):
+        if isinstance(blob, dict) and blob.get("generated_from_version"):
+            return str(blob["generated_from_version"])
+    return ""

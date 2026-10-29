@@ -2,11 +2,11 @@
 
 To run it, fork an ephemeral Lakebase branch, point ``VIBE_MODELING_LAKEBASE_*`` at it, set
 ``ASSESS_PG_DATABASE`` and delete the branch afterwards. Skipped unless ``ASSESS_PG_DATABASE`` is set.
-Maintainers: the runner that does this is listed in scripts/INDEX.md.
+``scripts/smoke/run_assess_ingest_pg.sh`` does all of that.
 
 Everything runs in a new, empty database on that branch, so the production data the fork cloned is
 never read or written. ``reconcile_schema`` builds it as a fresh install, which runs every migration
-including ``v_0_8_0``. On it:
+up to the head. On it:
 
 - the two ``use_alter`` decision-option FKs and the ``vibe_input_id`` SET NULL FK exist;
 - ingest of the fixture changes ``assess_*`` tables only;
@@ -17,7 +17,6 @@ including ``v_0_8_0``. On it:
 from __future__ import annotations
 
 import os
-import re
 import sys
 import threading
 import time
@@ -33,12 +32,14 @@ DATABASE = os.environ.get("ASSESS_PG_DATABASE", "")
 pytestmark = pytest.mark.skipif(not DATABASE, reason="needs a Lakebase branch (set ASSESS_PG_DATABASE)")
 
 from _assess_helpers import FEEDBACK_TABLES, changed_tables, table_digests  # noqa: E402
+from _pg_branch import fresh_database_engine  # noqa: E402
 from test_assess_ingest import _fixture_files, _seed_run, _ws_with  # noqa: E402
 
 from vibe_modeling.backend.assessment.ingest import ingest_domain_run  # noqa: E402
 from vibe_modeling.backend.assessment.schemas import BulkAddNextVibesToFeedbackIn  # noqa: E402
 from vibe_modeling.backend.core._headers import DatabricksAppsHeaders  # noqa: E402
 from vibe_modeling.backend.db_models import AssessDomainRun, AssessNextVibe, VibeInput  # noqa: E402
+from vibe_modeling.backend.migrations import MIGRATIONS  # noqa: E402
 
 HEADERS = DatabricksAppsHeaders(host=None, user_name=None, user_id=None, user_email="pg-test@example.com",
                                 request_id=None, token=None)
@@ -46,23 +47,9 @@ HEADERS = DatabricksAppsHeaders(host=None, user_name=None, user_id=None, user_em
 
 @pytest.fixture(scope="module")
 def pg_engine():
-    from databricks.sdk import WorkspaceClient
-
-    from vibe_modeling.backend.core.lakebase import DatabaseConfig, create_db_engine
     from vibe_modeling.backend.migrations import reconcile_schema
 
-    assert re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", DATABASE), DATABASE
-    ws = WorkspaceClient()
-    branch_db = create_db_engine(DatabaseConfig(), ws)
-    assert branch_db.dialect.name == "postgresql"
-    with branch_db.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
-        if not conn.execute(text("SELECT 1 FROM pg_database WHERE datname = :d"), {"d": DATABASE}).first():
-            conn.execute(text(f'CREATE DATABASE "{DATABASE}"'))
-    branch_db.dispose()
-    engine = create_db_engine(DatabaseConfig(database_name=DATABASE), ws)
-    with engine.connect() as conn:
-        assert conn.execute(text("SELECT current_database()")).scalar() == DATABASE
-        assert not inspect(conn).get_table_names()  # a fresh install, nothing cloned
+    engine = fresh_database_engine(DATABASE)
     reconcile_schema(engine)
     yield engine
     engine.dispose()
@@ -88,7 +75,8 @@ def test_v_0_8_0_emits_the_use_alter_and_set_null_fks(pg_engine):
     assert nv[("vibe_input_id",)]["referred_table"] == "vibe_inputs"
     assert nv[("vibe_input_id",)]["options"].get("ondelete") == "SET NULL"
     with pg_engine.connect() as conn:
-        assert conn.execute(text("SELECT version FROM _lakebase_schema_version WHERE id = 1")).scalar() == "0.8.0"
+        installed = conn.execute(text("SELECT version FROM _lakebase_schema_version WHERE id = 1")).scalar()
+    assert installed == MIGRATIONS[-1].version
 
 
 def test_ingest_writes_assess_tables_only(ingested):

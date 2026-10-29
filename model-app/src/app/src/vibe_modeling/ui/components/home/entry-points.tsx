@@ -1,7 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { Factory, Plus, FileUp, ArrowRight, Network } from "lucide-react";
 import { ImportNewBusinessDialog } from "@/components/import/import-new-business-dialog";
-import { useGetTaxonomyConfig } from "@/lib/api";
+import { useTaxonomyReady } from "@/lib/features";
 
 // Static class strings so Tailwind keeps them; indexed by the card count.
 // Three cards keep the original single-row layout from `sm` up; four go
@@ -29,8 +29,7 @@ export function EntryPoints({ emphasis = false }: { emphasis?: boolean }) {
   const iconWrap =
     "flex h-9 w-9 shrink-0 items-center justify-center rounded-sm border border-border bg-muted text-muted-foreground";
 
-  const { data: taxonomy } = useGetTaxonomyConfig();
-  const showTaxonomy = taxonomy?.data.ready === true;
+  const showTaxonomy = useTaxonomyReady().ready;
   const cards = showTaxonomy ? 4 : 3;
 
   return (
@@ -55,7 +54,7 @@ export function EntryPoints({ emphasis = false }: { emphasis?: boolean }) {
           </span>
           <span className="min-w-0 flex-1">
             <span className="block text-sm font-medium">Build from your domains</span>
-            <span className="block text-xs text-muted-foreground">Claude drafts it, you shape it</span>
+            <span className="block text-xs text-muted-foreground">The model drafts it, you shape it</span>
           </span>
           <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
         </Link>

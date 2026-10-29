@@ -364,6 +364,31 @@ describe("DownloadIndustryDialog", () => {
     expect(screen.queryByTestId("download-conflict-step")).toBeNull();
   });
 
+  it("shows the 400 detail of a refused _metamodel setup, not the HTTP status line", async () => {
+    const detail =
+      "The app can't create `_metamodel` in 'cat' (needs USE_CATALOG + CREATE_SCHEMA on the catalog).";
+    mockedDownload.mockRejectedValueOnce(
+      new ApiError(400, "Bad Request", { detail }),
+    );
+
+    render(
+      wrap(
+        <DownloadIndustryDialog
+          selection={SELECTION}
+          open
+          onOpenChange={() => {}}
+        />,
+      ),
+    );
+
+    await act(async () => {
+      fireEvent.click(await screen.findByTestId("download-submit"));
+    });
+
+    expect(await screen.findByText(detail)).toBeTruthy();
+    expect(screen.queryByText(/HTTP 400/)).toBeNull();
+  });
+
   it("blocks download until a sector is selected", async () => {
     render(
       wrap(

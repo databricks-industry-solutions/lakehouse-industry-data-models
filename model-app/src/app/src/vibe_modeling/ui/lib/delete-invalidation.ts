@@ -11,7 +11,12 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { invalidateBusinessLists } from "./business-cache";
 import { invalidateVibeInputQueries } from "@/components/vibe-inputs/query-keys";
-import { listVersionsKey, getExplorerVersionsKey, listSectorsKey } from "./api";
+import { listVersionsKey, getExplorerVersionsKey, listSectorsKey, listMetamodelCleanupsKey } from "./api";
+
+/** The business page's unfinished-cleanup list, which the cleanup-outcome toast points to. */
+export function invalidateMetamodelCleanups(queryClient: QueryClient, businessId: string): Promise<void> {
+  return queryClient.invalidateQueries({ queryKey: listMetamodelCleanupsKey({ business_id: businessId }) });
+}
 
 export type DeletableEntity = "business" | "version" | "vibeInput" | "sector";
 
@@ -44,6 +49,7 @@ export function invalidateEntityLists(
         queryClient.invalidateQueries({
           queryKey: getExplorerVersionsKey({ business_id: businessId }),
         }),
+        invalidateMetamodelCleanups(queryClient, businessId),
       ]);
     }
     case "vibeInput": {

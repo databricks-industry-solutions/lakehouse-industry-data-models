@@ -51,7 +51,7 @@ export function FollowingPane({
     (p) => p.key === DIAGRAM_FOCAL_MODE_KEY,
   )?.value as ColumnDisplayMode | undefined;
 
-  // This mini-pane has no title-level domain picker, but its diagram can
+  // This mini-pane has no domain picker, but its diagram can
   // still show a RELATED domain group with a clickable header
   // (diagram-viewer.tsx's onDomainClick). Item 3B deleted DiagramViewer's
   // internal domain-state fallback, so without this callback that click

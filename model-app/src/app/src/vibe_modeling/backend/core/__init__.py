@@ -1,7 +1,12 @@
 from ._catalogs import (
     resolve_metamodel_catalog as resolve_metamodel_catalog,
+    resolve_import_registry_catalog as resolve_import_registry_catalog,
+    resolve_install_target_catalog as resolve_install_target_catalog,
     resolve_run_target_catalog as resolve_run_target_catalog,
+    resolve_uninstall_target_catalog as resolve_uninstall_target_catalog,
+    resolve_version_install_catalog as resolve_version_install_catalog,
     resolve_version_volume_catalog as resolve_version_volume_catalog,
+    volume_path_catalog as volume_path_catalog,
 )
 from ._factory import create_app as create_app, create_router as create_router
 from .dependencies import Dependencies as Dependencies

@@ -472,3 +472,36 @@ class TestNewBaseModelSeedsFromBusinessVibes:
             "Detailed: orders, customers, SKUs, fulfilment, returns."
         )
         assert widgets["business_description"] == "Acme, a mid-size online retailer."
+
+
+class TestDispatchedAgentWidgets:
+    """What reaches ``run_now``: the agent's boolean label, the runtime budget,
+    and no ``generate_samples`` widget even when the request still sends the
+    tolerated ``RunIn.generate_samples``."""
+
+    @pytest.mark.parametrize(
+        "intent,business_fixture",
+        [("new-base-model", "seed_business"), ("vibe-iterate", "seed_business_with_version")],
+    )
+    def test_agent_strings_and_budget_reach_run_now(
+        self, request, client_with_agent, mock_ws, intent, business_fixture
+    ):
+        business_id = request.getfixturevalue(business_fixture)
+        _mock_run_now(mock_ws)
+        resp = client_with_agent.post(
+            f"/api/businesses/{business_id}/runs",
+            json={
+                "intent": intent,
+                "catalog": "test_catalog",
+                "vibe_instructions": "merge customer and account tables",
+                "boolean_format": "Integer (1/0)",
+                "generate_samples": True,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        widgets = _dispatched_widgets(mock_ws)
+        assert widgets["boolean_format"] == "Int (0/1)"
+        # The Settings default, 6 hours (no AgentConfig override, no run override).
+        assert widgets["runtime_budget_seconds"] == "21600"
+        assert "generate_samples" not in widgets

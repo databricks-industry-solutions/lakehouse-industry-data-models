@@ -18,11 +18,13 @@ from sqlmodel import Session, select
 
 from vibe_modeling.backend import progress_tracker as pt
 from vibe_modeling.backend._compile import compile_inputs
+from vibe_modeling.backend.run_report import persist_agent_report
 from vibe_modeling.backend.db_models import (
     Business,
     Domain,
     ModelVersion,
     RunInputLink,
+    RunOperation,
     VibeInput,
     VibeInputContextLink,
 )
@@ -97,10 +99,12 @@ def test_create_compile_launch_dispatches_compiled_markdown(
     mock_ws.jobs.run_now.return_value = MagicMock(run_id=70001)
     iid = _create_input(client_with_agent, bid, vid)
 
-    # Compile preview = the doc the launch will dispatch.
+    # The launch dispatches the compile's agent_markdown (the preview's
+    # markdown plus inline anchors and K1 markers).
     with Session(engine) as s:
-        expected = compile_inputs(s, vid, [iid]).markdown
+        expected = compile_inputs(s, vid, [iid]).agent_markdown
     assert "Add primary keys to all tables" in expected
+    assert f"<!-- vi:{iid} target=model -->" in expected
 
     r = client_with_agent.post(f"/api/businesses/{bid}/runs",
                                json=_vibe_new_body(vid, [iid]))
@@ -154,7 +158,8 @@ def test_failure_clears_link_keeps_selection_success_consumes(
     """Lifecycle contract: a selected input is ``RunInputLink``-ed at launch;
     on FAILURE the link is cleared but ``selected_for_run`` is kept (durable
     selection survives a failed run — the user need not reselect); on SUCCESS
-    the linked input is consumed and selection clears."""
+    the linked input the agent reports ``applied`` is consumed and selection
+    clears."""
     bid, vid = parent_ecm
     mock_ws.jobs.run_now.return_value = MagicMock(run_id=70002)
 
@@ -187,6 +192,18 @@ def test_failure_clears_link_keeps_selection_success_consumes(
         f"/api/businesses/{bid}/runs", json=_vibe_new_body(vid, [iid_s])
     ).json()["id"]
     with Session(engine) as s:
+        op = s.exec(
+            select(RunOperation)
+            .where(RunOperation.run_id == ok_run)
+            .where(RunOperation.operation_name == "vibe_iterate")
+        ).one()
+        op.status = "succeeded"
+        s.add(op)
+        persist_agent_report(s, ok_run, {
+            "has_input_outcomes": True,
+            "input_outcomes": [{"item_id": iid_s, "status": "applied"}],
+        })
+        s.commit()
         pt._finalize_run_inputs(ok_run, s, success=True)
     with Session(engine) as s:
         vi = s.get(VibeInput, iid_s)

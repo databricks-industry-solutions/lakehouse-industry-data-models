@@ -13,12 +13,20 @@ interface DomainSelectProps {
   /** Portal container for the dropdown content (needed in fullscreen). */
   portalContainer?: HTMLElement | null;
   className?: string;
+  /** Offer the "All domains" choice. Defaults to true; a pick that opens a
+   *  domain's page (Overview, Products, the product page) turns it off. */
+  allowAll?: boolean;
+  /** Shown while no domain is picked and "All domains" is not offered
+   *  (e.g. "Go to domain" on the version page's Overview). */
+  placeholder?: string;
 }
 
 const ALL_SENTINEL = "__all__";
 
 /**
- * Domain dropdown shared between the Diagram and Ontology tabs.
+ * The one domain dropdown, rendered inside each tab that has a per-domain
+ * view (Overview, Diagram, Ontology, Products, the product page), always
+ * below the tab strip, never above it.
  *
  * The first option ("All domains") maps to a `null` value via the
  * `__all__` sentinel — keeping the value type as `string | null` lets
@@ -30,17 +38,19 @@ export function DomainSelect({
   onChange,
   portalContainer,
   className,
+  allowAll = true,
+  placeholder,
 }: DomainSelectProps) {
   return (
     <Select
-      value={value ?? ALL_SENTINEL}
+      value={value ?? (allowAll ? ALL_SENTINEL : "")}
       onValueChange={(v) => onChange(v === ALL_SENTINEL ? null : v)}
     >
-      <SelectTrigger className={className ?? "w-[220px] h-8 text-sm"}>
-        <SelectValue placeholder="All domains" />
+      <SelectTrigger className={className ?? "w-[220px] h-8 text-sm"} aria-label="Domain">
+        <SelectValue placeholder={placeholder ?? "All domains"} />
       </SelectTrigger>
       <SelectContent container={portalContainer}>
-        <SelectItem value={ALL_SENTINEL}>All domains</SelectItem>
+        {allowAll && <SelectItem value={ALL_SENTINEL}>All domains</SelectItem>}
         {domains.map((d) => (
           <SelectItem key={d.name} value={d.name}>
             {d.name}
@@ -51,5 +61,16 @@ export function DomainSelect({
         ))}
       </SelectContent>
     </Select>
+  );
+}
+
+/** A tab's own toolbar row holding the domain dropdown, for tabs whose body
+ *  has no toolbar of its own (Overview, Products, the product page). The
+ *  Diagram and Ontology put `DomainSelect` in their toolbars. */
+export function TabDomainSelect(props: DomainSelectProps) {
+  return (
+    <div className="flex items-center gap-3 py-2">
+      <DomainSelect {...props} />
+    </div>
   );
 }

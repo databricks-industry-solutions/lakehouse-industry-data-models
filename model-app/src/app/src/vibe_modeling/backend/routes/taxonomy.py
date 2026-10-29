@@ -3,19 +3,26 @@
 Drafting is asynchronous: POST returns a draft id at once and the work runs as
 background tasks in this process; the UI polls GET /drafts/{id}. Drafts are
 scoped to the calling user (``Dependencies.UserIdentity``, the same identity
-as per-user preferences) and kept in memory only.
+as per-user preferences) and kept in memory only. A draft request may seed the
+tree and sections the user already has; only the missing parts are drafted.
+
+The wizard itself is saved per user in the database (GET / PUT / DELETE
+/taxonomy/saved, ``taxonomy/saved_state.py``) so it can be resumed after a
+reload or a restart.
 
 Gating, checked before anything is created:
 - every route answers 404 when the feature is not installed
   (``require_taxonomy_installed``); the router stays mounted so the OpenAPI
   spec does not change by deployment;
 - the three LLM routes (create draft, retry part, condense) refuse with the
-  structured 422 ``config_missing`` when no model service is set, or when the
-  service fails its test call (``ensure_model_service_usable``).
+  structured 422 ``config_missing`` when no model service is set, and with
+  400 ``model_service_refused`` when the service fails its test call
+  (``ensure_model_service_usable``); both shapes come from ``core/_errors``.
 
-Mutators (create / cancel / retry / condense) require BusinessAdminOnly - the
-same bar as createBusiness, which is where the wizard ends. GET draft, compile,
-and example are read-only (allow-listed in tests/test_app/test_rbac_coverage.py).
+Mutators (create / cancel / retry / condense) and the three saved-wizard
+routes require BusinessAdminOnly - the same bar as createBusiness, which is
+where the wizard ends. GET draft, compile, and example are read-only
+(allow-listed in tests/test_app/test_rbac_coverage.py).
 """
 
 from __future__ import annotations
@@ -27,8 +34,10 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from ..._metadata import api_prefix
 from ..core import Dependencies
+from ..core._errors import model_service_refused_error
 from ..core._features import require_installed
 from ..taxonomy.access import MODEL_SERVICE_ACCESS, REFUSED_CHECKS
+from ..taxonomy import saved_state
 from ..taxonomy.compile import compile_taxonomy
 from ..taxonomy.drafts import DraftStore
 from ..taxonomy.example import load_ridgeline_example
@@ -38,12 +47,16 @@ from ..taxonomy.models import (
     TaxonomyCompileOut,
     TaxonomyCondenseIn,
     TaxonomyDraftCreated,
+    TaxonomyDraftCreateIn,
     TaxonomyDraftOut,
     TaxonomyExampleOut,
-    TaxonomyIntake,
+    TaxonomySavedWizardOut,
+    TaxonomyWizardDiscardOut,
+    TaxonomyWizardStateIn,
+    TaxonomyWizardStateOut,
 )
 from ..taxonomy.slots import TAXONOMY_SLOTS
-from ._helpers import _get_or_create_agent_config, config_missing_error, require_config
+from ._helpers import _get_or_create_agent_config, require_config
 
 NOT_INSTALLED_DETAIL = "Domain Taxonomy Builder is not installed"
 
@@ -90,7 +103,8 @@ LLM = Annotated[TaxonomyLLM, Depends(get_taxonomy_llm)]
 
 async def ensure_model_service_usable(llm: TaxonomyLLM) -> bool:
     """Probe the service unless it passed recently in this process. ``denied``,
-    ``not_found`` and ``error`` refuse with 422 before any draft exists.
+    ``not_found`` and ``error`` refuse with 400 ``model_service_refused``
+    before any draft exists.
     Returns False when the probe was ``busy``: the draft is still created, with
     the part reported busy (the client counts down and retries, which probes
     again)."""
@@ -98,7 +112,7 @@ async def ensure_model_service_usable(llm: TaxonomyLLM) -> bool:
         return True
     check = await MODEL_SERVICE_ACCESS.probe(llm, TAXONOMY_SLOTS)
     if check.status in REFUSED_CHECKS:
-        raise config_missing_error("taxonomy_llm", check.message)
+        raise model_service_refused_error("taxonomy_llm", check.status, check.message)
     return check.status != "busy"
 
 
@@ -120,11 +134,15 @@ async def require_draft_part(draft_id: str, part: str, store: Store, owner: Depe
 
 @router.post("/taxonomy/drafts", response_model=TaxonomyDraftCreated, operation_id="createTaxonomyDraft")
 async def create_taxonomy_draft(
-    data: TaxonomyIntake, store: Store, owner: Dependencies.UserIdentity,
+    data: TaxonomyDraftCreateIn, store: Store, owner: Dependencies.UserIdentity,
     _role: Dependencies.BusinessAdminOnly, settings: LLMSettings, llm: LLM,
 ):
-    usable = await ensure_model_service_usable(llm)
-    draft_id = store.create(owner, data, llm, capacity=settings.max_concurrency, busy=not usable)
+    # Every part seeded: nothing is drafted, so no test call either.
+    usable = data.fully_seeded() or await ensure_model_service_usable(llm)
+    draft_id = store.create(
+        owner, data.intake(), llm, capacity=settings.max_concurrency, busy=not usable,
+        seed_tree=data.seed_tree, seed_sections=data.seed_sections,
+    )
     return TaxonomyDraftCreated(draft_id=draft_id)
 
 
@@ -185,3 +203,46 @@ def compile_taxonomy_route(data: TaxonomyCompileIn):
 @router.get("/taxonomy/example", response_model=TaxonomyExampleOut, operation_id="getTaxonomyExample")
 def get_taxonomy_example():
     return load_ridgeline_example()
+
+
+STALE_REVISION_MESSAGE = "This wizard was saved more recently in another tab or window."
+SAVE_CLEARED_MESSAGE = (
+    "Your saved work was cleared: the business was created, or the wizard was started over, in another tab or window."
+)
+
+
+@router.get("/taxonomy/saved", response_model=TaxonomySavedWizardOut, operation_id="getSavedTaxonomyWizard")
+def get_saved_taxonomy_wizard(
+    session: Dependencies.Session, owner: Dependencies.UserIdentity, _role: Dependencies.BusinessAdminOnly,
+):
+    return TaxonomySavedWizardOut(saved=saved_state.load(session, owner))
+
+
+@router.put("/taxonomy/saved", response_model=TaxonomyWizardStateOut, operation_id="saveTaxonomyWizard")
+def save_taxonomy_wizard(
+    data: TaxonomyWizardStateIn, session: Dependencies.Session, owner: Dependencies.UserIdentity,
+    _role: Dependencies.BusinessAdminOnly,
+):
+    """409 ``{"error": "stale_revision", "revision": n}`` when ``data.revision``
+    is not the stored revision ``n`` (another tab saved; n = 0 when the save
+    was cleared). 413 when the document is over the size cap."""
+    try:
+        return saved_state.save(session, owner, data)
+    except saved_state.StaleRevision as stale:
+        message = SAVE_CLEARED_MESSAGE if stale.current == 0 else STALE_REVISION_MESSAGE
+        raise HTTPException(
+            status_code=409, detail={"error": "stale_revision", "revision": stale.current, "message": message},
+        ) from None
+    except saved_state.DocumentTooLarge:
+        raise HTTPException(
+            status_code=413,
+            detail=f"This wizard is too large to save (over {saved_state.MAX_DOCUMENT_BYTES // 1_000_000} MB). "
+                   "Shorten the pasted document or remove domains.",
+        ) from None
+
+
+@router.delete("/taxonomy/saved", response_model=TaxonomyWizardDiscardOut, operation_id="discardTaxonomyWizard")
+def discard_taxonomy_wizard(
+    session: Dependencies.Session, owner: Dependencies.UserIdentity, _role: Dependencies.BusinessAdminOnly,
+):
+    return TaxonomyWizardDiscardOut(discarded=saved_state.discard(session, owner))

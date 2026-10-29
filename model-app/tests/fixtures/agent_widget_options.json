@@ -1,0 +1,23 @@
+{
+  "_comment": "The agent's dropdown values for the widgets the New Run form sets, verbatim and in the agent's order: the dbutils.widgets.dropdown calls of vibe_modelling_agent_v5.3.3.ipynb, lines 38571 (org_divisions), 38575 (cataloging_style), 38588 (naming_convention), 38594-38597 (table_id_type, boolean_format, date_format, timestamp_format) and 38599-38600 (housekeeping_columns, history_tracking_columns). Pinned to the vendored notebook by tests/test_app/test_agent_widget_options.py, to the form by ui/__tests__/run-options.test.ts and to the run-parameters help page by ui/__tests__/help-run-parameters.test.tsx.",
+  "options": {
+    "naming_convention": ["snake_case", "camelCase", "PascalCase", "SCREAMING_CASE"],
+    "table_id_type": ["BIGINT", "INT", "LONG", "STRING"],
+    "boolean_format": ["Boolean (True/False)", "Int (0/1)", "String (Y/N)"],
+    "date_format": ["yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy", "yyyy/MM/dd", "dd-MM-yyyy"],
+    "timestamp_format": [
+      "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+      "yyyy-MM-dd HH:mm:ss",
+      "yyyy-MM-dd'T'HH:mm:ss",
+      "yyyy-MM-dd HH:mm:ss.SSS"
+    ],
+    "cataloging_style": ["One Catalog", "Catalog per Division", "Catalog per Domain"],
+    "org_divisions": ["Operations", "Operations and Business", "Operations, Business and Corporate"],
+    "housekeeping_columns": ["No", "Yes"],
+    "history_tracking_columns": ["No", "Yes"]
+  },
+  "form_omits": {
+    "table_id_type": ["LONG"]
+  },
+  "min_agent_marker_for_scope": "5.3.3"
+}

@@ -69,8 +69,17 @@ DB_ONLY_FIELDS = {
         "industry_id",  # FK to industries table, resolved via industry_alignment string
     },
     "BusinessContext": set(),
-    "ModelVersion": set(),
+    # The file's ``_vibe_scope`` base facts feed the advisory install check
+    # and the create-time scope checks; the API exposes only the fence mode.
+    # The import-prefix markers are read only by publish (it strips exactly
+    # what the import added) and by the install's file order.
+    "ModelVersion": {
+        "scope_base_version", "scope_base_scope",
+        "import_schema_prefix_added", "import_view_prefix_added",
+    },
     "Run": {"vibe_session_id_bigint", "last_consumed_step_id"},
+    # Report items nest under RunReportOut, which carries the run id.
+    "RunInputLink": {"run_id"},
     "RunProgressEvent": set(),
     "RunArtifact": set(),
     # GitHub config columns are exposed via the dedicated GithubConfigOut /
@@ -92,8 +101,17 @@ DB_ONLY_FIELDS = {
         # Domain Taxonomy Builder settings (v_0_8_0): exposed via the
         # dedicated /config/taxonomy surface, not on AgentConfigOut.
         "taxonomy_model_service", "taxonomy_llm_max_concurrency",
+        # Installed-notebook identity cache (v_0_9_0): exposed via
+        # AgentCompatOut / /config/agent-compat, not on AgentConfigOut.
+        "installed_release_version", "installed_agent_version",
+        "installed_checked_at", "installed_checked_path", "installed_check_error",
+        # Taxonomy settings audit pair (v_0_9_0_1): exposed with the taxonomy
+        # settings on /config/taxonomy, not on AgentConfigOut.
+        "taxonomy_updated_by", "taxonomy_updated_at",
     },
     "Industry": set(),
+    # A change is addressed by (run, element); the run and version are the route's path.
+    "RunChangeDecision": {"run_id", "version_id"},
     "UserPreference": {"user_id"},  # user_id is derived from auth headers, not in Out
 }
 
@@ -133,7 +151,7 @@ class TestDbToOutCoverage:
         # entry is what forces the new `author` column onto VibeInputOut.
         (db.VibeInput, api.VibeInputOut, "VibeInput"),
         (db.VibeInputContextLink, api.VibeInputContextLinkOut, "VibeInputContextLink"),
-        (db.RunInputLink, api.RunInputLinkOut, "RunInputLink"),
+        (db.RunInputLink, api.RunReportItemOut, "RunInputLink"),
         (db.Subdomain, api.SubdomainOut, "Subdomain"),
         (db.ProductReview, api.ProductReviewOut, "ProductReview"),
         (db.RunElementLineage, api.RunElementLineageOut, "RunElementLineage"),
@@ -147,6 +165,8 @@ class TestDbToOutCoverage:
         (db.AssessSummary, assess_api.SummaryOut, "AssessSummary"),
         (db.AssessDecisionAffected, assess_api.DecisionAffectedOut, "AssessDecisionAffected"),
         (db.AssessColumnSourceProfile, assess_api.SourceProfileOut, "AssessColumnSourceProfile"),
+        (db.MetamodelCleanup, api.MetamodelCleanupOut, "MetamodelCleanup"),
+        (db.RunChangeDecision, api.RunChangeOut, "RunChangeDecision"),
     ])
     def test_db_fields_covered_by_out(self, db_cls, out_cls, entity_name):
         db_fields = _db_api_fields(db_cls, RELATIONSHIP_FIELDS.get(entity_name, set()))
@@ -493,7 +513,7 @@ class TestVibeInputPriorityEnumLockstep:
 
 class TestVibeInputEnumVocabularies:
     def test_origin_values(self):
-        assert {e.value for e in api.VibeInputOrigin} == {"user", "agent_next_vibe"}
+        assert {e.value for e in api.VibeInputOrigin} == {"user", "agent_next_vibe", "change_rejection"}
 
     def test_status_values(self):
         assert {e.value for e in api.VibeInputStatus} == {"active", "deprecated"}
@@ -557,6 +577,29 @@ class TestKickstartInContract:
         assert m.whole_model is True  # unchanged default
 
 
+class TestIndustryScopePrefixModels:
+    """``applyIndustryScopePrefixes``: the body defaults to a dry run; each
+    row's action is one of the four the script reads."""
+
+    def test_in_defaults_to_a_dry_run(self):
+        assert api.IndustryScopePrefixesIn().apply is False
+        assert api.IndustryScopePrefixesIn(apply=True).apply is True
+
+    def test_row_actions(self):
+        from typing import get_args
+
+        assert set(get_args(api.ScopePrefixAction)) == {"changed", "unchanged", "skipped", "failed"}
+        with pytest.raises(Exception):
+            api.IndustryScopePrefixRowOut(version_id="v", version=1, scope="ecm", action="renamed", reason="")
+
+    def test_route_service_actions_agree(self):
+        from typing import get_args
+
+        from vibe_modeling.backend.services import industry_prefix_fix as fix
+
+        assert {fix.CHANGED, fix.UNCHANGED, fix.SKIPPED, fix.FAILED} == set(get_args(api.ScopePrefixAction))
+
+
 class TestMetamodelSeedConvergence:
     """Track 3 spike lock: EVERY iterable-version producer must seed
     ``_metamodel`` (else the produced version is un-iterable - the agent reads
@@ -572,15 +615,20 @@ class TestMetamodelSeedConvergence:
         from vibe_modeling.backend.routes import import_root
         from vibe_modeling.backend.routes import businesses as businesses_route
         from vibe_modeling.backend.services import (
+            dialog_import,
             industry_download,
             industry_kickstart,
+            industry_prefix_fix,
         )
 
+        # Both import dialogs seed through the shared dialog-import steps.
+        for route in (import_root, businesses_route):
+            assert "finish_dialog_import(" in inspect.getsource(route), route.__name__
         for mod in (
-            import_root,          # import model.json
-            businesses_route,     # Volume-import (execute_import)
+            dialog_import,        # the two import dialogs
             industry_kickstart,   # kickstart
             industry_download,    # download
+            industry_prefix_fix,  # the pre-0.9.0 industry prefix fix re-seeds
         ):
             # Require the CALL syntax, not just the symbol, so dropping the
             # actual call while leaving the import/comment still fails here.
@@ -666,10 +714,10 @@ class TestTask5RequestResponseShapes:
     their field sets so a silent contract break surfaces in CI."""
 
     def test_compile_shapes(self):
-        assert _get_model_fields(api.CompileIn) == {"input_ids"}
+        assert _get_model_fields(api.CompileIn) == {"input_ids", "vibe_scope_domains"}
         assert _get_model_fields(api.CompileOut) == {
-            "markdown", "blocks", "included_input_ids",
-            "excluded_input_ids", "excluded_reasons",
+            "markdown", "agent_markdown", "blocks", "included_input_ids",
+            "excluded_input_ids", "excluded_reasons", "input_scope_domains",
         }
         assert _get_model_fields(api.CompiledBlockOut) == {
             "input_id", "origin", "priority", "author",
@@ -704,12 +752,20 @@ class TestTask5RequestResponseShapes:
             "subdomain_id", "subdomain_name",
             "product_id", "product_name",
             "attribute_id", "attribute_name",
-            "fk_link_id", "fk_label",
+            "fk_link_id", "fk_label", "fk_edge_id",
             "path",
         }
 
     def test_vibe_input_out_carries_anchor(self):
         assert "anchor" in _get_model_fields(api.VibeInputOut)
+
+    def test_feedback_context_is_model_coordinates_only(self):
+        """Feedback is about the model: the Add-feedback context names a model
+        element and carries no view state (tab, column mode, filters)."""
+        assert _get_model_fields(api.FeedbackContext) == {
+            "domain_filter", "selected_node_id", "selected_edge_id", "selected_attribute",
+        }
+        assert "origin_context" in _get_model_fields(api.VibeInputIn)
 
 
 class TestBusinessListOutTaxonomyFields:
@@ -769,6 +825,27 @@ class TestCatalogSchemaWarningOut:
 
         fields = _get_model_fields(CatalogSchemaWarningOut)
         assert fields == {"catalog", "schema_count", "schemas"}
+
+
+class TestRunDefaultsOut:
+    """Shape lock for ``getRunDefaults`` (computed, no DB or In counterpart):
+    the run form keys its pre-fill and locks off these fields."""
+
+    def test_shape(self):
+        assert _get_model_fields(api.RunDefaultsOut) == {"base_version_id", "file_read", "fields"}
+        assert _get_model_fields(api.RunDefaultFieldOut) == {"value", "source", "locked", "locked_scoped"}
+
+    def test_source_vocabulary(self):
+        with pytest.raises(Exception):
+            api.RunDefaultFieldOut(source="guess")
+        for source in ("base_file", "base_run", "default", "unknown"):
+            assert api.RunDefaultFieldOut(source=source).value is None
+
+    def test_pre_filled_fields_are_run_in_fields(self):
+        from vibe_modeling.backend.services.run_defaults import FIELD_DEFAULTS
+
+        assert set(FIELD_DEFAULTS) <= set(api.RunIn.model_fields)
+        assert set(api.RUN_CONVENTION_FIELDS) <= set(api.RunIn.model_fields)
 
 
 class TestAssessReadinessModels:
@@ -876,7 +953,7 @@ class TestAssessReadinessModels:
             "domain_run_id", "path", "created_at", "created_by", "folder_url", "prompts", "skills",
             "next_steps", "user_scope_note", "expected_handoffs", "skills_note"}
         assert set(typing.get_args(assess_api.HandoffPrompt.model_fields["key"].annotation)) == {
-            "continue", "build", "gold", "validate", "document"}
+            "continue", "build", "validate", "gold", "build_gold", "validate_gold", "document"}
         assert set(typing.get_args(assess_api.SkillStatus.model_fields["state"].annotation)) == {
             "present", "update_available", "missing", "unknown"}
         # HandoffOut mirrors the AssessHandoff row for the persisted fields
@@ -939,3 +1016,389 @@ class TestBusinessTaxonomyProposalFields:
         out = api.BusinessOut.model_validate(row, from_attributes=True)
         assert out.business_domains == "sales, finance"
         assert out.org_divisions == "Legacy preset"
+
+
+class TestVersionLifecycleContract:
+    """v_0_9_0 lifecycle, confirmation and report fields. All additive and
+    defaulted, so clients that do not send or read them are unaffected."""
+
+    def test_model_version_lifecycle_maps_db_to_out(self):
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 10, 22, tzinfo=timezone.utc)
+        mv = db.ModelVersion(
+            business_id="biz-1", version=4, dry_run=True, promoted_at=now, promoted_by_run_id="run-1",
+            replaced_by_version_id="mv-3", replaced_at=now, files_catalog="cat_a",
+            scope_fence_mode="some_domains",
+        )
+        out = api.ModelVersionOut.model_validate(mv, from_attributes=True)
+        assert (out.dry_run, out.promoted_at, out.promoted_by_run_id) == (True, now, "run-1")
+        assert (out.replaced_by_version_id, out.replaced_at) == ("mv-3", now)
+        assert (out.files_catalog, out.scope_fence_mode) == ("cat_a", "some_domains")
+        assert out.is_head is None and out.draft_state is None
+
+    def test_model_version_derived_fields(self):
+        fields = api.ModelVersionOut.model_fields
+        assert fields["is_head"].default is None
+        assert fields["draft_state"].default is None
+        with pytest.raises(ValueError):
+            api.ModelVersionOut.model_validate(
+                {**api.ModelVersionOut.model_validate(db.ModelVersion(business_id="b", version=1),
+                                                      from_attributes=True).model_dump(),
+                 "draft_state": "stale"}
+            )
+
+    def test_issue_out_severity_vocabulary_and_subject(self):
+        issue = api.IssueOut(field_path="", step_index=-1, message="m", severity="confirm",
+                             subject="install_over_newer:mv-5")
+        assert issue.subject == "install_over_newer:mv-5"
+        assert api.IssueOut(field_path="", step_index=0, message="m", severity="blocker").subject is None
+        with pytest.raises(ValueError):
+            api.IssueOut(field_path="", step_index=0, message="m", severity="error")
+
+    def test_run_in_confirmation_fields_default_off(self):
+        run = api.RunIn()
+        assert run.confirmed_issues == [] and run.also_delete_replaced is False
+        run = api.RunIn(confirmed_issues=["install_replaces_in_catalog:mv-5"], also_delete_replaced=True)
+        assert run.confirmed_issues == ["install_replaces_in_catalog:mv-5"] and run.also_delete_replaced
+
+    def test_vibe_input_and_link_outcome_fields(self):
+        assert api.VibeInputOut.model_fields["consumed_by_run_id"].default is None
+        fields = api.RunReportItemOut.model_fields
+        for name in ("outcome_status", "outcome_reason", "outcome_target", "consumed_by_run_id"):
+            assert fields[name].default is None, name
+
+    def test_compile_out_input_scope_domains_default_empty(self):
+        assert api.CompileOut().input_scope_domains == {}
+        assert api.CompileOut(input_scope_domains={"i1": "sales", "i2": None}).input_scope_domains["i2"] is None
+
+    def test_agent_compat_identity_fields_default_none(self):
+        out = api.AgentCompatOut(pinned_version="0.9.0", latest_known_upstream="", newer_available=False,
+                                 has_breaking_change=False)
+        for name in ("installed_release_version", "installed_agent_version", "installed_checked_at",
+                     "installed_checked_path", "installed_check_error", "bundled_agent_marker",
+                     "installed_vs_bundled", "agent_owner"):
+            assert getattr(out, name) is None, name
+        with pytest.raises(ValueError):
+            api.AgentCompatOut(pinned_version="", latest_known_upstream="", newer_available=False,
+                               has_breaking_change=False, agent_owner="someone")
+
+    def test_new_report_tables_columns(self):
+        assert set(db.RunAgentReport.__table__.columns.keys()) == {
+            "run_id", "has_input_outcomes", "outcomes_malformed", "version_mismatch",
+            "expected_version", "fetched_version", "lineage_base_version",
+            "lineage_head_at_write", "lineage_stale", "unmatched_outcome_count", "created_at",
+        }
+        assert set(db.RunPostInstallDelete.__table__.columns.keys()) == {
+            "run_id", "version_id", "version", "scope", "status", "reason",
+            "created_at", "completed_at",
+        }
+
+
+class TestAddendumSchemaContract:
+    """v_0_9_0_1 tables and the addendum wire models. All additive and
+    defaulted; the routes that fill them come with later changes."""
+
+    def test_new_table_columns(self):
+        expected = {
+            db.ModelVersionInstall: {
+                "id", "version_id", "catalog", "installed_by_run_id", "installed_at",
+                "uninstalled_at", "uninstalled_by_run_id",
+            },
+            db.MetamodelCleanup: {
+                "id", "business_segment", "version", "scope", "catalog", "reason", "status",
+                "attempts", "last_error", "created_at", "updated_at",
+            },
+            db.RunSchemaDrop: {
+                "run_id", "catalog", "schema_name", "table_count", "status", "error", "created_at",
+            },
+            db.RunChangeDecision: {
+                "id", "run_id", "version_id", "element_kind", "element_path", "change_kind",
+                "decision", "decided_by", "decided_at", "feedback_input_id",
+            },
+            db.TaxonomyWizardState: {
+                "id", "owner", "step", "sector_id", "strictness", "intake_json", "tree_json",
+                "sections_json", "revision", "created_at", "updated_at", "expires_at",
+            },
+        }
+        for model, columns in expected.items():
+            assert set(model.__table__.columns.keys()) == columns, model.__tablename__
+
+    def test_run_link_columns_map_to_run_out(self):
+        from datetime import datetime, timezone
+
+        now = datetime(2026, 10, 22, tzinfo=timezone.utc)
+        run = db.Run(business_id="b", linked_at=now, link_evidence="tier 1: session 42")
+        assert (run.linked_at, run.link_evidence) == (now, "tier 1: session 42")
+        fields = api.RunOut.model_fields
+        assert fields["linked_at"].default is None and fields["link_evidence"].default is None
+
+    def test_metamodel_cleanup_row_maps_to_out(self):
+        row = db.MetamodelCleanup(business_segment="wt_base", version=5, scope="ecm", catalog="cat_a",
+                                  reason="version_delete", last_error="denied")
+        out = api.MetamodelCleanupOut.model_validate(row, from_attributes=True)
+        assert (out.status, out.attempts, out.last_error) == ("pending", 0, "denied")
+
+    def test_delete_outs_default_to_no_cleanup(self):
+        out = api.DeleteVersionOut(deleted_version=5, message="ok")
+        assert out.reopened_input_count == 0
+        assert "reinstall_dispatched" not in api.DeleteVersionOut.model_fields
+        assert "run_id" not in api.DeleteVersionOut.model_fields
+        assert out.metamodel_cleanup.model_dump() == {"done": 0, "pending": 0, "failed": 0}
+        biz = api.BusinessDeleteOut(ok=True, cascaded=False)
+        assert biz.metamodel_cleanup.model_dump() == {"done": 0, "pending": 0, "failed": 0}
+
+    def test_issue_severity_accepts_prepare(self):
+        assert api.IssueOut(field_path="", step_index=-1, message="m", severity="prepare").severity == "prepare"
+
+    def test_run_change_vocabularies(self):
+        change = api.RunChangeOut(element_kind="product", element_path="sales.orders", change_kind="modified",
+                                  change_class="not_asked")
+        assert change.decision is None and change.feedback_input_id is None
+        assert "class" not in api.RunChangeOut.model_fields
+        with pytest.raises(ValueError):
+            api.RunChangeDecisionIn(element_kind="table", element_path="x", decision="accepted")
+        with pytest.raises(ValueError):
+            api.RunChangeDecisionsIn(decisions=[{"element_kind": "domain", "element_path": "x",
+                                                 "decision": "maybe"}])
+        assert api.RunChangesOut(run_id="r", version_id="v").decisions_open is True
+
+    def test_catalog_models(self):
+        assert api.CatalogOut(name="c").can_create_schema is None
+        cap = api.CatalogCapabilityOut(name="c")
+        assert (cap.create_schema, cap.use_metamodel) == (None, None)
+        assert (cap.create_schema_fix, cap.use_metamodel_fix) == ("", "")
+
+    def test_catalog_capability_out_carries_every_capability_field(self):
+        """The route copies ``core._uc_privileges.CatalogCapability`` field by field."""
+        from dataclasses import fields
+
+        from vibe_modeling.backend.core._uc_privileges import CatalogCapability
+        assert {f.name for f in fields(CatalogCapability)} == set(api.CatalogCapabilityOut.model_fields) - {"name"}
+
+    def test_uninstall_impact_defaults_to_unknown(self):
+        out = api.UninstallImpactOut(version_id="v", catalog="c")
+        assert (out.has_data, out.truncated, out.schemas) == ("unknown", False, [])
+        assert api.UninstallImpactTableOut(name="t", kind="TABLE").has_data is None
+        with pytest.raises(ValueError):
+            api.UninstallImpactOut(version_id="v", catalog="c", has_data="maybe")
+
+    def test_uninstall_impact_reason_and_schema_flag_defaults(self):
+        assert api.UninstallImpactOut(version_id="v", catalog="c").reasons == []
+        schema = api.UninstallImpactSchemaOut(name="s")
+        assert (schema.shared, schema.objects_listed) == (False, True)
+        assert (schema.owner, schema.tables, schema.views, schema.volumes) == ("", [], [], [])
+        assert schema.other_versions == []
+        assert api.UninstallImpactOut(version_id="v", catalog="c").installed_catalogs == []
+        assert set(api.UninstallImpactVersionOut.model_fields) == {
+            "version_id", "business_id", "business_name", "scope", "version",
+        }
+
+    def test_oob_business_status(self):
+        out = api.OobBusinessOut(business_segment="wt_base", status="ambiguous",
+                                 candidate_business_ids=["b1", "b2"])
+        assert out.business_id is None and out.versions == []
+        with pytest.raises(ValueError):
+            api.OobBusinessOut(business_segment="x", status="unknown")
+        assert api.OobSummaryOut().checked_at is None
+        assert api.OobSummaryOut().checking is False
+        assert api.OobImportOut().model_dump() == {"imported_versions": 0, "created_business_ids": [],
+                                                   "warnings": []}
+
+    def test_deployment_verification_models(self):
+        """``verification_error`` defaults to ``None`` on all three; a failed
+        read keeps every list empty."""
+        check = api.DeploymentCatalogCheckOut(exists=False, catalog="c")
+        assert (check.error, check.verification_error) == (None, None)
+        schema = api.DeployedUcSchemaOut(verification_error="Could not read")
+        assert (schema.tables, schema.columns, schema.primary_keys, schema.foreign_keys) == ([], [], [], [])
+        compare = api.DeploymentVerificationOut(tables={"model_only": []}, summary={"model_tables": 0})
+        assert compare.verification_error is None
+
+    def test_link_run_models(self):
+        assert api.LinkRunIn(databricks_run_id=42).databricks_run_id == 42
+        preview = api.LinkRunPreviewOut(databricks_run_id=42, linkable=False, problems=["already linked"])
+        assert preview.tier is None and preview.intent is None
+
+    def test_orphan_schema_models(self):
+        schema = api.OrphanSchemaOut(name="ecm_sales")
+        assert (schema.match, schema.owned_by_app) == ("exact", False)
+        with pytest.raises(ValueError):
+            api.OrphanSchemaOut(name="x", match="guessed")
+        assert api.DropOrphanSchemasIn(catalog="c", schemas=["s"]).confirmed_issues == []
+        listed = api.OrphanSchemasOut(catalog="c")
+        assert (listed.impact, listed.confirm_subject) == (None, None)
+        out = api.DropOrphanSchemasOut(run_id="r", catalog="c")
+        assert out.schemas == [] and out.metamodel_cleanup.model_dump() == {"done": 0, "pending": 0, "failed": 0}
+        assert api.OrphanSchemaDropOut(name="s", status="dropped").error is None
+        drop_db = set(db.RunSchemaDrop.model_fields) - {"run_id", "catalog", "created_at"}
+        assert drop_db == {"schema_name", "table_count", "status", "error"}
+        assert set(api.OrphanSchemaDropOut.model_fields) == {"name", "table_count", "status", "error"}
+
+
+class TestTaxonomySavedWizardContract:
+    """The saved Domain Taxonomy wizard: ``TaxonomyWizardStateIn``/``Out`` map
+    onto ``taxonomy_wizard_states`` (the JSON columns hold the typed parts),
+    and the draft request's seeds default to none."""
+
+    def test_state_models_map_to_the_table(self):
+        from vibe_modeling.backend.taxonomy import models as tax
+
+        json_parts = {"intake": "intake_json", "tree": "tree_json", "sections": "sections_json"}
+        columns = set(db.TaxonomyWizardState.__table__.columns.keys())
+        server_only = {"id", "owner", "created_at"}
+        out_fields = set(tax.TaxonomyWizardStateOut.model_fields)
+        assert {json_parts.get(f, f) for f in out_fields} == columns - server_only
+        in_fields = set(tax.TaxonomyWizardStateIn.model_fields)
+        assert in_fields == out_fields - {"updated_at", "expires_at"}
+
+    def test_strictness_vocabulary_matches_compile(self):
+        from vibe_modeling.backend.taxonomy import models as tax
+
+        assert tax.TaxonomyWizardStateIn.model_fields["strictness"].annotation == tax.Strictness
+        assert tax.TaxonomyCompileIn.model_fields["strictness"].annotation == tax.Strictness
+        assert db.TaxonomyWizardState().strictness == tax.TaxonomyWizardStateIn.model_fields["strictness"].default
+
+    def test_draft_create_in_extends_the_intake_with_empty_seeds(self):
+        from vibe_modeling.backend.taxonomy import models as tax
+
+        assert issubclass(tax.TaxonomyDraftCreateIn, tax.TaxonomyIntake)
+        data = tax.TaxonomyDraftCreateIn(company_name="Acme", industry="Utility")
+        assert data.seed_tree is None and data.seed_sections == {}
+        assert type(data.intake()) is tax.TaxonomyIntake
+        assert data.intake().model_dump() == tax.TaxonomyIntake(company_name="Acme", industry="Utility").model_dump()
+
+
+class TestBooleanFormatNormalization:
+    """The agent accepts exactly three boolean_format labels and silently turns
+    anything else into Boolean; RunIn rewrites known spellings to the agent's
+    label and rejects the rest."""
+
+    def test_agent_labels(self):
+        assert api.BOOLEAN_FORMATS == ("Boolean (True/False)", "Int (0/1)", "String (Y/N)")
+
+    @pytest.mark.parametrize("raw,label", [
+        ("Boolean (True/False)", "Boolean (True/False)"),
+        ("Int (0/1)", "Int (0/1)"),
+        ("String (Y/N)", "String (Y/N)"),
+        ("Integer (1/0)", "Int (0/1)"),
+        ("String (Yes/No)", "String (Y/N)"),
+        ("  tinyint ", "Int (0/1)"),
+        ("y/n", "String (Y/N)"),
+        ("BOOLEAN", "Boolean (True/False)"),
+    ])
+    def test_known_spellings_normalize(self, raw, label):
+        assert api.normalize_boolean_format(raw) == label
+        assert api.RunIn(boolean_format=raw).boolean_format == label
+
+    @pytest.mark.parametrize("raw", [None, "", "   "])
+    def test_blank_means_default(self, raw):
+        assert api.RunIn(boolean_format=raw).boolean_format == raw
+
+    def test_unknown_value_rejected(self):
+        with pytest.raises(ValueError):
+            api.normalize_boolean_format("Maybe")
+        with pytest.raises(ValueError):
+            api.RunIn(boolean_format="Maybe")
+
+
+# ---------------------------------------------------------------------------
+# Feature error shapes (core/_errors): one status per error class
+# ---------------------------------------------------------------------------
+
+
+class TestFeatureErrorShapes:
+    """The taxonomy and assessment routes answer each error class with one
+    builder from ``core/_errors``, so a class has one status and one shape.
+    The route tests (``test_taxonomy_routes``, ``test_taxonomy_config``,
+    ``test_assess_*``, ``test_user_identity``) drive each route to each class;
+    this pins the builders and keeps the discriminators in one module."""
+
+    def test_config_missing_is_422_with_settings_links(self):
+        from vibe_modeling.backend.core._errors import config_missing_error
+        e = config_missing_error(["metamodel_catalog", "warehouse"])
+        assert e.status_code == 422
+        assert set(e.detail) == {"error", "missing", "message"} and e.detail["error"] == "config_missing"
+        assert [set(m) for m in e.detail["missing"]] == [{"key", "label", "settings_url"}] * 2
+        assert e.detail["message"] == (
+            "Missing required configuration: Metamodel catalog, SQL warehouse. Configure it in Settings, then retry.")
+        assert config_missing_error("taxonomy_llm", "custom").detail["message"] == "custom"
+
+    def test_model_service_refused_is_400(self):
+        from vibe_modeling.backend.core._errors import model_service_refused_error
+        e = model_service_refused_error("taxonomy_llm", "denied", "no EXECUTE")
+        assert e.status_code == 400
+        assert e.detail == {"error": "model_service_refused", "key": "taxonomy_llm", "status": "denied",
+                            "message": "no EXECUTE"}
+
+    def test_setting_refused_is_400(self):
+        from vibe_modeling.backend.core._errors import setting_refused_error
+        e = setting_refused_error("warehouse_id", "not visible")
+        assert e.status_code == 400
+        assert e.detail == {"error": "setting_refused", "key": "warehouse_id", "message": "not visible"}
+
+    def test_admin_help_is_409_and_keeps_only_known_links(self):
+        from vibe_modeling.backend.core._errors import admin_help_error
+        e = admin_help_error("m", job_url="https://h/jobs/1", run_url="", runs_path="/Volumes/c/s/v/r",
+                             not_ready=["No reader service principal"])
+        assert e.status_code == 409
+        assert e.detail == {"error": "admin_help", "message": "m", "job_url": "https://h/jobs/1",
+                            "runs_path": "/Volumes/c/s/v/r", "not_ready": ["No reader service principal"]}
+
+    def test_identity_missing_is_401(self):
+        from vibe_modeling.backend.core._errors import identity_missing_error
+        e = identity_missing_error("who are you")
+        assert e.status_code == 401
+        assert e.detail == {"error": "identity_missing", "message": "who are you"}
+
+    def test_registry_scan_failed_is_503(self):
+        from vibe_modeling.backend.core._errors import registry_scan_failed_error
+        e = registry_scan_failed_error("SQL statement TIMEOUT")
+        assert e.status_code == 503
+        assert e.detail == {
+            "error": "oob_scan_failed",
+            "message": "Could not read the agent's model registry: SQL statement TIMEOUT",
+        }
+
+    def test_needs_confirmation_is_422_with_issues_and_extras(self):
+        from vibe_modeling.backend.core._errors import needs_confirmation_error
+        issue = {"field_path": "schemas", "step_index": -1, "severity": "confirm", "subject": "s", "message": "m",
+                 "versions": []}
+        e = needs_confirmation_error([issue], "Confirm", impact={"has_data": "yes"})
+        assert e.status_code == 422
+        assert e.detail == {"error": "needs_confirmation", "issues": [issue], "message": "Confirm",
+                            "impact": {"has_data": "yes"}}
+
+    @pytest.mark.parametrize("run_active,error", [(True, "run_active"), (False, "business_busy")])
+    def test_business_locked_is_409(self, run_active, error):
+        from vibe_modeling.backend.core._errors import business_locked_error
+        e = business_locked_error("busy", run_active=run_active)
+        assert e.status_code == 409
+        assert e.detail == {"error": error, "message": "busy"}
+
+    def test_discriminators_live_only_in_core_errors(self):
+        """No backend module spells one of these discriminators or builds the
+        detail by hand: a route that did could pick its own status."""
+        import pathlib
+        import re
+        backend = pathlib.Path(db.__file__).parent
+        literal = re.compile(
+            r"""["'](config_missing|model_service_refused|setting_refused|admin_help|identity_missing|oob_scan_failed|needs_confirmation|run_active|business_busy)["']"""
+        )
+        offenders = []
+        for path in backend.rglob("*.py"):
+            if path.name == "_errors.py" and path.parent.name == "core":
+                continue
+            for n, line in enumerate(path.read_text().splitlines(), 1):
+                if literal.search(line) and not line.lstrip().startswith("#"):
+                    offenders.append(f"{path.relative_to(backend)}:{n}: {line.strip()}")
+        assert offenders == []
+
+    @pytest.mark.parametrize("module", ["routes/assessments.py", "routes/taxonomy.py"])
+    def test_feature_routes_raise_no_5xx(self, module):
+        """An assessment or taxonomy failure the caller can act on is 4xx: the
+        admin-help class is 409, never 500 or 502."""
+        import pathlib
+        import re
+        source = (pathlib.Path(db.__file__).parent / module).read_text()
+        assert re.findall(r"HTTPException\(\s*(?:status_code=)?5\d\d", source) == []

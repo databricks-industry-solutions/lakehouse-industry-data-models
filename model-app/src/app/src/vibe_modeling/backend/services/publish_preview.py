@@ -7,9 +7,12 @@ fetched. Preview failure must never block publish, so this is **degrade-open**
 throughout: only the two existence checks (business + model version) raise; a
 missing / unfetchable / unparseable baseline degrades to ``manual_needed``.
 
-PUBLIC reads only (the ``api.github.com`` + ``raw.githubusercontent.com``
-connector) — no UC OAuth connection, no ``UserClient`` — so the preview is
-smoke-testable and a missing baseline is normal, never a 500.
+Repo reads use the installation's configured source read-auth (GitHub App /
+token / anonymous) via :func:`build_source_connector`, the same resolver the
+browse and download paths use, so a private industry repo previews like it
+browses. Any referenced secret is read by the app service principal ``ws``; no
+UC OAuth connection and no ``UserClient``, so the preview stays smoke-testable
+and a missing baseline is normal, never a 500.
 
 The service returns a plain :class:`PublishPreviewResult` dataclass; the route
 maps it to the co-located ``PublishPreviewOut`` (and ``_to_diff_out``). Keeping
@@ -33,7 +36,7 @@ from ..sources.base import SourceError, SourceModelRef
 from ..sources.github import (
     _infer_scope,
     _infer_version,
-    build_github_connector,
+    build_source_connector,
     find_latest_same_scope_version,
 )
 
@@ -99,9 +102,18 @@ def compute_publish_preview(
     version_id: str,
     target_path: str | None = None,
     baseline_model_id: str | None = None,
+    app_config,
+    ws,
     connector=None,
 ) -> PublishPreviewResult:
+    """``app_config`` and ``ws`` (the app-SP client) are required: the resolver
+    reads the read-auth secret with ``ws``. A ``None`` ws is only valid with an
+    injected ``connector``; reaching the resolver with it would cache a negative
+    secret read process-wide and break browse and download for its TTL."""
     from fastapi import HTTPException
+
+    if connector is None and ws is None:
+        raise ValueError("compute_publish_preview needs the app-SP ws unless a connector is injected")
 
     # 1. 404-guard (mirrors github_publish): the ONLY hard failures.
     mv = session.get(ModelVersion, version_id)
@@ -114,9 +126,13 @@ def compute_publish_preview(
     # 2. Industry folder for enumeration (D-049 precedence, version segment stripped).
     industry_id = _industry_folder(business, mv, target_path)
 
-    # 3. Public connector (test seam: caller may inject one).
-    connector = connector or build_github_connector(
-        repo_owner=cfg.github_repo_owner, repo_name=cfg.github_repo_name
+    # 3. Connector with the configured read-auth (test seam: caller may inject one).
+    connector = connector or build_source_connector(
+        cfg,
+        app_config,
+        ws,
+        repo_owner=cfg.github_repo_owner,
+        repo_name=cfg.github_repo_name,
     )
 
     # 4. Baseline resolution.
@@ -168,23 +184,33 @@ def _diff_against(
     session, version_id, connector, industry_id, baseline, *, tier, scope_mismatch
 ) -> PublishPreviewResult:
     """Fetch the baseline model.json ONLY, unwrap the envelope, diff against the
-    exported current model. Any list/fetch/JSON failure degrades to manual."""
+    exported current model. Any list/fetch/JSON failure, or a baseline that is
+    not a JSON object (bare or inside the envelope), degrades to manual."""
     try:
         raw = connector.fetch_model_json(industry_id, baseline.model_id)
         baseline_model = json.loads(raw)
     except (SourceError, ValueError) as exc:
         logger.info("Publish preview baseline fetch/parse failed: %s", exc)
-        candidates = _safe_candidates(connector, industry_id)
-        return PublishPreviewResult(
-            baseline=None, tier="none", manual_needed=True, candidates=candidates
-        )
+        return _manual(connector, industry_id)
 
-    baseline_model = baseline_model.get("model", baseline_model)
+    if isinstance(baseline_model, dict):
+        baseline_model = baseline_model.get("model", baseline_model)
+    if not isinstance(baseline_model, dict):
+        logger.info("Publish preview baseline is not a JSON object model; degrading to manual")
+        return _manual(connector, industry_id)
+
     current = export_model_json(session, version_id)["model"]
     diff = compute_model_diff(baseline_model, current)
     return PublishPreviewResult(
         baseline=baseline, tier=tier, scope_mismatch=scope_mismatch,
         manual_needed=False, candidates=[], diff=diff,
+    )
+
+
+def _manual(connector, industry_id) -> PublishPreviewResult:
+    return PublishPreviewResult(
+        baseline=None, tier="none", manual_needed=True,
+        candidates=_safe_candidates(connector, industry_id),
     )
 
 

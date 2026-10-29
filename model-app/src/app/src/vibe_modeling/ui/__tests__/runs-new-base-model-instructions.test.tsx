@@ -20,6 +20,7 @@
  *  7. After editing, the typed value survives a re-render (no re-seed).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -51,6 +52,8 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    // No base-model pre-fill: the form keeps its own values.
+    useGetRunDefaults: () => ({ data: undefined, isLoading: false, isError: false }),
     useGetBusinessSuspense: () => businessHook(),
     useListVersionsSuspense: () => versionsHook(),
     createRun: createRunMock,
@@ -143,6 +146,8 @@ async function renderRunsNew(searchString: string) {
     </QueryClientProvider>,
   );
 }
+
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.runs.new"));
 
 describe("Fix K — Run Instructions textarea in new-base-model", () => {
   it("renders a Run Instructions textarea when operation type is new-base-model", async () => {

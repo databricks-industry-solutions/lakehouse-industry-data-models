@@ -12,6 +12,7 @@
  *    selection populates the path input (manual entry stays as fallback).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -71,6 +72,8 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    // No base-model pre-fill: the form keeps its own values.
+    useGetRunDefaults: () => ({ data: undefined, isLoading: false, isError: false }),
     useGetBusinessSuspense: () => ({
       data: { id: "biz-1", name: "Acme Corp", description: "Retail blurb." },
     }),
@@ -178,6 +181,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.runs.new"));
+
 describe("E-10 — validate body carries input_ids for vibe intents", () => {
   it("sends input_ids + next_vibe_ids to /runs/validate for vibe-new-ecm-mvm", async () => {
     // The ECM base version (the only eligible source for the combined intent)
@@ -199,7 +204,6 @@ describe("E-10 — validate body carries input_ids for vibe intents", () => {
         expect(body.input_ids).toEqual(["vi-1", "vi-2"]);
         expect(body.next_vibe_ids).toEqual([]);
       },
-      { timeout: 2000 },
     );
   });
 });
@@ -276,7 +280,7 @@ describe("U-05 — File-Path business context has a Volume picker", () => {
 
 describe("New Base Model is only allowed for a business with no model versions", () => {
   const HINT =
-    "New Base Model needs a business with no model versions. Create a new business to start a fresh base model.";
+    "New Base Model needs a business with no model versions. Delete its versions one by one from their pages (uninstall installed ones first), or create a new business.";
 
   async function openOperationType() {
     const trigger = screen.getByRole("combobox", { name: "Operation Type" });

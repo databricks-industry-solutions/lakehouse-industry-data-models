@@ -1,6 +1,6 @@
 import { useGetAssessConfig, type AssessDomainRunOut } from "@/lib/api";
 import type { AdminHelp } from "@/lib/api-error";
-import { ensureUtcIso, formatUntil } from "@/lib/date";
+import { nextTryAt } from "@/lib/retry-time";
 
 /**
  * Whether the optional bronze assessment skill is installed and ready to
@@ -16,7 +16,7 @@ export function useAssessReady(): {
   missing: string[];
   /** The config fetch failed: whether the skill is installed is unknown (not "not installed"). */
   error: unknown;
-  refetch: () => void;
+  refetch: () => Promise<unknown>;
 } {
   const { data, isLoading, error, refetch } = useGetAssessConfig({ query: { retry: false } });
   return {
@@ -25,7 +25,7 @@ export function useAssessReady(): {
     loading: isLoading,
     missing: data?.data.missing ?? [],
     error: data ? null : (error ?? null),
-    refetch: () => void refetch?.(),
+    refetch: () => refetch(),
   };
 }
 
@@ -39,7 +39,7 @@ export const STATUS_LABEL: Record<string, string> = {
   queued: "Queued",
   starting: "Starting",
   assessing: "Assessing",
-  rate_limited: "Rate limited",
+  rate_limited: "Model busy",
   completed: "Completed",
   results_invalid: "Results invalid",
   failed: "Failed",
@@ -62,21 +62,15 @@ export function isIngestRetrying(run: Pick<AssessDomainRunOut, "status" | "inges
 }
 
 /**
- * "Saving results (attempt n of N), next try in 5 min" from the structured retry fields;
- * without `ingest_max_attempts` it reads "attempt n".
+ * "Saving results (attempt n of N), next try in 5 min (14:30)" from the structured retry
+ * fields (`lib/retry-time.nextTryAt`); without `ingest_max_attempts` it reads "attempt n".
  */
 export function ingestRetryText(
   run: Pick<AssessDomainRunOut, "ingest_attempts" | "ingest_max_attempts" | "ingest_next_at">,
   now: number = Date.now(),
 ): string {
   const attempt = `attempt ${run.ingest_attempts ?? 0}${run.ingest_max_attempts ? ` of ${run.ingest_max_attempts}` : ""}`;
-  return `Saving results (${attempt}), next try ${formatUntil(run.ingest_next_at, now)}`;
-}
-
-/** Local wall-clock time a rate-limited run resumes at ("" when unset). */
-export function formatResume(resumeAt?: string | null): string {
-  if (!resumeAt) return "";
-  return new Date(ensureUtcIso(resumeAt)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `Saving results (${attempt}), ${nextTryAt(run.ingest_next_at, now)}`;
 }
 
 /** Default lead of an admin-help block (run, launch, hand-off and feedback failures). */
@@ -85,6 +79,8 @@ export const ADMIN_HELP_LEAD = "This assessment step failed.";
 export const ADMIN_HELP_LEAD_CHECK = "This check needs your administrator.";
 /** Lead of the admin-help block on a results_invalid run. */
 export const ADMIN_HELP_LEAD_INGEST = "The assessment finished but its results couldn't be saved.";
+/** Lead of the admin-help block when the run's documents can't be listed or read. */
+export const ADMIN_HELP_LEAD_DOCS = "The run's documents couldn't be read.";
 /** Lead of the admin-help block under a failed Settings save. */
 export const ADMIN_HELP_LEAD_SAVE = "Saving these settings failed.";
 /** Sentence after the lead on every admin-help block and in its copied text. */

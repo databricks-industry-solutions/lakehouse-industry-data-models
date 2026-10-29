@@ -1,0 +1,54 @@
+{
+  "agent_version": "5.3.3",
+  "release_version": "v0.9.0",
+  "_vibe_scope": {
+    "mode": "domains",
+    "base_version": 2,
+    "scoped_domains": ["grid_operations"],
+    "preserved_products": []
+  },
+  "lineage": {},
+  "model_requirements": {},
+  "_vibe_session_metadata": {},
+  "model": {
+    "model_name": "ridgeline_energy",
+    "model_version": 3,
+    "model_conventions": {
+      "data_classification_levels": "restricted=restricted, confidential=confidential, internal=Internal, public=public",
+      "data_asset_naming_convention": "snake_case",
+      "primary_key_suffix": "_id",
+      "foreign_key_suffix": "",
+      "schema_prefix": "mvm_v2_",
+      "schema_suffix": "",
+      "tag_prefix": "dbx_",
+      "tag_suffix": "",
+      "catalog_prefix": "",
+      "catalog_suffix": "",
+      "table_id_type": "BIGINT",
+      "boolean_format": "Boolean (True/False)",
+      "date_format": "yyyy-MM-dd",
+      "timestamp_format": "yyyy-MM-dd'T'HH:mm:ss.SSSXXX",
+      "add_house_keeping_columns": "No",
+      "add_history_tracking_columns": "No"
+    },
+    "domains": [
+      {
+        "name": "grid_operations",
+        "description": "Grid assets and outages.",
+        "division": "operations",
+        "database_name": "mvm_v2_grid_operations",
+        "products": [
+          {
+            "name": "substation",
+            "description": "A substation on the grid.",
+            "tags": [],
+            "attributes": [
+              {"name": "substation_id", "type": "BIGINT", "primary_key": true, "description": "Key.", "tags": []},
+              {"name": "substation_name", "type": "STRING", "primary_key": false, "description": "Name.", "tags": []}
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

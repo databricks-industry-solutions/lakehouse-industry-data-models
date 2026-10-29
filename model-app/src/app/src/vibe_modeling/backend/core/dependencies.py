@@ -14,6 +14,8 @@ from ._roles import (
     RequireAdmin,
     RequireBusinessAdmin,
     RequireModeler,
+    RequireModelerDeclared,
+    RequireViewerDeclared,
     UserRole,
     UserRoleDependency,
 )
@@ -75,3 +77,12 @@ class Dependencies:
     """Guard: requires APP_ADMIN, BUSINESS_ADMIN, or MODELER. Returns UserRole on success, 403 otherwise.
     Recommended usage: `_role: Dependencies.ModelerOnly`"""
 
+    ModelerDeclared: TypeAlias = RequireModelerDeclared
+    """Declared guard for MODELER: passes every caller while
+    ``_roles.VIBE_INPUT_ROLE_GUARDS_ENFORCED`` is False, acts as ``ModelerOnly`` when it is True.
+    Recommended usage: `_role: Dependencies.ModelerDeclared`"""
+
+    ViewerDeclared: TypeAlias = RequireViewerDeclared
+    """Declared guard for VIEWER (read routes): names the route's role for the RBAC
+    coverage test; every role passes it.
+    Recommended usage: `_role: Dependencies.ViewerDeclared`"""

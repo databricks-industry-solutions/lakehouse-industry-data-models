@@ -27,7 +27,7 @@ vi.mock("@/lib/notify", async () => ({
 }));
 
 import { AgentConfigSection, DiagramSettingsSection } from "@/routes/_sidebar/settings";
-import { firstRunFetcher } from "./helpers/first-run";
+import { firstRunFetcher, jsonResponse } from "./helpers/first-run";
 import { useStrictConsole } from "./helpers/strict-console";
 import { createRenderCounter, RenderCounted } from "./helpers/render-counter";
 
@@ -211,24 +211,16 @@ describe("AgentConfigSection (Phase 4.5 bug-2 site)", () => {
         "/api/config/agent": (url: string, init?: RequestInit) => {
           if (init && (init.method === "PUT" || init.method === "POST")) {
             putSpy(url, init);
-            return Promise.resolve({
-              ok: true,
-              status: 200,
-              json: async () => ({}),
-            });
+            return Promise.resolve(jsonResponse(200, {}));
           }
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({
+          return Promise.resolve(jsonResponse(200, {
               notebook_path: "/Workspace/Users/me/agent",
               deployment_catalog: "vibe_modeling",
               job_id: 12345,
               job_name: "vibe-modelling-agent",
               max_concurrent_runs: 5,
               updated_at: "2026-04-01T00:00:00Z",
-            }),
-          });
+            }));
         },
       }),
     );
@@ -267,10 +259,10 @@ describe("AgentConfigSection (Phase 4.5 bug-2 site)", () => {
   });
 });
 
-describe("AgentConfigSection — collect vibe run statistics toggle", () => {
+describe("AgentConfigSection — annotate jobs with run tags toggle", () => {
   const dom = useStrictConsole();
 
-  it("renders the toggle unchecked by default with the hover-tip text", async () => {
+  it("renders the toggle checked by default with the hover-tip text", async () => {
     vi.stubGlobal("fetch", firstRunFetcher());
     const qc = makeClient();
 
@@ -281,9 +273,9 @@ describe("AgentConfigSection — collect vibe run statistics toggle", () => {
     );
 
     const toggle = await screen.findByRole("checkbox", {
-      name: /Collect vibe run statistics/i,
+      name: /Annotate jobs with run tags/i,
     });
-    expect(toggle).toHaveAttribute("aria-checked", "false");
+    expect(toggle).toHaveAttribute("aria-checked", "true");
     // Tooltip body opens on hover (Radix portal). Open it and assert
     // the exact spec wording.
     fireEvent.pointerEnter(toggle);
@@ -293,14 +285,16 @@ describe("AgentConfigSection — collect vibe run statistics toggle", () => {
       // readers. Use getAllByText so any of them satisfies the assertion.
       expect(
         screen.getAllByText(
-          /Anonymous usage statistics for product improvement\. No sensitive information is collected\./,
+          "Each run tags the agent job with the business name, the run's session ID and the notebook " +
+            "file name, so you can tell which business and run used the job. Operational tags (app, " +
+            "app version, operation, model scope, element counts and launcher) are always added.",
         ).length,
       ).toBeGreaterThan(0);
     });
     expect(dom.messages).toEqual([]);
   });
 
-  it("hydrates the toggle from the loaded config", async () => {
+  it.each([true, false])("hydrates the toggle from the loaded config (%s)", async (loaded) => {
     vi.stubGlobal(
       "fetch",
       firstRunFetcher({
@@ -312,7 +306,7 @@ describe("AgentConfigSection — collect vibe run statistics toggle", () => {
             job_id: 12345,
             job_name: "vibe-modelling-agent",
             max_concurrent_runs: 5,
-            collect_vibe_run_statistics: true,
+            collect_vibe_run_statistics: loaded,
             updated_at: "2026-04-01T00:00:00Z",
           },
         },
@@ -327,12 +321,15 @@ describe("AgentConfigSection — collect vibe run statistics toggle", () => {
     );
 
     const toggle = await screen.findByRole("checkbox", {
-      name: /Collect vibe run statistics/i,
+      name: /Annotate jobs with run tags/i,
     });
-    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", String(loaded)));
   });
 
-  it("includes collect_vibe_run_statistics in the PUT payload on Save", async () => {
+  it.each([
+    [false, true],
+    [true, false],
+  ])("sends collect_vibe_run_statistics in the PUT payload on Save (loaded %s, sends %s)", async (loaded, sent) => {
     const putSpy = vi.fn();
     vi.stubGlobal(
       "fetch",
@@ -344,25 +341,17 @@ describe("AgentConfigSection — collect vibe run statistics toggle", () => {
         "/api/config/agent": (url: string, init?: RequestInit) => {
           if (init && (init.method === "PUT" || init.method === "POST")) {
             putSpy(url, init);
-            return Promise.resolve({
-              ok: true,
-              status: 200,
-              json: async () => ({}),
-            });
+            return Promise.resolve(jsonResponse(200, {}));
           }
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({
+          return Promise.resolve(jsonResponse(200, {
               notebook_path: "/Workspace/Users/me/agent",
               deployment_catalog: "vibe_modeling",
               job_id: 12345,
               job_name: "vibe-modelling-agent",
               max_concurrent_runs: 5,
-              collect_vibe_run_statistics: false,
+              collect_vibe_run_statistics: loaded,
               updated_at: "2026-04-01T00:00:00Z",
-            }),
-          });
+            }));
         },
       }),
     );
@@ -375,12 +364,12 @@ describe("AgentConfigSection — collect vibe run statistics toggle", () => {
     );
 
     const toggle = await screen.findByRole("checkbox", {
-      name: /Collect vibe run statistics/i,
+      name: /Annotate jobs with run tags/i,
     });
-    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", String(loaded)));
 
     fireEvent.click(toggle);
-    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", String(sent)));
 
     const form = toggle.closest("form")!;
     fireEvent.submit(form);
@@ -388,7 +377,7 @@ describe("AgentConfigSection — collect vibe run statistics toggle", () => {
     await waitFor(() => expect(putSpy).toHaveBeenCalled());
     const [, init] = putSpy.mock.calls[0];
     const body = JSON.parse(init.body as string);
-    expect(body.collect_vibe_run_statistics).toBe(true);
+    expect(body.collect_vibe_run_statistics).toBe(sent);
   });
 });
 
@@ -453,11 +442,7 @@ describe("DiagramSettingsSection - column-mode preference (item 4, 0.6.6)", () =
       firstRunFetcher({
         "/api/user/preferences/diagram.default_column_mode": (url: string, init?: RequestInit) => {
           putSpy(url, init);
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({ key: "diagram.default_column_mode", value: "all", updated_at: "2026-07-01T00:00:00Z" }),
-          });
+          return Promise.resolve(jsonResponse(200, { key: "diagram.default_column_mode", value: "all", updated_at: "2026-07-01T00:00:00Z" }));
         },
         "/api/user/preferences": { status: 200, body: [] },
       }),
@@ -487,11 +472,7 @@ describe("DiagramSettingsSection - column-mode preference (item 4, 0.6.6)", () =
       firstRunFetcher({
         "/api/user/preferences/diagram.default_column_mode_focal": (url: string, init?: RequestInit) => {
           putSpy(url, init);
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({ key: "diagram.default_column_mode_focal", value: "hide", updated_at: "2026-07-01T00:00:00Z" }),
-          });
+          return Promise.resolve(jsonResponse(200, { key: "diagram.default_column_mode_focal", value: "hide", updated_at: "2026-07-01T00:00:00Z" }));
         },
         "/api/user/preferences": { status: 200, body: [] },
       }),
@@ -523,12 +504,7 @@ describe("DiagramSettingsSection - column-mode preference (item 4, 0.6.6)", () =
       firstRunFetcher({
         "/api/user/preferences/diagram.default_column_mode": (url: string, init?: RequestInit) => {
           putSpy(url, init);
-          return Promise.resolve({
-            ok: false,
-            status: 500,
-            statusText: "Server Error",
-            text: async () => '{"detail":"boom"}',
-          } as unknown as Response);
+          return Promise.resolve(jsonResponse(500, '{"detail":"boom"}', "Server Error"));
         },
         "/api/user/preferences": { status: 200, body: [] },
       }),
@@ -555,12 +531,7 @@ describe("DiagramSettingsSection - column-mode preference (item 4, 0.6.6)", () =
       "fetch",
       firstRunFetcher({
         "/api/user/preferences/diagram.default_column_mode": () =>
-          Promise.resolve({
-            ok: false,
-            status: 500,
-            statusText: "Server Error",
-            text: async () => "boom",
-          } as unknown as Response),
+          Promise.resolve(jsonResponse(500, "boom", "Server Error")),
         "/api/user/preferences": { status: 200, body: [] },
       }),
     );
@@ -588,18 +559,9 @@ describe("DiagramSettingsSection - column-mode preference (item 4, 0.6.6)", () =
       "fetch",
       firstRunFetcher({
         "/api/user/preferences/diagram.default_column_mode_focal": () =>
-          Promise.resolve({
-            ok: false,
-            status: 500,
-            statusText: "Server Error",
-            text: async () => "boom",
-          } as unknown as Response),
+          Promise.resolve(jsonResponse(500, "boom", "Server Error")),
         "/api/user/preferences/diagram.default_column_mode": () =>
-          Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({ key: "diagram.default_column_mode", value: "hide", updated_at: "2026-07-01T00:00:00Z" }),
-          }),
+          Promise.resolve(jsonResponse(200, { key: "diagram.default_column_mode", value: "hide", updated_at: "2026-07-01T00:00:00Z" })),
         "/api/user/preferences": { status: 200, body: [] },
       }),
     );

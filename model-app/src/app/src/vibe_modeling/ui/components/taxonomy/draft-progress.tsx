@@ -48,7 +48,7 @@ export function DraftProgress({ draft, onCancel, treeRetry }: Props) {
       <div className="flex flex-wrap items-center gap-3">
         {running && (
           <span className="flex items-center gap-1 font-medium">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Claude is drafting…
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> The model is drafting…
           </span>
         )}
         {busy && <span className="font-medium text-warning">The model is busy</span>}

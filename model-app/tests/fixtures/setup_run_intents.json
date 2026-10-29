@@ -1,0 +1,8 @@
+{
+  "description": "Run intents of the app-only runs a kickstart, an industry download or an orphan-schema drop writes: in-app work with no agent job and no RunOperation rows. Backend: routes/_helpers.AUDIT_INTENTS. UI: lib/intent.isSetupRunIntent.",
+  "intents": [
+    "download-industry",
+    "kickstart-from-industry",
+    "uninstall-orphan-schemas"
+  ]
+}

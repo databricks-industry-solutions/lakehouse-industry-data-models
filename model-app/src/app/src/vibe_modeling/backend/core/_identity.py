@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from typing import Annotated, TypeAlias
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends
 
 from ..models import CurrentUserEmailOut, CurrentUserOut
+from ._errors import identity_missing_error
 from ._headers import (
     DatabricksAppsHeaders,
     HeadersDependency,
@@ -28,6 +29,12 @@ LOCAL_DEV_IDENTITY = "local-dev"
 
 ANONYMOUS_IDENTITY = "anonymous"
 """Display label for callers without identity (logs, actor fields, profile)."""
+
+NO_IDENTITY_MESSAGE = "Your request carries no user identity. Open the app through its Databricks Apps URL."
+NO_EMAIL_MESSAGE = (
+    "This needs your workspace email, and your request carries none. "
+    "Open the app through its Databricks Apps URL."
+)
 
 
 def _stripped(value: str | None) -> str:
@@ -51,7 +58,7 @@ def require_user_identity(headers: HeadersDependency) -> str:
     """FastAPI dependency: the caller's identity, never a shared bucket.
 
     Inside the Databricks Apps runtime a request without identity headers is
-    rejected with 401. Outside it (local dev, tests) such a request maps to
+    rejected with 401 ``identity_missing``. Outside it (local dev, tests) such a request maps to
     the fixed `"local-dev"` identity. With the forwarded-header gate off,
     `LOCAL_DEV_USER` is already substituted into the headers upstream, so it
     becomes the identity here.
@@ -60,7 +67,7 @@ def require_user_identity(headers: HeadersDependency) -> str:
     if identity:
         return identity
     if _is_databricks_app_runtime():
-        raise HTTPException(status_code=401, detail="No user identity")
+        raise identity_missing_error(NO_IDENTITY_MESSAGE)
     return LOCAL_DEV_IDENTITY
 
 
@@ -77,33 +84,13 @@ def current_user_email(headers: DatabricksAppsHeaders) -> str | None:
 
 
 def require_user_email(headers: DatabricksAppsHeaders) -> str:
-    """The caller's workspace email, or an HTTP error when it is missing.
-
-    Inside the Databricks Apps runtime a request without an email is rejected
-    with 401. Outside it there is no `"local-dev"` fallback (it is not a
-    workspace user), so the request is refused with 422.
-    """
+    """The caller's workspace email, or 401 ``identity_missing`` when it is
+    missing. There is no `"local-dev"` fallback outside the Apps runtime: it
+    is not a workspace user."""
     email = current_user_email(headers)
     if email:
         return email
-    if _is_databricks_app_runtime():
-        raise HTTPException(status_code=401, detail="No user identity")
-    raise HTTPException(status_code=422, detail="Hand-off needs your workspace email")
-
-
-def legacy_username_alias(headers: DatabricksAppsHeaders) -> str | None:
-    """Return the preferred username when it differs from the email identity.
-
-    Preferences were keyed on the preferred username before identity moved to
-    email first. When both headers are present and differ, the username is the
-    legacy key whose rows the preferences GET re-keys onto the email. Returns
-    None when there is nothing to re-key.
-    """
-    email = _stripped(headers.user_email)
-    username = _stripped(headers.user_name)
-    if email and username and email != username:
-        return username
-    return None
+    raise identity_missing_error(NO_EMAIL_MESSAGE)
 
 
 def current_user_profile(headers: DatabricksAppsHeaders) -> CurrentUserOut:

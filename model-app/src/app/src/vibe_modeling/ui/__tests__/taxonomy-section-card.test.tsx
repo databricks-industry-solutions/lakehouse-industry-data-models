@@ -47,22 +47,22 @@ describe("SectionCard", () => {
     expect(screen.getByText(/which systems are the source of truth/i)).toBeTruthy();
   });
 
-  it("groups industry claims in ONE From Claude textarea, one per line", () => {
+  it("groups industry claims in ONE From the model textarea, one per line", () => {
     mk(vi.fn(), { claims: [
       { text: "A CIS owns billing.", provenance: "industry" },
       { text: "Meters feed an MDM.", provenance: "industry" },
       { text: "Runs Oracle CC&B.", provenance: "confirm" },
     ] });
-    const box = screen.getByLabelText(/from claude/i) as HTMLTextAreaElement;
+    const box = screen.getByLabelText(/from the model/i) as HTMLTextAreaElement;
     expect(box.value).toBe("A CIS owns billing.\nMeters feed an MDM.");
     expect(screen.getByText(/typical for your industry/i)).toBeTruthy();
     expect(box.className).not.toMatch(/overflow-y-auto|overflow-auto/);
   });
 
-  it("editing the Claude block re-splits on newlines, drops blanks, keeps the industry tag", () => {
+  it("editing the model block re-splits on newlines, drops blanks, keeps the industry tag", () => {
     const onChange = vi.fn();
     mk(onChange);
-    fireEvent.change(screen.getByLabelText(/from claude/i), { target: { value: "One.\n\nTwo.\nThree." } });
+    fireEvent.change(screen.getByLabelText(/from the model/i), { target: { value: "One.\n\nTwo.\nThree." } });
     expect(onChange.mock.calls[0][0].claims).toEqual([
       { text: "One.", provenance: "industry" },
       { text: "Two.", provenance: "industry" },
@@ -74,7 +74,7 @@ describe("SectionCard", () => {
   it("lists confirm claims as a checklist; editing keeps the confirm tag", () => {
     const onChange = vi.fn();
     mk(onChange);
-    expect(screen.getByText(/claude guessed/i)).toBeTruthy();
+    expect(screen.getByText(/the model guessed/i)).toBeTruthy();
     fireEvent.change(screen.getByDisplayValue("Runs Oracle CC&B."), { target: { value: "Runs SAP IS-U." } });
     expect(onChange.mock.calls[0][0].claims[1]).toEqual({ text: "Runs SAP IS-U.", provenance: "confirm" });
   });
@@ -99,14 +99,14 @@ describe("SectionCard", () => {
 
   it("hides the checklist when there are no confirm claims", () => {
     mk(vi.fn(), { claims: [{ text: "A.", provenance: "industry" }] });
-    expect(screen.queryByText(/claude guessed/i)).toBeNull();
+    expect(screen.queryByText(/the model guessed/i)).toBeNull();
   });
 
   it("Your notes is one textarea with a placeholder; typing makes user claims", () => {
     const onChange = vi.fn();
     mk(onChange);
     const notes = screen.getByLabelText(/your notes/i) as HTMLTextAreaElement;
-    expect(notes.placeholder).toMatch(/add anything claude missed/i);
+    expect(notes.placeholder).toMatch(/add anything the model missed/i);
     fireEvent.change(notes, { target: { value: "Ours.\nAlso ours." } });
     expect(onChange.mock.calls[0][0].claims.slice(2)).toEqual([
       { text: "Ours.", provenance: "user" },
@@ -126,13 +126,13 @@ describe("SectionCard", () => {
       onChange={(s) => { onSpy?.(s.claims); setSec(s); }} onRetry={() => {}} />;
   };
 
-  it("keeps the From Claude block mounted after it is cleared, and it accepts new text", () => {
+  it("keeps the From the model block mounted after it is cleared, and it accepts new text", () => {
     render(<Harness />);
-    fireEvent.change(screen.getByLabelText(/from claude/i), { target: { value: "" } });
-    const box = screen.getByLabelText(/from claude/i) as HTMLTextAreaElement;
+    fireEvent.change(screen.getByLabelText(/from the model/i), { target: { value: "" } });
+    const box = screen.getByLabelText(/from the model/i) as HTMLTextAreaElement;
     expect(box.value).toBe("");
     fireEvent.change(box, { target: { value: "Back again." } });
-    expect((screen.getByLabelText(/from claude/i) as HTMLTextAreaElement).value).toBe("Back again.");
+    expect((screen.getByLabelText(/from the model/i) as HTMLTextAreaElement).value).toBe("Back again.");
   });
 
   it("keeps a trailing newline, emits no blank claim, and the next line becomes a second claim",  () => {
@@ -159,7 +159,7 @@ describe("SectionCard", () => {
       const onCancel = vi.fn(() => Promise.resolve());
       render(<SectionCard sectionKey="company" partStatus="busy" partError="The model is busy" exampleText="ex"
         onChange={() => {}} onRetry={onRetry} onCancel={onCancel} draftId="d1" />);
-      expect(screen.getByTestId("busy-countdown-company").textContent).toContain("Retrying in 00:15");
+      expect(screen.getByTestId("busy-countdown-company").textContent).toContain("Next try in 00:15");
       await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
       expect(onRetry).toHaveBeenCalledTimes(1);
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));

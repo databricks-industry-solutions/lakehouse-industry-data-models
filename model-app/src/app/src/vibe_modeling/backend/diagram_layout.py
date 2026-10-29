@@ -31,7 +31,7 @@ from .diagram import (
     _product_node_meta,
     _run_elk_layout,
 )
-from .fk import count_fk_attributes
+from .fk import count_fk_attributes, fk_edge_id
 from .models import (
     ChangeStatus,
     DiagramDomainGroup,
@@ -389,7 +389,7 @@ def layout_one_domain(
                 and e["target_node"] in keyset
             ):
                 intra_edges.append({
-                    "id": f"fk:{e['source_node']}.{e['source_column']}>{e['target_node']}.{e['target_column']}",
+                    "id": fk_edge_id(e["source_node"], e["source_column"], e["target_node"], e["target_column"]),
                     "sources": [e["source_node"]],
                     "targets": [e["target_node"]],
                 })
@@ -514,7 +514,7 @@ def two_phase_layout(
 
     de = [
         DiagramEdge(
-            id=f"fk:{e['source_node']}.{e['source_column']}>{e['target_node']}.{e['target_column']}",
+            id=fk_edge_id(e["source_node"], e["source_column"], e["target_node"], e["target_column"]),
             source_node=e["source_node"], source_column=e["source_column"],
             target_node=e["target_node"], target_column=e["target_column"],
         )

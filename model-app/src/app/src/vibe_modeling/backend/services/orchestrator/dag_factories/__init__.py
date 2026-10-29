@@ -13,9 +13,8 @@ handler. Validation runs separately via
 returns.
 """
 
-from ._recovery import dag_for_import_from_volume, dag_for_revert
+from ._recovery import dag_for_import_from_volume
 from ._simple import (
-    dag_for_generate_samples,
     dag_for_install,
     dag_for_uninstall,
     dag_for_vibe_iterate,
@@ -24,11 +23,9 @@ from ._unified import dag_for_new_base_model
 from ._vibe_new_ecm_mvm import dag_for_vibe_new_ecm_mvm
 
 __all__ = [
-    "dag_for_generate_samples",
     "dag_for_import_from_volume",
     "dag_for_install",
     "dag_for_new_base_model",
-    "dag_for_revert",
     "dag_for_uninstall",
     "dag_for_vibe_iterate",
     "dag_for_vibe_new_ecm_mvm",

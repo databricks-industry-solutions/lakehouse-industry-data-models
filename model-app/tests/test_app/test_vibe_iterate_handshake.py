@@ -45,6 +45,16 @@ def _make_handle_and_ctx(business_id: str = "biz-1"):
     return handle, ctx
 
 
+def _empty_session() -> Session:
+    """A real in-memory session: the fetch computes the expected version
+    from ModelVersion / RunProgressEvent rows, which a MagicMock can't."""
+    from vibe_modeling.backend import db_models  # noqa: F401
+
+    eng = create_engine("sqlite:///:memory:")
+    SQLModel.metadata.create_all(eng)
+    return Session(bind=eng)
+
+
 def _make_resp(payload: dict) -> MagicMock:
     resp = MagicMock()
     resp.contents.read.return_value = json.dumps(payload).encode("utf-8")
@@ -70,10 +80,14 @@ def test_fetch_model_json_retries_on_transient_404(monkeypatch):
         Exception("404 Not Found"),
         _make_resp(payload),
     ]
-    session = MagicMock()
-    result = VibeIterate()._fetch_model_json(handle, ctx, ws, session)
+    with _empty_session() as session:
+        result, info = VibeIterate()._fetch_model_json(handle, ctx, ws, session)
     assert result == payload
     assert ws.files.download.call_count == 5
+    # No versions exist yet, so the expected output is v1 and it was found.
+    assert info["expected_version"] == 1
+    assert info["fetched_version"] == 1
+    assert info["version_mismatch"] is False
 
 
 def test_fetch_model_json_eventually_raises_after_all_retries(monkeypatch):
@@ -86,9 +100,9 @@ def test_fetch_model_json_eventually_raises_after_all_retries(monkeypatch):
     handle, ctx = _make_handle_and_ctx()
     ws = MagicMock()
     ws.files.download.side_effect = Exception("404 Not Found")
-    session = MagicMock()
-    with pytest.raises(RuntimeError, match="model.json not fetched"):
-        VibeIterate()._fetch_model_json(handle, ctx, ws, session)
+    with _empty_session() as session:
+        with pytest.raises(RuntimeError, match="model.json not fetched"):
+            VibeIterate()._fetch_model_json(handle, ctx, ws, session)
 
 
 def test_sync_orch_progress_drains_events_when_session_row_missing(monkeypatch):

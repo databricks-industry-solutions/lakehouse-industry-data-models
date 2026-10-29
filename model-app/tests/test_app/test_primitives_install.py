@@ -26,6 +26,7 @@ modules' import side effects don't leak in.
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from typing import Any
@@ -52,6 +53,8 @@ from vibe_modeling.backend.services.operations.install import (
     _build_install_widgets,
 )
 from vibe_modeling.backend.core._paths import model_json_volume_path
+
+from ._lifecycle_fixtures import agent_exits_ok  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +107,10 @@ def _mock_ws_with_state(lcs: str, rs: str = "") -> MagicMock:
     job_run.state.result_state.value = rs
     job_run.state.state_message = ""
     ws.jobs.get_run.return_value = job_run
+    agent_exits_ok(ws)
+    file_resp = MagicMock()
+    file_resp.contents.read.return_value = b'{"model": {}}'
+    ws.files.download.return_value = file_resp
     return ws
 
 
@@ -223,7 +230,7 @@ class TestInstallContextFilePath:
             cataloging_style="One Catalog",
             schema_prefix="ecm_",
             model_version=1,
-            context_file_override=None,
+            context_file_candidates=[],
         )
         widgets = _build_install_widgets(p, "999")
         assert "/business/_7_eleven/v1/ecm/model.json" in widgets["context_file"]
@@ -231,11 +238,15 @@ class TestInstallContextFilePath:
         # The widget value stays the RAW business_name (agent re-sanitizes it).
         assert widgets["business_name"] == "7-Eleven"
 
-    def test_context_file_override_untouched(self):
-        override = "/Volumes/other/path/import_source/model.json"
-        p = self._params(context_file_override=override)
-        widgets = _build_install_widgets(p, "999")
-        assert widgets["context_file"] == override
+    def test_the_chosen_candidate_is_the_context_file(self):
+        chosen = "/Volumes/other/path/import_source/model.json"
+        p = self._params(context_file_candidates=[chosen, "/Volumes/x/model.json"])
+        assert _build_install_widgets(p, "999", chosen)["context_file"] == chosen
+
+    def test_without_a_chosen_candidate_the_first_candidate_is_used(self):
+        first = "/Volumes/other/path/import_source/model.json"
+        p = self._params(context_file_candidates=[first, "/Volumes/x/model.json"])
+        assert _build_install_widgets(p, "999")["context_file"] == first
 
 
 # ---------------------------------------------------------------------------
@@ -549,32 +560,35 @@ class TestInstallDeploymentWriteback:
     the vibe-iterate "born deployed" bug - this one is "never earns
     deployed")."""
 
-    def test_terminated_success_stamps_deployed_and_uc_catalog(self, install_op):
-        from vibe_modeling.backend.db_models import ModelVersion
+    def test_terminated_success_stamps_deployed_and_uc_catalog(self, install_op, engine):
+        from sqlmodel import Session, select
 
-        mv = ModelVersion(
-            id="mv-1",
-            business_id="biz-1",
-            version=1,
-            scope="ecm",
-            status="completed",
-            deployment_status="draft",
-            uc_catalog="",
-        )
-        session = _FakeSession({"mv-1": mv})
-        ws = _mock_ws_with_state("TERMINATED", "SUCCESS")
-        handle = OperationDispatchHandle(
-            databricks_run_id=42,
-            vibe_session_id=None,
-            extra={"deployment_catalog": "test_cat"},
-        )
+        from vibe_modeling.backend.db_models import Business, ModelVersion, ModelVersionInstall
 
-        obs = install_op.observe(handle, _ctx(parent_version_id="mv-1"), ws, session)
+        with Session(engine) as session:
+            biz = Business(name="writeback", description="t")
+            session.add(biz)
+            session.flush()
+            mv = ModelVersion(
+                id="mv-1", business_id=biz.id, version=1, scope="ecm",
+                status="completed", deployment_status="draft",
+            )
+            session.add(mv)
+            session.commit()
+            ws = _mock_ws_with_state("TERMINATED", "SUCCESS")
+            handle = OperationDispatchHandle(
+                databricks_run_id=42,
+                vibe_session_id=None,
+                extra={"deployment_catalog": "test_cat"},
+            )
 
-        assert obs.terminal_result.succeeded is True
-        assert mv.deployment_status == "deployed"
-        assert mv.uc_catalog == "test_cat"
-        assert mv in session.added
+            obs = install_op.observe(handle, _ctx(parent_version_id="mv-1"), ws, session)
+
+            assert obs.terminal_result.succeeded is True
+            assert mv.deployment_status == "deployed"
+            assert mv.uc_catalog == "test_cat"
+            rows = session.exec(select(ModelVersionInstall).where(ModelVersionInstall.version_id == "mv-1")).all()
+            assert [(r.catalog, r.uninstalled_at) for r in rows] == [("test_cat", None)]
 
     def test_terminated_failed_does_not_touch_version(self, install_op):
         from vibe_modeling.backend.db_models import ModelVersion
@@ -625,8 +639,7 @@ class TestInstallErrorPropagation:
 
         from databricks.sdk.errors import PermissionDenied
 
-        ws = MagicMock()
-        ws.config.host = "https://t.databricks.com"
+        ws = _mock_ws_with_state("RUNNING")
         session = MagicMock()
 
         def _fake_launch_run(*args, **kwargs):
@@ -697,7 +710,7 @@ class TestInstallContextFileOverride:
             install_op.dispatch(ctx, ws, session)
         return captured
 
-    def test_default_context_file_is_constructed_when_override_absent(self, install_op):
+    def test_default_context_file_is_constructed_when_no_candidates(self, install_op):
         """Agent-produced versions have ``import_source_path=NULL`` because
         the agent wrote ``model.json`` at the convention path. Backwards-
         compatible: when no override is passed, the widget builder
@@ -708,10 +721,10 @@ class TestInstallContextFileOverride:
             "test_corp/v1/ecm/model.json"
         )
 
-    def test_override_wins_over_constructed_default(self, install_op):
+    def test_candidate_wins_over_constructed_default(self, install_op):
         """User-imported / reference-seeded path: the version's
-        ``import_source_path`` flows in via ``context_file_override``
-        and the widget builder uses it verbatim."""
+        ``import_source_path`` flows in via ``context_file_candidates``
+        and the install sends it verbatim."""
         ctx = _ctx(
             params={
                 "business_name": "energy_utilities_import",
@@ -720,10 +733,10 @@ class TestInstallContextFileOverride:
                 "cataloging_style": "One Catalog",
                 "schema_prefix": "mvm_",
                 "model_version": 1,
-                "context_file_override": (
+                "context_file_candidates": [
                     "/Volumes/vibe_modeling_test/_metamodel/vol_root/"
                     "walkthrough_2026_05_18/import_test/model.json"
-                ),
+                ],
             }
         )
         widgets = self._capture_launch(install_op, ctx)
@@ -743,19 +756,18 @@ class TestInstallContextFileOverride:
                 "cataloging_style": "One Catalog",
                 "schema_prefix": "ecm_",
                 "model_version": 1,
-                "context_file_override": (
+                "context_file_candidates": [
                     "/Volumes/vibe_modeling_test/_metamodel/vol_root/"
                     "imports/banking/ecm_v1/model.json"
-                ),
+                ],
             }
         )
         widgets = self._capture_launch(install_op, ctx)
         assert "imports/banking/ecm_v1/model.json" in widgets["context_file"]
 
-    def test_empty_string_override_falls_back_to_default(self, install_op):
-        """Defensive: empty string for override is treated like None
-        (don't override). Avoids the agent reading from ``""`` which
-        would crash with a less helpful error."""
+    def test_empty_candidates_fall_back_to_default(self, install_op):
+        """No candidates (a hand-built context): the canonical folders
+        under the deployment catalog, never ``""``."""
         ctx = _ctx(
             params={
                 "business_name": "test_corp",
@@ -764,7 +776,7 @@ class TestInstallContextFileOverride:
                 "cataloging_style": "One Catalog",
                 "schema_prefix": "ecm_",
                 "model_version": 1,
-                "context_file_override": "",
+                "context_file_candidates": [],
             }
         )
         widgets = self._capture_launch(install_op, ctx)
@@ -796,7 +808,7 @@ class TestInstallContextFileOverride:
                 "cataloging_style": "One Catalog",
                 "schema_prefix": "mvm_",
                 "model_version": 1,
-                "context_file_override": override,
+                "context_file_candidates": [override],
             }
         )
         widgets = self._capture_launch(install_op, ctx)
@@ -811,3 +823,248 @@ class TestInstallContextFileOverride:
             f"business-convention path instead of using the override: "
             f"got {widgets['context_file']!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 9. Scoped (``_vibe_scope``) model.json — install sends the file's conventions
+# ---------------------------------------------------------------------------
+
+_V3_MC = {
+    "data_asset_naming_convention": "snake_case",
+    "primary_key_suffix": "_id",
+    "schema_prefix": "mvm_v2_",
+    "schema_suffix": "",
+    "tag_prefix": "dbx_",
+    "tag_suffix": "",
+    "table_id_type": "BIGINT",
+}
+
+
+def _mvm_params(**overrides) -> dict:
+    base = {
+        "business_name": "ridgeline_energy",
+        "deployment_catalog": "ridgeline_energy_vibe_model",
+        "scope": "mvm",
+        "cataloging_style": "One Catalog",
+        "schema_prefix": "mvm_",
+        "model_version": 3,
+    }
+    base.update(overrides)
+    return base
+
+
+def _ws_with_file(root: Any) -> MagicMock:
+    import json as _json
+
+    ws = _mock_ws_with_state("RUNNING")
+    resp = MagicMock()
+    resp.contents.read.return_value = _json.dumps(root).encode()
+    ws.files.download.return_value = resp
+    return ws
+
+
+class TestInstallDispatchScopedConventions:
+    """``Install.dispatch`` reads the dispatched ``context_file`` on every
+    install; only a root ``_vibe_scope`` block changes the widgets."""
+
+    def _dispatch(self, ctx, ws) -> tuple[dict, OperationDispatchHandle]:
+        from unittest.mock import patch
+
+        captured: dict = {}
+
+        def _fake_launch_run(ws_, job_id, widget_params, *args, **kwargs):
+            captured.update(widget_params)
+            return 12345
+
+        with patch(
+            "vibe_modeling.backend.services.operations.install.launch_run",
+            _fake_launch_run,
+        ):
+            handle = Install().dispatch(ctx, ws, MagicMock())
+        return captured, handle
+
+    def _todays(self, ctx) -> tuple[dict, OperationDispatchHandle]:
+        """Today's widgets: a ws whose file carries no conventions."""
+        return self._dispatch(ctx, _ws_with_file({"model": {}}))
+
+    @staticmethod
+    def _no_sid(widgets: dict) -> dict:
+        return {k: v for k, v in widgets.items() if k != "vibe_session_id"}
+
+    def test_ordinary_file_is_read_but_widgets_unchanged(self):
+        ctx = _ctx(params=_mvm_params())
+        ws = _ws_with_file({"model": {"model_conventions": dict(_V3_MC)}})
+        widgets, handle = self._dispatch(ctx, ws)
+        base_widgets, base_handle = self._todays(ctx)
+
+        ws.files.download.assert_called_once_with(widgets["context_file"])
+        assert self._no_sid(widgets) == self._no_sid(base_widgets)
+        assert set(widgets) == set(base_widgets)
+        assert widgets["schema_prefix"] == "mvm_"
+        assert handle.extra == base_handle.extra
+        assert "conventions_source" not in handle.extra
+
+    def test_no_lineage_scoped_file_uses_file_values(self):
+        ctx = _ctx(parent_version_id=None, params=_mvm_params())
+        ws = _ws_with_file(
+            {"_vibe_scope": {"mode": "domains"}, "model": {"model_conventions": _V3_MC}}
+        )
+        widgets, handle = self._dispatch(ctx, ws)
+
+        assert widgets["schema_prefix"] == "mvm_v2_"
+        assert widgets["naming_convention"] == "snake_case"
+        assert widgets["primary_key_suffix"] == "_id"
+        assert widgets["table_id_type"] == "BIGINT"
+        assert widgets["schema_suffix"] == ""
+        assert widgets["tag_prefix"] == "dbx_"
+        assert "tag_suffix" not in widgets
+        assert handle.extra["schema_prefix"] == "mvm_v2_"
+        assert handle.extra["conventions_source"] == "file"
+        # dispatched_widgets (persisted as dispatched_widgets_json) carries
+        # the effective values.
+        assert handle.dispatched_widgets["schema_prefix"] == "mvm_v2_"
+        assert handle.dispatched_widgets["tag_prefix"] == "dbx_"
+
+    def test_scoped_file_read_from_the_context_file_candidate(self):
+        override = "/Volumes/c/_metamodel/vol_root/imports/x/mvm_v3/model.json"
+        ctx = _ctx(params=_mvm_params(context_file_candidates=[override]))
+        ws = _ws_with_file(
+            {"_vibe_scope": {"mode": "domains"}, "model_conventions": _V3_MC}
+        )
+        widgets, _ = self._dispatch(ctx, ws)
+        ws.files.download.assert_called_once_with(override)
+        assert widgets["schema_prefix"] == "mvm_v2_"
+
+    def test_an_unreadable_file_fails_the_step_naming_the_catalog(self, caplog):
+        from databricks.sdk.errors import NotFound
+
+        ctx = _ctx(params=_mvm_params())
+        ws = _mock_ws_with_state("RUNNING")
+        ws.files.download.side_effect = NotFound("missing")
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(RuntimeError) as ei:
+                self._dispatch(ctx, ws)
+        assert str(ei.value) == (
+            "install: couldn't read the model.json of MVM version 3 from its folders "
+            "in catalog ridgeline_energy_vibe_model"
+        )
+        assert "/Volumes/ridgeline_energy_vibe_model/_metamodel/vol_root/business/ridgeline_energy/v3/mvm/model.json" in caplog.text
+        assert "/Volumes/ridgeline_energy_vibe_model/_metamodel/vol_root/business/ridgeline_energy/mvm_v3/model.json" in caplog.text
+
+    def test_a_timed_out_read_fails_the_step(self, monkeypatch):
+        import threading
+
+        from vibe_modeling.backend.services.operations import install as install_mod
+
+        monkeypatch.setattr(install_mod, "REQUIRED_READ_TIMEOUT_S", 0.1)
+        release = threading.Event()
+
+        def _hang(path):
+            release.wait(5)
+            raise RuntimeError("released")
+
+        ctx = _ctx(params=_mvm_params())
+        ws = _mock_ws_with_state("RUNNING")
+        ws.files.download.side_effect = _hang
+        try:
+            with pytest.raises(RuntimeError, match="couldn't read the model.json"):
+                self._dispatch(ctx, ws)
+        finally:
+            release.set()
+
+    def test_the_first_candidate_that_parses_is_sent(self):
+        import json as _json
+
+        first, second, third = (f"/Volumes/c/{n}/model.json" for n in ("a", "b", "c"))
+        files = {second: b"not json", third: _json.dumps({"model": {}}).encode()}
+
+        def _download(path):
+            if path not in files:
+                raise FileNotFoundError(path)
+            resp = MagicMock()
+            resp.contents.read.return_value = files[path]
+            return resp
+
+        ctx = _ctx(params=_mvm_params(context_file_candidates=[first, second, third]))
+        ws = _mock_ws_with_state("RUNNING")
+        ws.files.download.side_effect = _download
+        widgets, _ = self._dispatch(ctx, ws)
+        assert widgets["context_file"] == third
+        assert [c.args[0] for c in ws.files.download.call_args_list] == [first, second, third]
+
+    def test_a_readable_first_candidate_stops_the_search(self):
+        first, second = "/Volumes/c/a/model.json", "/Volumes/c/b/model.json"
+        ctx = _ctx(params=_mvm_params(context_file_candidates=[first, second]))
+        ws = _ws_with_file({"model": {}})
+        widgets, _ = self._dispatch(ctx, ws)
+        assert widgets["context_file"] == first
+        ws.files.download.assert_called_once_with(first)
+
+    def test_explicit_request_key_wins_at_dispatch(self):
+        ctx = _ctx(
+            params=_mvm_params(
+                naming_convention="PascalCase",
+                explicit_convention_keys=["naming_convention"],
+            )
+        )
+        ws = _ws_with_file(
+            {"_vibe_scope": {"mode": "domains"}, "model": {"model_conventions": _V3_MC}}
+        )
+        widgets, handle = self._dispatch(ctx, ws)
+        assert widgets["naming_convention"] == "PascalCase"
+        assert widgets["schema_prefix"] == _V3_MC["schema_prefix"]
+        assert widgets["tag_prefix"] == "dbx_"
+        assert handle.extra["conventions_source"] == "partial"
+
+    def test_a_typed_prefix_other_than_the_files_fails_the_step(self):
+        ctx = _ctx(params=_mvm_params(schema_prefix="custom_", explicit_convention_keys=["schema_prefix"]))
+        ws = _ws_with_file({"_vibe_scope": {"mode": "domains"}, "model": {"model_conventions": _V3_MC}})
+        with pytest.raises(RuntimeError, match="Leave Schema Prefix empty"):
+            self._dispatch(ctx, ws)
+        ws.jobs.run_now.assert_not_called()
+
+    def test_ordinary_file_drops_explicit_suffix_and_tag_prefix(self):
+        """An explicit ``schema_suffix``/``tag_prefix`` changes only a
+        scoped install. For an ordinary file (or a failed read) the widget
+        map stays the ordinary 13-key set, so the request cannot rename an
+        ordinary install's schemas."""
+        explicit = _mvm_params(
+            schema_suffix="_wt",
+            tag_prefix="acme_",
+            explicit_convention_keys=["schema_suffix", "tag_prefix"],
+        )
+        base_widgets, _ = self._todays(_ctx(params=_mvm_params()))
+        for ws in (
+            _ws_with_file({"model": {"model_conventions": dict(_V3_MC)}}),
+            _mock_ws_with_state("RUNNING"),
+        ):
+            widgets, handle = self._dispatch(_ctx(params=explicit), ws)
+            assert "schema_suffix" not in widgets
+            assert "tag_prefix" not in widgets
+            assert self._no_sid(widgets) == self._no_sid(base_widgets)
+            assert "conventions_source" not in handle.extra
+
+        scoped = _ws_with_file(
+            {"_vibe_scope": {"mode": "domains"}, "model": {"model_conventions": _V3_MC}}
+        )
+        widgets, _ = self._dispatch(_ctx(params=explicit), scoped)
+        assert widgets["schema_suffix"] == "_wt"
+        assert widgets["tag_prefix"] == "acme_"
+
+    def test_tag_suffix_never_sent(self):
+        ctx = _ctx(params=_mvm_params())
+        for root in (
+            {"model": {"model_conventions": {**_V3_MC, "tag_suffix": "_t"}}},
+            {
+                "_vibe_scope": {"mode": "domains"},
+                "model": {"model_conventions": {**_V3_MC, "tag_suffix": "_t"}},
+            },
+        ):
+            widgets, _ = self._dispatch(ctx, _ws_with_file(root))
+            assert "tag_suffix" not in widgets
+
+    def test_ordinary_build_has_no_optional_widgets(self):
+        p = InstallParams(**_mvm_params())
+        widgets = _build_install_widgets(p, "1")
+        assert "schema_suffix" not in widgets
+        assert "tag_prefix" not in widgets

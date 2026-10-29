@@ -14,6 +14,7 @@
  * decoupled from build-time route generation.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -35,6 +36,8 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    // No base-model pre-fill: the form keeps its own values.
+    useGetRunDefaults: () => ({ data: undefined, isLoading: false, isError: false }),
     useGetBusinessSuspense: () => businessHook(),
     useListVersionsSuspense: () => versionsHook(),
     createRun: vi.fn(),
@@ -103,6 +106,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.runs.new"));
+
 async function renderRunsNew(searchString: string) {
   const { Route: RunsNewRoute } = await import("@/routes/_sidebar/businesses.$businessId.runs.new");
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
@@ -166,14 +171,14 @@ describe("Skeptical — frontend route file structure (Stream D)", () => {
     // The route file must export at least one of: Route (file-route handle),
     // ModelVersionPage (the page component the dev tests import).
     expect("Route" in mod || "ModelVersionPage" in mod).toBe(true);
-  });
+  }, 30_000);
 
   it("can import the domain-level $scope route file", async () => {
     const mod = await import(
       "@/routes/_sidebar/businesses.$businessId.model.$version.$scope.$domainName"
     );
     expect(mod).toBeDefined();
-  });
+  }, 30_000);
 });
 
 describe("Skeptical — runs.new ?sourceVersion + ?sourceScope contract (Stream D)", () => {

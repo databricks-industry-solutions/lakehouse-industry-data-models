@@ -1,7 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { Suspense, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { notifyError } from "@/lib/notify";
+import { APP_FOLDERS_DELETE_NOTE, notifyBusinessDeleted, notifyDeleteFailed } from "@/lib/delete-outcome";
 import { invalidateEntityLists } from "@/lib/delete-invalidation";
 import { MarkdownView } from "@/components/ui/markdown-view";
 import {
@@ -13,13 +13,21 @@ import {
   useListBusinessesSuspense,
   useListIndustriesSuspense,
   useListSectorsSuspense,
+  useListVersions,
+  useListVersionsSuspense,
+  listVersionsKey,
 } from "@/lib/api";
+import { VersionLifecycleBadges } from "@/components/versions/version-lifecycle-badges";
+import { MetamodelCleanupsPanel } from "@/components/versions/metamodel-cleanups-panel";
 import { selector } from "@/lib/selector";
 import { useAssessReady } from "@/lib/assessment";
 import { formatDate } from "@/lib/date";
-import { industryDisplayName } from "@/lib/industry";
+import { industryDisplayName, kickstartSourceLabel } from "@/lib/industry";
 import { sectorDisplayName } from "@/lib/sector";
+import { stripVibeMarkers } from "@/lib/vibe-scope";
 import { entityKindLabel, entityKindLabelLower } from "@/lib/entity-kind";
+import { versionBrandLabel, versionScopeLabel } from "@/lib/version-label";
+import { isInstalled } from "@/lib/version-lifecycle";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -111,12 +119,19 @@ function ExplorerLanding({ businessId }: { businessId: string }) {
     params: { business_id: businessId },
     ...selector(),
   });
+  // Install state rides on the versions list; the server refuses a business
+  // delete while any version is installed, so the dialog lists them first.
+  // Not a suspense query, so the header does not wait on it; Delete stays off
+  // until it has loaded.
+  const lifecycle = useListVersions({ params: { business_id: businessId } });
+  const lifecycleRows = lifecycle.data?.data ?? [];
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { ready: assessReady } = useAssessReady();
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const versionCount = versions?.length ?? 0;
+  const installedVersions = lifecycleRows.filter(isInstalled);
   // An industry is a ``businesses`` row with kind='industry' (ADR D-046); it
   // shares this explorer surface with plain businesses, so every user-facing
   // noun must follow the kind discriminator instead of hardcoding "business".
@@ -140,11 +155,16 @@ function ExplorerLanding({ businessId }: { businessId: string }) {
     // feedback but no versions (e.g. a failed base-model run).
     setDeleting(true);
     try {
-      await deleteBusiness({ business_id: businessId, cascade: true });
+      const res = await deleteBusiness({ business_id: businessId, cascade: true });
+      notifyBusinessDeleted(res.data, business.kind, business.name);
       await invalidateEntityLists(queryClient, "business");
       navigate({ to: "/businesses" });
     } catch (err) {
-      notifyError(err, { fallback: `Failed to delete ${kindLower}` });
+      if (notifyDeleteFailed(err, { fallback: `Failed to delete ${kindLower}` })) {
+        await invalidateEntityLists(queryClient, "business");
+      }
+      // A version installed since the list loaded is the likely refusal.
+      await queryClient.invalidateQueries({ queryKey: listVersionsKey({ business_id: businessId }) });
       setDeleting(false);
     }
   };
@@ -228,18 +248,56 @@ function ExplorerLanding({ businessId }: { businessId: string }) {
             <DialogTitle>Delete "{business.name}"?</DialogTitle>
           </DialogHeader>
           <div className="space-y-2 text-sm">
+            {lifecycle.isError && (
+              <p role="alert" className="text-destructive">
+                Couldn't load the version list, so Delete is off.{" "}
+                <button
+                  type="button"
+                  className="font-medium underline underline-offset-2"
+                  onClick={() => void lifecycle.refetch()}
+                >
+                  Try again
+                </button>
+              </p>
+            )}
+            {installedVersions.length > 0 && (
+              <div
+                role="alert"
+                data-testid="delete-business-installed"
+                className="space-y-1.5 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2"
+              >
+                <p className="font-medium text-destructive">
+                  Uninstall these versions first (Uninstall on each version's page):
+                </p>
+                <ul className="space-y-1">
+                  {installedVersions.map((v) => (
+                    <li key={v.id} className="text-foreground">
+                      <Link
+                        to="/businesses/$businessId/model/$version/$scope"
+                        params={{ businessId, version: String(v.version), scope: v.scope || "mvm" }}
+                        search={{ tab: "overview" }}
+                        className="font-medium underline underline-offset-2"
+                      >
+                        {versionScopeLabel(v.version, v.scope)}
+                      </Link>{" "}
+                      is installed in <span className="font-mono">{v.uc_catalog || "a catalog"}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             <p className="text-destructive font-medium">
               This permanently deletes this {kindLower} AND all its model
-              versions, runs, progress events, artifacts, feedback, business
-              contexts and feedback-run links.
+              versions, runs and their history, feedback and business contexts.
             </p>
-            <p className="text-muted-foreground">
-              {versionCount > 0
-                ? `${versionCount} version${versionCount === 1 ? "" : "s"} will be removed from Lakebase. `
-                : ""}
-              Delta metamodel rows on the agent side are NOT touched — uninstall
-              each model version first if you also need to clean up UC.
-            </p>
+            {versionCount > 0 && (
+              <p className="text-muted-foreground">
+                {`${versionCount} version${versionCount === 1 ? "" : "s"} will be removed from Lakebase, `}
+                with the agent's registry rows (<span className="font-mono">_metamodel</span>) in the
+                catalogs the versions were written to or installed in. A version imported from a
+                Volume keeps the rows in that Volume's catalog. {APP_FOLDERS_DELETE_NOTE}
+              </p>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" disabled={deleting} onClick={() => setDeleteOpen(false)}>
@@ -247,7 +305,7 @@ function ExplorerLanding({ businessId }: { businessId: string }) {
             </Button>
             <Button
               variant="outline"
-              disabled={deleting}
+              disabled={deleting || !lifecycle.isSuccess || installedVersions.length > 0}
               className="border-destructive text-destructive hover:bg-destructive/10 hover:text-destructive"
               onClick={handleDelete}
             >
@@ -256,6 +314,8 @@ function ExplorerLanding({ businessId }: { businessId: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <MetamodelCleanupsPanel businessId={businessId} />
 
       <Suspense fallback={<SectionSkeleton />}>
         <VersionsSection businessId={businessId} />
@@ -284,8 +344,6 @@ function KickstartProvenance({
 }) {
   const { data: businesses } = useListBusinessesSuspense(selector());
   const source = businesses.find((b) => b.id === sourceIndustryId);
-  const label = source ? source.name : "an industry";
-  const versionSuffix = sourceVersion != null ? ` v${sourceVersion}` : "";
   return (
     <p className="mt-1.5 text-xs text-muted-foreground">
       Kickstarted from{" "}
@@ -294,8 +352,7 @@ function KickstartProvenance({
         params={{ businessId: sourceIndustryId }}
         className="font-medium text-foreground hover:underline"
       >
-        {label}
-        {versionSuffix}
+        {kickstartSourceLabel(source?.name, sourceVersion)}
       </Link>
     </p>
   );
@@ -387,6 +444,12 @@ const statusIcon: Record<string, React.ReactNode> = {
 
 function VersionsSection({ businessId }: { businessId: string }) {
   const { data: versions } = useGetExplorerVersionsSuspense({
+    params: { business_id: businessId },
+    ...selector(),
+  });
+  // The lifecycle columns (dry_run, replaced_*, draft_state) ride on the
+  // versions list, not the explorer tree; join by id.
+  const { data: lifecycleRows } = useListVersionsSuspense({
     params: { business_id: businessId },
     ...selector(),
   });
@@ -486,9 +549,13 @@ function VersionsSection({ businessId }: { businessId: string }) {
                           </Badge>
                         )}
                         <Badge variant={v.is_base ? "default" : "secondary"}>
-                          {v.is_base ? "Base" : "Vibed"}
+                          {versionBrandLabel(v)}
                         </Badge>
                         <Badge variant="outline">{v.status}</Badge>
+                        {(() => {
+                          const row = lifecycleRows.find((r) => r.id === v.id);
+                          return row ? <VersionLifecycleBadges version={row} versions={lifecycleRows} /> : null;
+                        })()}
                         {v.confidence_score != null && (
                           <Badge variant="outline">
                             {Math.round(v.confidence_score * 100)}% confidence
@@ -499,7 +566,7 @@ function VersionsSection({ businessId }: { businessId: string }) {
                         <div className="mt-2 text-sm text-muted-foreground flex items-start gap-1.5">
                           <Sparkles className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                           <span className="line-clamp-2">
-                            {v.vibe_instructions}
+                            {stripVibeMarkers(v.vibe_instructions)}
                           </span>
                         </div>
                       )}

@@ -6,7 +6,7 @@ import { selector } from "@/lib/selector";
 import { useBreadcrumbs } from "@/components/explorer/breadcrumb-context";
 import { AssessBoundary } from "@/components/assessment/assess-boundary";
 import { AssessmentWizard } from "@/components/assessment/assessment-wizard";
-import { AssessGate } from "@/components/assessment/assess-gate";
+import { FeatureGate } from "@/components/feature-gate";
 
 type NewAssessmentSearch = { versionId?: string; domainId?: string };
 
@@ -44,11 +44,11 @@ function NewAssessmentPage() {
         </Button>
         <h1 className="text-2xl font-semibold tracking-tight">New assessment</h1>
       </div>
-      <AssessGate requireReady>
+      <FeatureGate feature="assessment" requireReady>
         <AssessBoundary>
           <NewAssessmentContent businessId={businessId} />
         </AssessBoundary>
-      </AssessGate>
+      </FeatureGate>
     </div>
   );
 }

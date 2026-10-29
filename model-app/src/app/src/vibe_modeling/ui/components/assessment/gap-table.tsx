@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { SortableTableHead, useTableSort } from "@/components/ui/sortable-table-head";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { GapOut } from "@/lib/api";
+import { AgentText } from "./agent-text";
 
 /** Gap registry for the run: entity, column, type, description, status, and the ask. */
 export function GapTable({ gaps }: { gaps: GapOut[] }) {
@@ -35,9 +36,9 @@ export function GapTable({ gaps }: { gaps: GapOut[] }) {
             <TableCell className="font-medium">{g.entity}</TableCell>
             <TableCell>{g.column}</TableCell>
             <TableCell>{g.gap_type}</TableCell>
-            <TableCell>{g.description}</TableCell>
+            <TableCell><AgentText text={g.description} /></TableCell>
             <TableCell>{g.status}</TableCell>
-            <TableCell>{g.ask}</TableCell>
+            <TableCell><AgentText text={g.ask} /></TableCell>
           </TableRow>
         ))}
       </TableBody>

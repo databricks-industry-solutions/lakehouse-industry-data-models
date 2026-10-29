@@ -253,9 +253,9 @@ class CatalogSchemaWarningOut(BaseModel):
 
     ``schema_count`` is the number of schemas that are NOT in
     ``_PROTECTED_SCHEMAS`` (``_metamodel``, ``default``, ``information_schema``).
-    When non-zero the new-run form shows an informational warning: those
-    schemas are from prior deployments and the agent will drop them at run
-    start.
+    When non-zero the new-run form shows an informational warning on the runs
+    where the agent tears down the business's own schemas at its start. The
+    count includes schemas of other businesses, which the agent leaves alone.
 
     Returns zeroed/empty on catalog-not-found or permission errors so the
     new-run form never 500s waiting for this advisory signal.

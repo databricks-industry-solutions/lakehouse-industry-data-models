@@ -88,6 +88,11 @@ def make_ws(
 
     ws.files.list_directory_contents.return_value = []
     ws.files.upload.return_value = None
+    # SQL reads succeed with no rows (no agent session row, no registry rows)
+    # unless a test sets its own answer.
+    from _sql_fakes import response
+
+    ws.statement_execution.execute_statement.return_value = response([])
     return ws
 
 

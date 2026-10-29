@@ -51,6 +51,13 @@ business in your own words. The agent generates a base model (version 1) from th
 starting point. For how to write a good business description, see
 [Describing a business](docs/Describing-a-business.md).
 
+Every model you bring in is an ECM or an MVM. When it has no schema prefix, the
+app gives its own copy the prefix of its scope: ECM schemas are named
+`ecm_<domain>` and MVM schemas `mvm_<domain>`, and the metric views `ecm_<view>`
+and `mvm_<view>`, so the two scopes of one model can be installed in one catalog.
+Your file is not changed, and a model the agent wrote is imported as the agent
+wrote it.
+
 If the optional **Domain Taxonomy Builder** is enabled, a wizard uses an LLM to
 draft the business's domains and description. You edit the draft before the first
 run, and the app checks the domain names against the agent's naming rules.
@@ -94,12 +101,14 @@ of the model, rather than losing it in a chat log.
 
 ![Review and statistics](docs/images/statistics.png)
 
-To add feedback, navigate to the context you want to change - a domain, a table,
-or a relationship in the diagram view - then open the **Add feedback** box in that
-context. The box shows the anchor as chips (here `view: diagram`, `domain:
-customer`, `table: customer.counterparty`), a text input for the change you want,
-and a Priority selector, with Save and Cancel. Because the feedback is anchored to
-that element, the agent knows exactly what it refers to on the next run.
+To add feedback, navigate to the element you want to change - a domain, a table,
+an attribute, or a relationship in the diagram - then open the **Add feedback** box
+there. The box names that element in one "About:" line (for example "About:
+customer.counterparty", or "About: the whole model" when nothing narrower is in
+view), and has a text input for the change you want, a Priority selector, and Save
+and Cancel. Feedback is always about the model, never about the view you were on.
+Because the feedback is anchored to that element, the agent knows exactly what it
+refers to on the next run.
 
 ![Adding feedback](docs/images/feedback-box.png)
 
@@ -120,25 +129,30 @@ act on.
 ### 5. Re-run and see what changed
 
 Runs are launched from the **New Run** screen. You pick the **Operation Type**
-(here **Vibe Modeling**), the base version, and the vibe inputs, and can expand
-**Advanced Options** to tune the run - **Organization** (divisions and business
-domains), **Namespace style** (the catalog/schema prefix and suffix), and
-**Naming & format**. A **Compiled instructions preview** on the right shows exactly
-what the agent will receive.
+(here **Vibe Modeling**), the base version, and the vibe inputs, and for Vibe
+Modeling the scope and the run type. You can expand **Advanced Options** to tune
+the run - **Organization** (divisions and business domains), **Namespace style**
+(the catalog/schema prefix and suffix), and **Naming & format**. A **Compiled
+instructions preview** on the right shows exactly what the agent will receive.
 
 ![New run](docs/images/new-run.png)
 
 The operation types are:
 
-- **New base model** - generate a fresh model (version 1) from a business
-  description or template.
-- **Vibe modeling of version** - apply natural-language feedback to an existing
-  version and produce the next version.
-- **Shrink ECM** - reduce the enterprise conceptual model to a smaller scope.
-- **Enlarge MVM** - expand the minimum viable model with more detail or coverage.
-- **Install model** - deploy an existing version to Unity Catalog.
-- **Uninstall model version** - remove a previously installed version from Unity
-  Catalog.
+- **New Base Model** - generate a fresh model (version 1, an ECM and its matching
+  MVM) from a business description or template. It needs a business with no model
+  versions. It deploys the MVM to Unity Catalog; the ECM is kept with its files and
+  can be installed from its page (see the caution below).
+- **Vibe Modeling** - apply natural-language feedback to an existing version and
+  produce the next version. You choose the scope (**All domains** or **Some
+  domains**) and the run type: **Dry Run** (the default) or **Full Run**. A vibe
+  keeps the base version's conventions, so the form locks them.
+- **Vibe ECM + MVM** - apply feedback to an ECM version and produce a new ECM and
+  its matching MVM in one run. It deploys the new MVM, like New Base Model.
+
+Install and uninstall are not run types on this screen. You start them from a
+version's page: **Install** (named **Install this Dry Run** for a draft and **Make
+this version current** for an older or replaced version) and **Uninstall**.
 
 Each model-producing run produces a new, complete version - the previous one is
 never overwritten. The version tree keeps every iteration, and each vibed version
@@ -161,10 +175,24 @@ takes you straight to the underlying Databricks job run for the low-level logs. 
 run normally takes from a few to many **hours**, depending on the size of the
 inputs and the size of the base model.
 
-**Caution: many operation types destroy the schemas in the target catalog and
-re-materialize them.** Before it does this, the app shows a warning so you can
-proceed or cancel. To avoid clobbering a pre-existing deployment, point the run at
-an empty catalog, or set the **Namespace style** advanced options (a catalog
+**Caution: deploying runs can drop this business's schemas in the target
+catalog.**
+
+- A Vibe Modeling **Full Run** drops the schemas this business owns in the catalog
+  and re-creates them. When its base is the version installed there, it keeps them
+  and replaces only the tables the run changes.
+- **New Base Model** and **Vibe ECM + MVM** build the ECM, then shrink it to the
+  MVM. With One Catalog, the shrink first drops this business's schemas in the
+  catalog, the new ECM's included, so the MVM is the version left installed.
+- A business kickstarted from an industry shares that industry's schema names. A
+  Full Run or install of the business into a catalog where the industry is
+  installed under the same names uninstalls the industry version first, and the
+  app warns about it before the run starts.
+
+Schemas of other businesses are left as they are. The New Run screen says what the
+run drops, and the launch dialog of a Full Run warns before it starts. A Dry Run
+creates no schemas or tables. To keep an existing deployment apart, point the run
+at an empty catalog, or set the **Namespace style** advanced options (a catalog
 prefix and/or suffix) on the New Run screen - these change the target catalog name
 so the run lands under a distinct catalog.
 
@@ -173,16 +201,21 @@ so the run lands under a distinct catalog.
 Steps 2 through 5 are the iterate loop: explore, review, curate, and re-run in
 natural language until the model reflects your business. Deploying to Unity Catalog
 is the terminal step. A deployed version becomes schemas, tables, foreign keys,
-governance tags, and metric views - with optional referentially-correct sample
-data - straight from the app.
+governance tags, and metric views, straight from the app.
 
 ![Deploy to Unity Catalog](docs/images/deploy.png)
 
-Several operations carry an **implicit deployment**: the model-producing operations
-(new base model, vibe modeling of version, shrink ECM, enlarge MVM) materialize the
-result to Unity Catalog as part of the run. **Install model** is the explicit deploy
-of an existing version. **Uninstall model version** removes a version from Unity
-Catalog.
+A **Dry Run** is the default for Vibe Modeling. It builds the new version and its
+files but deploys nothing: the result is a draft that is not yet the latest
+version, and no feedback is marked as done. Review the draft - the run report lists
+what the agent did with each feedback item. When the draft is right, install it with **Install this
+Dry Run** on its version page (or **Install this draft** on the run report). The
+install creates its tables, makes it the latest version, and marks the feedback it
+applied as done. A **Full Run** deploys the new version as part of the run.
+
+New Base Model and Vibe ECM + MVM runs deploy the MVM they produce when they
+finish. **Install** deploys an existing version, and **Uninstall** removes a version
+from Unity Catalog; both start from the version's page.
 
 Under the hood the agent runs a two-step, LLM-driven process. The base model seeds
 the schema from a business context (business info, model conventions, optional vibe
@@ -234,8 +267,8 @@ Two features are optional and off by default. Turn each on with an install flag:
 - `--enable-assessment` - the in-app bronze assessment. See
   [Enabling the in-app bronze assessment skill](INSTALL.md#enabling-the-in-app-bronze-assessment-skill-optional).
 
-By default every user granted Databricks Apps access is treated as an app admin;
-set `VIBE_MODELING_RBAC_ENABLED=true` for group-based roles. See the
+Every user granted Databricks Apps access has full access to the app; scope that
+access to the users who should use it. See the
 [Access model](INSTALL.md#access-model) section of INSTALL.md.
 
 ## What's here
@@ -245,7 +278,7 @@ set `VIBE_MODELING_RBAC_ENABLED=true` for group-based roles. See the
 | `src/app/` | The Databricks App: React + FastAPI control plane, built with [`apx`](https://github.com/databricks-solutions/apx) |
 | `src/app/src/vibe_modeling/backend/` | FastAPI backend (routes, run orchestration, model export, Unity Catalog integration) |
 | `src/app/src/vibe_modeling/ui/` | React + TypeScript frontend and its `__tests__` |
-| `src/app/vendored/agent/` | The bundled modeling agent notebook, its naming-rules CSV and `VERSIONS.json`, uploaded to the workspace on first boot |
+| `src/app/vendored/agent/` | The bundled modeling agent notebook, its naming-rules CSV, `VERSIONS.json` and the agent's registry table columns (`metamodel_registry_schema.json`); the app uploads the notebook to the workspace at boot |
 | `src/app/vendored/assessment/` | The bundled bronze assessment: the per-domain job notebook (`assess_domain.py`), its prompt and result schemas, the pinned skills, and `VERSIONS.json` (pinned CLI and skills versions) |
 | `install/` | Installer scripts (`install.sh`, Lakebase provisioning, catalog grants, model-service check, build/render) |
 | `examples/` | Example model outputs (NCDOT) and a business context input (`examples/maf.json`) |
@@ -256,23 +289,14 @@ set `VIBE_MODELING_RBAC_ENABLED=true` for group-based roles. See the
 ## Local development
 
 The app is built with [`apx`](https://github.com/databricks-solutions/apx)
-(Python + FastAPI backend, React + shadcn/ui frontend). See
-[CONTRIBUTING.md](CONTRIBUTING.md) for setup and the checks a change must pass.
-
-```bash
-# Backend tests (from this directory)
-pytest tests/test_app
-
-# Frontend type-check and unit tests (from src/app)
-cd src/app
-npx tsc --noEmit
-npx vitest run
-```
+(Python + FastAPI backend, React + shadcn/ui frontend). Setup and the checks
+a change must pass are in [CONTRIBUTING.md](CONTRIBUTING.md) ("Running the checks").
 
 ## Publishing to GitHub (optional)
 
 The app can publish a model version to a GitHub repository as a pull request.
-This is optional and off by default. See
+Publishing removes the schema and metric view prefixes the app added at import, so
+the repository keeps the model's own names. This is optional and off by default. See
 [docs/github-integration-setup.md](docs/github-integration-setup.md) and the
 "Enabling publish-to-GitHub" section of [INSTALL.md](INSTALL.md).
 

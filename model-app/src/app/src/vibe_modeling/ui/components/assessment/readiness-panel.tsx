@@ -1,8 +1,8 @@
-import { Link } from "@tanstack/react-router";
 import { CheckCircle, HelpCircle, XCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { AdminHelpBlock } from "@/components/assessment/admin-help-block";
 import { CopyBlock } from "@/components/assessment/copy-block";
+import { FeatureSettingsButton } from "@/components/feature-gate";
 import type { Check, ReadinessOut } from "@/lib/api";
 import { ADMIN_HELP_LEAD_CHECK } from "@/lib/assessment";
 
@@ -45,9 +45,7 @@ function CheckRow({ check, scope }: { check: Check; scope: string }) {
           </p>
         )}
         {check.fix_action === "open_settings" && (
-          <Link to="/settings" search={{ tab: "assessment" }} className="text-xs underline underline-offset-2">
-            Open settings
-          </Link>
+          <FeatureSettingsButton feature="assessment" />
         )}
         {check.fix_sql && check.fix_action !== ADMIN_HELP_ACTION && <CopyBlock text={check.fix_sql} label="Copy SQL" />}
       </div>

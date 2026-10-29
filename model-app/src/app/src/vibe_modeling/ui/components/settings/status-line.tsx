@@ -22,14 +22,18 @@ export function StatusLine({
   tone,
   children,
   testId,
+  id,
 }: {
   tone: StatusTone;
   children: ReactNode;
   testId?: string;
+  /** For the field's `aria-describedby`. */
+  id?: string;
 }) {
   const Icon = tone === "ok" ? Check : AlertTriangle;
   return (
     <p
+      id={id}
       className={`text-xs ${TONE_CLASS[tone]} flex items-start gap-1`}
       data-testid={testId}
       data-tone={tone}

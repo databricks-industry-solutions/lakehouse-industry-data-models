@@ -275,7 +275,7 @@ export function WorkflowDiagram({
                       </span>
                       <h3 className="text-sm font-semibold">{stage.label}</h3>
                     </div>
-                    <p className="mt-1 max-w-[68ch] text-sm leading-relaxed text-muted-foreground">
+                    <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                       {stage.prose}
                     </p>
                   </div>
@@ -289,7 +289,7 @@ export function WorkflowDiagram({
               </span>
               <div className="min-w-0 flex-1 pt-0.5">
                 <h3 className="text-sm font-semibold">Publish</h3>
-                <p className="mt-1 max-w-[68ch] text-sm leading-relaxed text-muted-foreground">
+                <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                   Publish to Unity Catalog
                 </p>
               </div>
@@ -329,7 +329,7 @@ export function WorkflowDiagram({
                         </span>
                         <h3 className="text-sm font-semibold">{stage.label}</h3>
                       </div>
-                      <p className="mt-1 max-w-[68ch] text-sm leading-relaxed text-muted-foreground">
+                      <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                         {stage.prose}
                       </p>
                     </div>
@@ -342,7 +342,7 @@ export function WorkflowDiagram({
                 </span>
                 <div className="min-w-0 flex-1 pt-0.5">
                   <h3 className="text-sm font-semibold">{HAND_OFF.label}</h3>
-                  <p className="mt-1 max-w-[68ch] text-sm leading-relaxed text-muted-foreground">
+                  <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
                     {HAND_OFF.prose}
                   </p>
                 </div>

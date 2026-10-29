@@ -6,17 +6,12 @@ so the App copies the wheel-internal ``.ipynb`` into a real workspace
 path under the App service principal's home directory and points
 ``AgentConfig.notebook_path`` at that copy.
 
-This module is the single source of truth for that copy. It's used in
-two places:
-
-  * The lifespan auto-install (``core/_bundled_agent_init.py``) — runs
-    on every app boot, idempotent — so a fresh install always lands
-    with ``AgentConfig.notebook_path`` populated and a Databricks Job
-    wired up, with no external trigger needed.
-  * The admin REST route (``routes/platform.py:install_bundled_agent``)
-    — manual re-install via the Settings UI, kept for the case where
-    an admin wants to refresh after the bundled version bumps or after
-    deleting the workspace copy.
+This module is the single source of truth for that copy and for the
+folder it lands in (``app_agent_folder``): a notebook there is owned by
+the app and upgraded on boot (``core/_bundled_agent_init.py``); any other
+path is the admin's. Callers: the boot install and upgrade, the Settings
+"Switch to bundled" route, and the manual install route
+(``routes/platform.py``).
 """
 
 from __future__ import annotations
@@ -35,13 +30,25 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class InstallResult:
+    """Where the bundled notebook landed and what it is: ``version`` is its
+    release (``pinned_tag``), ``agent_version`` its agent-logic marker."""
+
     path: str
     version: str
     overwritten: bool
+    agent_version: str
 
 
 class BundledAgentNotPackagedError(RuntimeError):
     """Raised when the wheel was built without a vendored agent notebook."""
+
+
+AGENT_FOLDER_NAME = "vibe-modelling-agent"
+
+
+def app_agent_folder(sp_home: str) -> str:
+    """The app's own agent folder under the app SP's home (``core._app_identity.app_sp_home``)."""
+    return f"{sp_home}/{AGENT_FOLDER_NAME}"
 
 
 def install_bundled_agent_into_workspace(ws: WorkspaceClient) -> InstallResult:
@@ -62,7 +69,7 @@ def install_bundled_agent_into_workspace(ws: WorkspaceClient) -> InstallResult:
             "then re-run install/install.sh to rebuild and redeploy the app."
         )
 
-    folder = f"{app_sp_home(ws)}/vibe-modelling-agent"
+    folder = app_agent_folder(app_sp_home(ws))
     target = f"{folder}/{agent.file_name}"
 
     try:
@@ -89,4 +96,9 @@ def install_bundled_agent_into_workspace(ws: WorkspaceClient) -> InstallResult:
     except Exception as e:
         raise RuntimeError(f"Failed to upload bundled agent to {target}: {e}") from e
 
-    return InstallResult(path=target, version=agent.pinned_tag, overwritten=overwritten)
+    return InstallResult(
+        path=target,
+        version=agent.pinned_tag,
+        overwritten=overwritten,
+        agent_version=agent.agent_version,
+    )

@@ -44,13 +44,15 @@ class TestJobTrigger:
         assert data["status"] == "failed"
         assert "Connection refused" in data["error_message"]
 
-    def test_no_agent_config_returns_400(self, client, seed_business):
-        """When no AgentConfig exists, create_run returns 400."""
+    def test_no_agent_config_returns_config_missing(self, client, seed_business):
+        """When no AgentConfig exists, create_run answers the structured 422
+        ``config_missing`` of the pre-flight's level 1."""
         resp = client.post(f"/api/businesses/{seed_business}/runs", json={
             "business_context_path": "/Volumes/test/ctx/vibes/ctx.json",
         })
-        assert resp.status_code == 400
-        assert "Agent not configured" in resp.json()["detail"]
+        assert resp.status_code == 422, resp.text
+        assert resp.json()["detail"]["error"] == "config_missing"
+        assert "agent_job" in {m["key"] for m in resp.json()["detail"]["missing"]}
 
     def test_new_base_model_large_marks_unified_ecm_mvm(
         self, client_with_agent, mock_ws, seed_business
@@ -327,10 +329,9 @@ class TestRetryRun:
         mock_ws.jobs.run_now.return_value = mock_run
 
         structured_parameters_json = json.dumps({
-            "operation": "generate sample data",
-            "intent": "generate-samples",
+            "operation": "uninstall model version",
+            "intent": "uninstall",
             "input_ids": ["vi-1", "vi-2"],
-            "generate_samples": True,
             "next_vibe_ids": [],
             "nested": {"a": 1},
         })
@@ -338,7 +339,7 @@ class TestRetryRun:
         with _Session(engine) as session:
             run = Run(
                 business_id=seed_business,
-                intent="generate-samples",
+                intent="uninstall",
                 status="failed",
                 error_message="Something went wrong",
                 parameters_json=structured_parameters_json,
@@ -348,14 +349,14 @@ class TestRetryRun:
             run_op = RunOperation(
                 run_id=run.id,
                 step_index=0,
-                operation_name="generate_samples",
+                operation_name="uninstall",
                 status="failed",
                 params_json=json.dumps({
                     "business_name": "test_corp",
                     "deployment_catalog": "test_cat",
                     "scope": "ecm",
                     "model_version": 1,
-                    "sample_count": 10,
+                    "schema_prefix": "ecm_",
                 }),
             )
             session.add(run_op)
@@ -410,7 +411,7 @@ class TestRetryRun:
         with _Session(engine) as session:
             run = Run(
                 business_id=seed_business,
-                intent="generate-samples",
+                intent="uninstall",
                 status="cancelled",
                 parameters_json=json.dumps({"input_ids": []}),
             )
@@ -419,14 +420,14 @@ class TestRetryRun:
             run_op = RunOperation(
                 run_id=run.id,
                 step_index=0,
-                operation_name="generate_samples",
+                operation_name="uninstall",
                 status="rolled_back",
                 params_json=json.dumps({
                     "business_name": "test_corp",
                     "deployment_catalog": "test_cat",
                     "scope": "ecm",
                     "model_version": 1,
-                    "sample_count": 10,
+                    "schema_prefix": "ecm_",
                 }),
             )
             session.add(run_op)
@@ -441,3 +442,130 @@ class TestRetryRun:
         assert data["status"] == "running"
         assert data["databricks_run_id"] == 555555
         mock_ws.jobs.run_now.assert_called_once()
+
+
+class TestRetryStoredWidgetRefresh:
+    """Retrying or resuming a run stored by an older app sends today's widget
+    shape (A4): the agent's boolean label, the runtime budget, no
+    ``generate_samples``. An unknown stored boolean refuses the dispatch with
+    no ``run_now`` and no Volume write."""
+
+    @staticmethod
+    def _legacy_run(engine, business_id, widgets: dict) -> str:
+        """A failed run from the pre-orchestrator path: no RunOperation rows and
+        a flat widget map in ``parameters_json``, as a pre-0.9.0 app stored it."""
+        from sqlmodel import Session as _Session
+        from vibe_modeling.backend.db_models import Run
+
+        with _Session(engine) as session:
+            run = Run(
+                business_id=business_id,
+                intent="new-base-model",
+                status="failed",
+                error_message="Something went wrong",
+                databricks_run_id=12345,
+                parameters_json=json.dumps(widgets),
+            )
+            session.add(run)
+            session.commit()
+            return run.id
+
+    _PRE_090_WIDGETS = {
+        "operation": "new base model",
+        "business_name": "test_corp",
+        "deployment_catalog": "test_cat",
+        "data_model_scopes": "Expanded Coverage Model - ECM",
+        "generate_samples": "10",
+        "model_vibes": "",
+        "boolean_format": "Integer (1/0)",
+        "date_format": "yyyy-MM-dd",
+    }
+
+    def test_legacy_retry_sends_the_current_widget_shape(
+        self, client_with_agent, mock_ws, engine, seed_business
+    ):
+        mock_run = MagicMock()
+        mock_run.run_id = 777
+        mock_ws.jobs.run_now.return_value = mock_run
+        run_id = self._legacy_run(engine, seed_business, self._PRE_090_WIDGETS)
+
+        resp = client_with_agent.post(f"/api/businesses/{seed_business}/runs/{run_id}/retry")
+        assert resp.status_code == 200, resp.text
+
+        sent = mock_ws.jobs.run_now.call_args.kwargs["notebook_params"]
+        assert sent["boolean_format"] == "Int (0/1)"
+        # Stored before the setting existed: the current Settings default, 6 h.
+        assert sent["runtime_budget_seconds"] == "21600"
+        assert "generate_samples" not in sent
+        assert sent["date_format"] == "yyyy-MM-dd"
+        stored = json.loads(resp.json()["parameters_json"])
+        assert stored["boolean_format"] == "Int (0/1)"
+        assert "generate_samples" not in stored
+
+    def test_legacy_retry_with_unknown_boolean_is_refused(
+        self, client_with_agent, mock_ws, engine, seed_business
+    ):
+        from sqlmodel import Session as _Session
+        from vibe_modeling.backend.db_models import Run
+
+        widgets = {**self._PRE_090_WIDGETS, "boolean_format": "Maybe"}
+        run_id = self._legacy_run(engine, seed_business, widgets)
+
+        resp = client_with_agent.post(f"/api/businesses/{seed_business}/runs/{run_id}/retry")
+        assert resp.status_code == 422, resp.text
+        assert "boolean_format" in resp.json()["detail"]
+        mock_ws.jobs.run_now.assert_not_called()
+        mock_ws.files.upload.assert_not_called()
+        with _Session(engine) as session:
+            run = session.get(Run, run_id)
+            assert run.status == "failed"
+            assert run.databricks_run_id == 12345
+            assert json.loads(run.parameters_json) == widgets
+
+    @pytest.mark.parametrize("route", ["retry", "resume"])
+    def test_orchestrator_run_with_unknown_boolean_fails_without_dispatch(
+        self, client_with_agent, mock_ws, engine, seed_business, route
+    ):
+        from sqlmodel import Session as _Session, select
+        from vibe_modeling.backend.db_models import Run, RunOperation
+
+        # Long vibes would be written to a Volume if the dispatch got that far.
+        with _Session(engine) as session:
+            run = Run(
+                business_id=seed_business,
+                intent="new-base-model",
+                status="failed",
+                error_message="Something went wrong",
+                parameters_json=json.dumps({"intent": "new-base-model"}),
+            )
+            session.add(run)
+            session.flush()
+            session.add(RunOperation(
+                run_id=run.id,
+                step_index=0,
+                operation_name="generate_ecm",
+                status="failed",
+                params_json=json.dumps({
+                    "business_name": "test_corp",
+                    "deployment_catalog": "test_cat",
+                    "schema_prefix": "ecm_",
+                    "cataloging_style": "One Catalog",
+                    "model_vibes": "x" * 5000,
+                    "boolean_format": "Maybe",
+                }),
+            ))
+            session.commit()
+            run_id = run.id
+
+        resp = client_with_agent.post(f"/api/businesses/{seed_business}/runs/{run_id}/{route}")
+        assert resp.status_code == 200, resp.text
+
+        mock_ws.jobs.run_now.assert_not_called()
+        mock_ws.files.upload.assert_not_called()
+        with _Session(engine) as session:
+            run = session.get(Run, run_id)
+            op = session.exec(select(RunOperation).where(RunOperation.run_id == run_id)).one()
+            assert run.status == "failed"
+            assert "boolean_format" in (run.error_message or "")
+            assert op.status == "failed"
+            assert op.dispatched_widgets_json in (None, "", "{}")

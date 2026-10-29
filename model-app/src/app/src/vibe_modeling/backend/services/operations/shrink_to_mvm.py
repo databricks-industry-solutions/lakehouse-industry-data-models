@@ -7,17 +7,30 @@ sibling per-scope folder. In One Catalog mode the agent installs the
 MVM inline as well; otherwise the DAG's next step is an explicit
 ``install`` op.
 
+At dispatch the step takes the parent ECM's conventions from the ECM's
+``model.json`` (:func:`parent_file_conventions`): the agent's ``shrink ecm``
+builds the MVM's conventions from the widgets (nb 102800-102817,
+103236-103245), and the ECM may differ from the run's request, because a vibe
+of the ECM keeps its base's conventions or follows its instructions. The
+schema prefix (``mvm_schema_prefix``), catalog affixes and tracking columns
+stay as the run set them. When the file cannot be read, the step keeps the
+run's values and reports :data:`PARENT_CONVENTIONS_UNREAD` as a run warning
+(``_protocol.RUN_WARNINGS_KEY``, the run page's warnings card).
+
 See ``docs/orchestrator-design.md`` §10.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import logging
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
 from ...core._warehouse import get_warehouse_id
 from ...db_models import Business, ModelVersion
+from ..version_files import read_version_conventions
 from ._generation_common import (
     AGENT_OP_SHRINK_ECM,
     DEFAULT_BOOLEAN_FORMAT,
@@ -37,12 +50,42 @@ from ._generation_common import (
     observe_generation_op,
     rollback_generation_op,
 )
+from ._deployment_widgets import CATALOG_NAME_PATTERN, SCHEMA_PREFIX_PATTERN
+from ._install_conventions import RUN_CONVENTION_FILE_KEYS, run_field_file_value
 from ._protocol import (
+    RUN_WARNINGS_KEY,
     Operation,
     OperationContext,
     OperationDispatchHandle,
     OperationObservation,
 )
+
+
+logger = logging.getLogger(__name__)
+
+# The caveat a shrink reports when it could not read the parent ECM's
+# conventions. ``handle.extra`` carries the text from dispatch to the terminal
+# observe, which puts it in the step's ``RUN_WARNINGS_KEY`` (the run page's
+# warnings card).
+_CONVENTIONS_WARNING_KEY = "parent_conventions_warning"
+PARENT_CONVENTIONS_UNREAD = (
+    "Could not read the parent ECM's model conventions, so the MVM uses the "
+    "conventions this run was started with. They can differ from the ECM's."
+)
+
+
+def parent_file_conventions(file_mc: dict) -> dict[str, str]:
+    """The step params the parent ECM's ``model_conventions`` set: every
+    convention the file carries a usable value for, except the schema
+    prefix."""
+    out: dict[str, str] = {}
+    for field, model_key in RUN_CONVENTION_FILE_KEYS.items():
+        if field == "schema_prefix" or model_key not in file_mc:
+            continue
+        value = run_field_file_value(field, file_mc[model_key])
+        if value is not None:
+            out[field] = value
+    return out
 
 
 class ShrinkToMvmParams(BaseModel):
@@ -61,14 +104,14 @@ class ShrinkToMvmParams(BaseModel):
     # the DB if they want to.
     parent_ecm_version_int: Optional[int] = Field(default=None, ge=1)
     business_name: str = Field(pattern=r"^[a-z][a-z0-9_]+$")
-    deployment_catalog: str = Field(pattern=r"^[a-z][a-z0-9_]+$")
+    deployment_catalog: str = Field(pattern=CATALOG_NAME_PATTERN)
     cataloging_style: Literal[
         "One Catalog", "Catalog per Division", "Catalog per Domain",
     ]
     # MVM gets a distinct prefix so its inline install in One Catalog
     # mode doesn't collide with the ECM schema in the same catalog.
-    mvm_schema_prefix: str = Field(default="mvm_", pattern=r"^[a-z][a-z0-9_]*_$|^$", max_length=32)
-    schema_prefix: str = Field(default="mvm_", pattern=r"^[a-z][a-z0-9_]*_$|^$", max_length=32)
+    mvm_schema_prefix: str = Field(default="mvm_", pattern=SCHEMA_PREFIX_PATTERN, max_length=32)
+    schema_prefix: str = Field(default="mvm_", pattern=SCHEMA_PREFIX_PATTERN, max_length=32)
     business_description: str = ""
     context_file: str = ""
     model_vibes: str = ""
@@ -89,8 +132,6 @@ class ShrinkToMvmParams(BaseModel):
     history_tracking_columns: str = DEFAULT_HISTORY_TRACKING_COLUMNS
     catalog_prefix: str = ""
     catalog_suffix: str = ""
-    generate_samples: bool = False
-    model_folder: str = ""
 
 
 class ShrinkToMvm(Operation):
@@ -136,11 +177,14 @@ class ShrinkToMvm(Operation):
         # if provided; otherwise look it up from the parent ModelVersion
         # row (the canonical source per the Operation contract — §2 says
         # ``parent_version_id`` lives on ``OperationContext``).
+        parent_mv = (
+            session.get(ModelVersion, ctx.parent_version_id)
+            if ctx.parent_version_id
+            else None
+        )
         parent_version_int = ctx.params.get("parent_ecm_version_int")
-        if not parent_version_int and ctx.parent_version_id:
-            parent_mv = session.get(ModelVersion, ctx.parent_version_id)
-            if parent_mv is not None:
-                parent_version_int = parent_mv.version
+        if not parent_version_int and parent_mv is not None:
+            parent_version_int = parent_mv.version
         if not parent_version_int:
             raise RuntimeError(
                 "shrink_to_mvm: cannot resolve parent ECM version int — "
@@ -153,8 +197,18 @@ class ShrinkToMvm(Operation):
         # (re-call with a pre-existing databricks_run_id) is handled by
         # the orchestrator at _runner.py:671-677 before op.dispatch() runs.
         params_for_widgets["model_version_int"] = parent_version_int
+        warning = None
+        if parent_mv is not None:
+            file_mc = read_version_conventions(session, ws, parent_mv, business.name)
+            if file_mc is None:
+                warning = PARENT_CONVENTIONS_UNREAD
+                logger.warning(
+                    "shrink_to_mvm: run %s: %s", ctx.run_id, PARENT_CONVENTIONS_UNREAD
+                )
+            else:
+                params_for_widgets.update(parent_file_conventions(file_mc))
         ctx_for_dispatch = _ShadowCtx(ctx, params_for_widgets)
-        return dispatch_generation_op(
+        handle = dispatch_generation_op(
             operation=AGENT_OP_SHRINK_ECM,
             data_model_scopes=SCOPE_LABEL_MVM,
             ctx=ctx_for_dispatch,
@@ -165,6 +219,11 @@ class ShrinkToMvm(Operation):
             warehouse_id=warehouse_id,
             model_version=str(int(parent_version_int)),
         )
+        if warning is None:
+            return handle
+        return dataclasses.replace(
+            handle, extra={**handle.extra, _CONVENTIONS_WARNING_KEY: warning}
+        )
 
     def observe(
         self,
@@ -173,13 +232,22 @@ class ShrinkToMvm(Operation):
         ws: Any,
         session: Any,
     ) -> OperationObservation:
-        return observe_generation_op(
+        obs = observe_generation_op(
             handle=handle,
             ctx=ctx,
             ws=ws,
             session=session,
             scope_short="mvm",
+            agent_operation=AGENT_OP_SHRINK_ECM,
         )
+        warning = (handle.extra or {}).get(_CONVENTIONS_WARNING_KEY)
+        result = obs.terminal_result
+        if warning and result is not None and result.succeeded:
+            result = dataclasses.replace(
+                result, rollback_state={**result.rollback_state, RUN_WARNINGS_KEY: [str(warning)]},
+            )
+            obs = dataclasses.replace(obs, terminal_result=result)
+        return obs
 
     def rollback(
         self,

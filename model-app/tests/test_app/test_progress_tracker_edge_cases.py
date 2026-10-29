@@ -338,7 +338,7 @@ class TestFinalizeSqlEscaping:
         def _capture(sql, *_a, **_kw):
             captured["sql"] = sql
             return None
-        with patch.object(tracker, "_execute_sql", side_effect=_capture):
+        with patch.object(tracker, "_write", side_effect=_capture):
             tracker._finalize_session_completion(
                 catalog="my_cat",
                 session_id_bigint=999,
@@ -358,7 +358,7 @@ class TestFinalizeSqlEscaping:
     def test_finalize_escapes_backslash(self, tracker):
         captured = {}
         with patch.object(
-            tracker, "_execute_sql",
+            tracker, "_write",
             side_effect=lambda sql, *a, **k: captured.update({"sql": sql}) or None,
         ):
             tracker._finalize_session_completion(
@@ -373,7 +373,7 @@ class TestFinalizeSqlEscaping:
     def test_finalize_strips_nul_byte(self, tracker):
         captured = {}
         with patch.object(
-            tracker, "_execute_sql",
+            tracker, "_write",
             side_effect=lambda sql, *a, **k: captured.update({"sql": sql}) or None,
         ):
             tracker._finalize_session_completion(
@@ -394,7 +394,7 @@ class TestFinalizeSqlEscaping:
         = LOWER('')` clause that matches the wrong row."""
         captured = {}
         with patch.object(
-            tracker, "_execute_sql",
+            tracker, "_write",
             side_effect=lambda sql, *a, **k: captured.update({"sql": sql}) or None,
         ):
             tracker._finalize_session_completion(

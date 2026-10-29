@@ -28,7 +28,7 @@ import { notifyError } from "@/lib/notify";
 import { useBreadcrumbs } from "@/components/explorer/breadcrumb-context";
 import { selector } from "@/lib/selector";
 import { AdminHelpBlock } from "./admin-help-block";
-import { AssessNotReady } from "./assess-gate";
+import { FeatureNotReady } from "@/components/feature-gate";
 import { DomainResults } from "./domain-results";
 import { ReadinessPanel } from "./readiness-panel";
 import { useRelaunch } from "./use-relaunch";
@@ -73,7 +73,7 @@ export function BatchStatus({ businessId, batchId }: { businessId: string; batch
   const [cancellingAll, setCancellingAll] = useState(false);
   const [cancelHelp, setCancelHelp] = useState<AdminHelp | null>(null);
   const { relaunch, pending: relaunching, blocked, help: relaunchHelp } = useRelaunch(businessId, batchId);
-  const { ready, missing } = useAssessReady();
+  const { ready } = useAssessReady();
 
   useBreadcrumbs([
     { label: business.name, to: "/businesses/$businessId", params: { businessId } },
@@ -159,7 +159,7 @@ export function BatchStatus({ businessId, batchId }: { businessId: string; batch
           <ReadinessPanel readiness={blocked.readiness} />
         </div>
       )}
-      {!ready && anyRelaunchable && <AssessNotReady missing={missing} />}
+      {!ready && anyRelaunchable && <FeatureNotReady feature="assessment" />}
       {relaunchHelp && <AdminHelpBlock help={relaunchHelp} testId="relaunch-admin-help" live />}
       {cancelHelp && <AdminHelpBlock help={cancelHelp} testId="cancel-admin-help" live />}
       <div className="space-y-2">

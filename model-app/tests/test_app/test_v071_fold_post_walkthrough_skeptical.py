@@ -626,18 +626,18 @@ class TestFinalizeFailureMarks:
 
 
 class TestFinalizeRetryLogic:
-    """SPEC §Bug 3: `_finalize_session_completion` wraps `_execute_sql`
+    """SPEC §Bug 3: `_finalize_session_completion` wraps `_write`
     in a retry loop:
       - up to 3 retries on DELTA_CONCURRENT_APPEND.ROW_LEVEL_CHANGES
       - other errors propagate immediately
       - after retries exhaust: re-raise OR mark sync_state='finalize_failed'.
 
-    We use the existing ProgressTracker class, mock `_execute_sql`, and
+    We use the existing ProgressTracker class, mock `_write`, and
     count the number of attempts.
     """
 
     def _make_tracker(self, side_effect):
-        """Build a ProgressTracker with `_execute_sql` patched to raise.
+        """Build a ProgressTracker with `_write` patched to raise.
 
         We monkeypatch the bound method directly on the instance so the
         retry loop sees the synthesized errors without needing a real
@@ -664,7 +664,7 @@ class TestFinalizeRetryLogic:
                 raise r
             return r
 
-        tracker._execute_sql = fake_execute  # type: ignore[assignment]
+        tracker._write = fake_execute  # type: ignore[assignment]
         return tracker, calls
 
     def test_finalize_retries_on_delta_concurrent_append(self):

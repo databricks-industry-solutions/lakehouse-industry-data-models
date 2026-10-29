@@ -478,7 +478,7 @@ def test_cancel_unknown_ids_404(client):
 def test_cancel_databricks_error_leaves_row_unchanged(client, mock_ws, engine, seeded_batch):
     mock_ws.jobs.cancel_run.side_effect = DatabricksError("nope")
     r = client.post(f"/api/assessment-domain-runs/{seeded_batch.dr1}/cancel")
-    assert r.status_code == 502
+    assert r.status_code == 409 and r.json()["detail"]["error"] == "admin_help"
     assert _get(engine, seeded_batch.dr1).status == "assessing"
 
 

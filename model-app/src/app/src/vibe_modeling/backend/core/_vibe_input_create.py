@@ -3,6 +3,7 @@
 Used by:
 - routes/vibe_inputs.py::create_vibe_input (compose-surface feedback)
 - routes/assessments.py::addNextVibeToFeedback (assessment result conversion)
+- run_changes.py::add_rejected_as_feedback (``origin=change_rejection``)
 """
 from __future__ import annotations
 
@@ -30,6 +31,7 @@ def create_vibe_input_with_anchor(
     subdomain_id: Optional[str] = None,
     fk_link_id: Optional[str] = None,
     origin_context: Optional[FeedbackContext] = None,
+    needs_link_review: bool = False,
 ) -> VibeInput:
     """Create a VibeInput + materialize its origin VibeInputContextLink.
 
@@ -42,7 +44,7 @@ def create_vibe_input_with_anchor(
         text: Feedback text.
         author: User email.
         version_id: Model version being viewed.
-        origin: Origin enum (user, agent_next_vibe, etc.).
+        origin: Origin enum (user, agent_next_vibe, change_rejection).
         priority: Priority enum.
         confidence_score: Optional confidence (0.0-1.0).
         domain_id: Explicit domain anchor (compose-surface).
@@ -51,6 +53,8 @@ def create_vibe_input_with_anchor(
         subdomain_id: Explicit subdomain anchor (compose-surface).
         fk_link_id: Explicit FK link anchor (compose-surface).
         origin_context: Name-based anchor ("Add Feedback" compose or assessment context).
+        needs_link_review: Flag the explicit (or model-wide) anchor for review,
+            e.g. when the caller's own name resolution degraded to a parent.
 
     Returns:
         VibeInput with its origin VibeInputContextLink added to session (not yet committed).
@@ -74,7 +78,7 @@ def create_vibe_input_with_anchor(
         product_id=product_id,
         attribute_id=attribute_id,
         fk_link_id=fk_link_id,
-        needs_link_review=False,
+        needs_link_review=needs_link_review,
     )
     if not has_explicit and origin_context is not None:
         anchor = resolve_feedback_anchor(session, version_id, origin_context)

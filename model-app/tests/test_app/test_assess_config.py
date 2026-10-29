@@ -70,11 +70,11 @@ def test_get_config_shows_the_stored_reader_name_without_a_scim_call(client, moc
     mock_ws.service_principals.list.assert_not_called()
 
 
-def test_put_config_reader_lookup_error_is_502_admin_help_and_writes_nothing(client, mock_ws, engine):
+def test_put_config_reader_lookup_error_is_409_admin_help_and_writes_nothing(client, mock_ws, engine):
     from databricks.sdk.errors.platform import PermissionDenied
     mock_ws.service_principals.list.side_effect = PermissionDenied("SCIM denied for dana@example.com")
     r = client.put("/api/assess/config", json={"reader_application_id": "app-123"})
-    assert r.status_code == 502, r.text
+    assert r.status_code == 409, r.text
     assert r.json()["detail"] == {
         "error": "admin_help",
         "message": "Couldn't look up the reader service principal: SCIM denied for [REDACTED]"}
@@ -82,37 +82,48 @@ def test_put_config_reader_lookup_error_is_502_admin_help_and_writes_nothing(cli
     assert _row(engine) is None
 
 
-def test_put_config_unknown_reader_is_422(client, mock_ws, engine):
+def test_put_config_unknown_reader_is_400_setting_refused(client, mock_ws, engine):
     mock_ws.service_principals.list.return_value = []
     r = client.put("/api/assess/config", json={"reader_application_id": "nope"})
-    assert r.status_code == 422 and "not found" in r.json()["detail"].lower()
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["error"] == "setting_refused" and detail["key"] == "reader_application_id"
+    assert "not found" in detail["message"].lower()
     mock_ws.workspace.upload.assert_not_called(); mock_ws.jobs.create.assert_not_called()
     assert _row(engine) is None
 
 
-def test_put_config_unknown_warehouse_is_422_and_writes_nothing(client, mock_ws, engine):
+def test_put_config_unknown_warehouse_is_400_and_writes_nothing(client, mock_ws, engine):
     from databricks.sdk.errors.platform import NotFound
     _sp(mock_ws)
     _sync_ok(mock_ws)
     mock_ws.warehouses.get.side_effect = NotFound("no warehouse visible to dana@example.com")
     r = client.put("/api/assess/config", json={"reader_application_id": "app-123", "warehouse_id": "gone"})
-    assert r.status_code == 422 and "'gone'" in r.json()["detail"]
-    assert "[REDACTED]" in r.json()["detail"] and "dana@example.com" not in r.json()["detail"]
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail["error"] == "setting_refused" and detail["key"] == "warehouse_id"
+    assert "'gone'" in detail["message"]
+    assert "[REDACTED]" in detail["message"] and "dana@example.com" not in r.text
     mock_ws.workspace.upload.assert_not_called(); mock_ws.grants.update.assert_not_called()
     mock_ws.jobs.create.assert_not_called()
     assert _row(engine) is None
 
 
-def test_put_config_without_deployment_catalog_is_422(client, mock_ws, config, engine):
+def test_put_config_without_deployment_catalog_is_422_config_missing(client, mock_ws, config, engine):
     _sp(mock_ws)
     _sync_ok(mock_ws)
     config.deployment_catalog = ""
     r = client.put("/api/assess/config", json={"reader_application_id": "app-123"})
-    assert r.status_code == 422 and "Deployment catalog" in r.json()["detail"]
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert detail["error"] == "config_missing"
+    assert [m["key"] for m in detail["missing"]] == ["metamodel_catalog"]
+    mock_ws.service_principals.list.assert_not_called()  # the unset setting answers before any workspace call
     mock_ws.workspace.upload.assert_not_called(); mock_ws.jobs.create.assert_not_called()
+    assert _row(engine) is None
 
 
-def test_put_config_sync_failure_rolls_back_records_error_and_is_502(client, mock_ws, engine):
+def test_put_config_sync_failure_rolls_back_records_error_and_is_409(client, mock_ws, engine):
     from databricks.sdk.errors.platform import PermissionDenied
 
     from vibe_modeling.backend.db_models import AssessConfig
@@ -126,8 +137,9 @@ def test_put_config_sync_failure_rolls_back_records_error_and_is_502(client, moc
     mock_ws.jobs.get.return_value.settings.run_as.service_principal_name = "old-reader"
     mock_ws.jobs.get.return_value.settings.tasks = []
     r = client.put("/api/assess/config", json={"reader_application_id": "app-123", "warehouse_id": "wh-new"})
-    assert r.status_code == 502, r.text
+    assert r.status_code == 409, r.text
     detail = r.json()["detail"]
+    assert detail["error"] == "admin_help"
     assert "servicePrincipal.user" in detail["message"] and detail["job_url"].endswith("/jobs/5")
     row = _row(engine)
     assert row.reader_application_id == "old-reader" and row.warehouse_id == "wh-old"  # the Save rolled back
@@ -238,7 +250,7 @@ def test_a_second_save_sees_the_job_the_first_one_created(client, mock_ws, engin
     assert mock_ws.jobs.reset.call_args.kwargs["job_id"] == 77
 
 
-def test_save_502_links_the_stored_job_when_it_cannot_be_reread(client, mock_ws, engine):
+def test_save_409_links_the_stored_job_when_it_cannot_be_reread(client, mock_ws, engine):
     from databricks.sdk.errors.platform import PermissionDenied
     from sqlmodel import Session
 
@@ -250,25 +262,40 @@ def test_save_502_links_the_stored_job_when_it_cannot_be_reread(client, mock_ws,
     mock_ws.workspace.upload.side_effect = PermissionDenied("no write on home")
     mock_ws.jobs.get.side_effect = PermissionDenied("cannot read job")
     r = client.put("/api/assess/config", json={"reader_application_id": "app-123"})
-    assert r.status_code == 502
+    assert r.status_code == 409
     d = r.json()["detail"]
     assert d["error"] == "admin_help" and d["job_url"].endswith("/jobs/5")
     assert d["message"].startswith("The assessment job sync failed: Uploading the assessment notebook failed")
 
 
-def test_get_config_serializes_a_naive_updated_at_as_utc(client, mock_ws, engine):
-    """Lakebase TIMESTAMPs read back naive; the route marks them UTC like its neighbours."""
+def test_get_config_serializes_a_naive_updated_at_as_utc(client, mock_ws, engine, monkeypatch):
+    """Lakebase TIMESTAMPs read back naive; the route marks them UTC like its neighbours.
+
+    Newer sqlmodel refuses to write a naive datetime and reads SQLite back
+    as aware UTC, so the stored row can't produce the naive value on every
+    version. The row read is wrapped to hand the route a detached row with
+    a naive ``updated_at``, which is what Lakebase returns."""
     from datetime import datetime
 
-    from sqlmodel import Session
+    from vibe_modeling.backend.routes import assessments as assess_routes
 
     _sp(mock_ws)
     _sync_ok(mock_ws)
     assert client.put("/api/assess/config", json={"reader_application_id": "app-123"}).status_code == 200
-    with Session(engine) as s:
-        row = _row(engine)
-        assert row is not None
+    stored = _row(engine)
+    assert stored is not None
+    real_get = assess_routes.get_or_create_assess_config
+    handed: list[datetime] = []
+
+    def _naive_updated_at(session, config):
+        row = real_get(session, config)
+        session.expunge(row)
         row.updated_at = datetime(2026, 7, 1, 2, 30)
-        s.add(row)
-        s.commit()
-    assert client.get("/api/assess/config").json()["updated_at"] in ("2026-07-01T02:30:00Z", "2026-07-01T02:30:00+00:00")
+        handed.append(row.updated_at)
+        return row
+
+    monkeypatch.setattr(assess_routes, "get_or_create_assess_config", _naive_updated_at)
+    resp = client.get("/api/assess/config")
+    assert resp.status_code == 200
+    assert handed and all(v.tzinfo is None for v in handed)
+    assert resp.json()["updated_at"] == "2026-07-01T02:30:00Z"

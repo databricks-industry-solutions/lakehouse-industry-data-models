@@ -39,6 +39,7 @@ from databricks.sdk.service.workspace import ObjectType
 from sqlmodel import Session, select
 
 from ..core._app_identity import app_sp_home
+from ..core._uc_privileges import effective_privileges, missing_privileges
 from ..db_models import AssessConfig, AssessDomainRun
 from ..error_sanitization import sanitize_error_message
 from ..migrations.registry import _vkey
@@ -47,7 +48,6 @@ from .assets import upload_assessment_assets
 from .constants import JOB_FOLDER, RUNS_VOLUME, TERMINAL_STATUSES
 from .job import setup_assessment_job
 from .reader_sp import find_reader_sp, reader_not_found_message
-from .uc_privileges import effective_privileges
 
 logger = logging.getLogger(__name__)
 
@@ -83,9 +83,8 @@ def _grant_missing(ws: WorkspaceClient, securable_type: str, full_name: str, rea
     Unreadable effective privileges count as missing (the grant is idempotent).
     """
     have = effective_privileges(ws, securable_type, full_name, reader)
-    if have is not None and "ALL_PRIVILEGES" in have:
-        return
-    missing = [p for p in wanted if have is None or p.value not in have]
+    lacking = missing_privileges(have or set(), (p.value for p in wanted))
+    missing = [p for p in wanted if p.value in lacking]
     if missing:
         ws.grants.update(securable_type, full_name, changes=[PermissionsChange(principal=reader, add=missing)])
 

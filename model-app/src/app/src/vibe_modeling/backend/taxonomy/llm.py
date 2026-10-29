@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from typing import Any, TypeVar
 
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.config import Config
 from databricks.sdk.errors import (
     NotFound,
     PermissionDenied,
@@ -37,6 +36,7 @@ from databricks.sdk.errors import (
 )
 from pydantic import BaseModel, ValidationError
 
+from .._workspace_clients import short_budget_workspace_client
 from .models import ProbeStatus
 
 log = logging.getLogger(__name__)
@@ -245,23 +245,16 @@ class TaxonomyLLM:
         raise TaxonomyLLMError(f"reply did not match the required structure after retry: {str(last)[:500]}")
 
 
-# The shared app client (core/_defaults.py: WorkspaceClient()) keeps the SDK's
-# 60 s HTTP timeout and its 300 s retry budget. The LLM gets its own client:
-# same default (service-principal) auth, with the per-call timeout and retry
-# budget above. Built lazily and cached, so importing this module never
-# touches auth/network.
+# The LLM's own client (_workspace_clients.short_budget_workspace_client):
+# the per-call timeout and retry budget above. Built lazily and cached, so
+# importing this module never touches auth/network.
 _LLM_WS: WorkspaceClient | None = None
 
 
 def llm_workspace_client() -> WorkspaceClient:
     global _LLM_WS
     if _LLM_WS is None:
-        _LLM_WS = WorkspaceClient(
-            config=Config(
-                http_timeout_seconds=LLM_HTTP_TIMEOUT_SECONDS,
-                retry_timeout_seconds=LLM_RETRY_TIMEOUT_SECONDS,
-            )
-        )
+        _LLM_WS = short_budget_workspace_client(LLM_HTTP_TIMEOUT_SECONDS, LLM_RETRY_TIMEOUT_SECONDS)
     return _LLM_WS
 
 

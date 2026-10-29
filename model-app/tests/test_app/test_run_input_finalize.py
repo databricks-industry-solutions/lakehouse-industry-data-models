@@ -1,7 +1,8 @@
 """Atomicity of the run-completion finalize hook (_finalize_run_inputs).
 
 On SUCCESS: flip VibeInput.consumed=true for each input the run attempted (its
-RunInputLink rows) + clear selected_for_run, in ONE commit. On FAILURE: consume
+RunInputLink rows) that the agent reported ``applied`` + clear selected_for_run,
+in ONE commit. Without the agent's outcomes nothing is consumed. On FAILURE: consume
 nothing and DELETE the run's RunInputLink rows so the inputs re-pool clean;
 selected_for_run is preserved.
 
@@ -10,8 +11,8 @@ commit boundary held: ZERO RunInputLink rows persisted AND every selected
 input still consumed=false. Locks input_state_atomicity. See §6.
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "app", "src"))
 
@@ -23,6 +24,7 @@ from vibe_modeling.backend import progress_tracker as pt
 from vibe_modeling.backend.db_models import (
     Business,
     Run,
+    RunAgentReport,
     RunInputLink,
     VibeInput,
 )
@@ -39,8 +41,12 @@ def engine_fixture():
     return engine
 
 
-def _seed(engine, selected=False):
-    """Business + run + two inputs with RunInputLink rows written at launch."""
+def _seed(engine, selected=False, applied=True):
+    """Business + run + two inputs with RunInputLink rows written at launch.
+
+    With ``applied``, the run has an agent report and both links carry
+    ``outcome_status="applied"`` (as ``run_report.persist_agent_report``
+    writes them)."""
     with Session(engine) as s:
         b = Business(name="Acme")
         s.add(b)
@@ -53,8 +59,11 @@ def _seed(engine, selected=False):
         s.add(i1)
         s.add(i2)
         s.commit()
-        s.add(RunInputLink(run_id=run.id, input_id=i1.id))
-        s.add(RunInputLink(run_id=run.id, input_id=i2.id))
+        status = "applied" if applied else None
+        s.add(RunInputLink(run_id=run.id, input_id=i1.id, outcome_status=status))
+        s.add(RunInputLink(run_id=run.id, input_id=i2.id, outcome_status=status))
+        if applied:
+            s.add(RunAgentReport(run_id=run.id, has_input_outcomes=True))
         s.commit()
         return run.id, [i1.id, i2.id]
 
@@ -70,6 +79,21 @@ def test_success_resets_selected_for_run(engine):
             vi = s.get(VibeInput, iid)
             assert vi.consumed is True
             assert vi.selected_for_run is False
+
+
+def test_success_without_agent_report_consumes_nothing(engine):
+    """No agent report: a successful run marks nothing done, keeps the
+    links as the audit record and leaves the selection alone."""
+    run_id, ids = _seed(engine, selected=True, applied=False)
+    with Session(engine) as s:
+        pt._finalize_run_inputs(run_id, s, success=True)
+    with Session(engine) as s:
+        for iid in ids:
+            vi = s.get(VibeInput, iid)
+            assert vi.consumed is False
+            assert vi.selected_for_run is True
+        links = s.exec(select(RunInputLink).where(RunInputLink.run_id == run_id)).all()
+        assert len(links) == 2
 
 
 def test_failure_keeps_selected_for_run(engine):

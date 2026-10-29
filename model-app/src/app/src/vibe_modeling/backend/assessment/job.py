@@ -7,10 +7,14 @@ from databricks.sdk.service.jobs import (
     JobParameterDefinition, JobRunAs, JobSettings, NotebookTask, QueueSettings, Task,
 )
 
-from ..job_launcher import reset_or_create_job
+from ..job_launcher import app_job_tags, reset_or_create_job
 from .constants import JOB_NAME, TASK_KEY, TASK_TIMEOUT_S
 
-TAGS = {"managed_by": "vibe_modeling_app", "feature": "assessment"}
+
+def job_tags() -> dict[str, str]:
+    """The app identity tags plus ``feature=assessment``. They carry the app version,
+    so ``_fingerprint`` sees a new release and the job is reset once per release."""
+    return {**app_job_tags(), "feature": "assessment"}
 
 
 def _settings(notebook_path: str, reader_application_id: str, max_concurrent_runs: int) -> dict:
@@ -23,7 +27,7 @@ def _settings(notebook_path: str, reader_application_id: str, max_concurrent_run
         run_as=JobRunAs(service_principal_name=reader_application_id),
         queue=QueueSettings(enabled=True),
         max_concurrent_runs=max_concurrent_runs,
-        tags=dict(TAGS),
+        tags=job_tags(),
     )
 
 

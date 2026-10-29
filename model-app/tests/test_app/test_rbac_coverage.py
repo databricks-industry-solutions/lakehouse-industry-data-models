@@ -1,10 +1,11 @@
 """RBAC coverage — every mutating route must declare an auth marker.
 
-Walks every route registered on the FastAPI app and asserts each has
-either a role guard (``Dependencies.AdminOnly`` /
-``Dependencies.BusinessAdminOnly`` / ``Dependencies.ModelerOnly``), or
-appears on a curated allow-list of intentionally public / read-only
-routes (``/api/version``, ``/api/current-user``, etc.).
+Walks every route the app mounts (``backend/_routers.ROUTERS``, the list
+``app.py`` passes to ``create_app``) and asserts each has either a role
+guard (``Dependencies.AdminOnly`` / ``Dependencies.BusinessAdminOnly`` /
+``Dependencies.ModelerOnly``, or a declared guard ``ModelerDeclared`` /
+``ViewerDeclared``), or appears on a curated allow-list of intentionally
+public / read-only routes (``/api/version``, ``/api/current-user``, etc.).
 
 The intent is to make adding a *new* mutating route without an explicit
 auth declaration a hard test failure — so the next handler that lands
@@ -15,6 +16,11 @@ GETs that intentionally don't gate — list endpoints, explorer endpoints
 that the UI shows to every signed-in user — are listed in
 ``_READ_ONLY_ROUTES``. Both lists are minimal: anything not on them
 must declare a role guard.
+
+Declared guards (``core/_roles.declared_role``) count as guards but do not
+refuse anyone until ``VIBE_INPUT_ROLE_GUARDS_ENFORCED`` is True. Only the
+routes in ``_DECLARED_UNENFORCED_ROUTES`` may use them, and they are
+counted separately from the enforced ones.
 """
 
 from __future__ import annotations
@@ -29,29 +35,18 @@ sys.path.insert(
 import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
+from sqlmodel import Session
 
+import vibe_modeling.backend.core._roles as _roles_mod
+from vibe_modeling.backend._routers import ROUTERS, iter_route_methods
 from vibe_modeling.backend.core._roles import (
+    UserRole,
     require_admin,
     require_business_admin,
     require_modeler,
 )
-from vibe_modeling.backend.router import router
-from vibe_modeling.backend import explorer as _explorer  # noqa: F401
-from vibe_modeling.backend import diagram as _diagram  # noqa: F401
-from vibe_modeling.backend.routes import (
-    _dev_fixtures as _routes_dev_fixtures,
-    assessments as _routes_assessments,
-    businesses as _routes_businesses,
-    config as _routes_config,
-    deployment as _routes_deployment,
-    industries as _routes_industries,
-    industry_models as _routes_industry_models,
-    platform as _routes_platform,
-    sectors as _routes_sectors,
-    sources as _routes_sources,
-    taxonomy as _routes_taxonomy,
-    versions as _routes_versions,
-)
+from vibe_modeling.backend.db_models import Business, ModelVersion
+from vibe_modeling.backend.routes import vibe_inputs as _routes_vibe_inputs
 
 
 # Routes deliberately exposed to anonymous traffic — typically health,
@@ -76,14 +71,13 @@ _PUBLIC_ROUTES: set[tuple[str, str]] = {
 # is added at the same time.
 _READ_ONLY_ROUTES: set[tuple[str, str]] = {
     # Platform
-    # Writes only the caller's own rows, via the transitional legacy-username
-    # re-key onto the email identity (remove with the re-key after one release).
     # The preference routes are per-user: they write only the caller's own rows and require an identity.
     ("GET", "/api/user/preferences"),
     ("PUT", "/api/user/preferences/{key}"),  # per-user write to own row
     ("DELETE", "/api/user/preferences/{key}"),  # per-user delete of own row
     ("GET", "/api/catalogs"),
-    ("GET", "/api/admin/bundled-agent"),  # info-only, no mutation
+    # Read-only UC grant reads as the app SP for the catalog picker; bounded, never grants.
+    ("GET", "/api/catalogs/capabilities"),
     # Client telemetry beacon — any signed-in user; logs a warning only
     # (no DB write, no mutation, no domain access). Used by the kickstart
     # dialog to record a transient gateway 502 in the app logs.
@@ -96,6 +90,14 @@ _READ_ONLY_ROUTES: set[tuple[str, str]] = {
     # returns an analysis report. The corresponding /execute endpoint
     # IS gated.)
     ("POST", "/api/businesses/{business_id}/import/analyze"),
+    # Root import preview (no DB write, no target business; reads model.json
+    # and lists the companion artifacts). Its /execute sibling is BusinessAdminOnly.
+    ("POST", "/api/import/analyze"),
+    ("GET", "/api/import/preview"),
+    # Unity Catalog browse (reads as the app SP; no mutation) for the import
+    # Volume picker and the new-run catalog schema warning.
+    ("GET", "/api/uc/volumes/browse"),
+    ("GET", "/api/uc/catalogs/{catalog_name}/schema-warning"),
     # Explorer (reads)
     ("GET", "/api/businesses/{business_id}/explorer/versions"),
     ("GET", "/api/businesses/{business_id}/versions/{version_int}/{scope}/model"),
@@ -115,8 +117,7 @@ _READ_ONLY_ROUTES: set[tuple[str, str]] = {
         "/api/businesses/{business_id}/versions/{version_int}/{scope}/relationships",
     ),
     # Review state (reads — effective per-product states + progress rollup).
-    # The mutating marks live under routes/vibe_inputs.py (a router this RBAC
-    # walker does not include, matching the prior domain-review endpoints).
+    # The mutating marks live under routes/vibe_inputs.py (ModelerDeclared).
     (
         "GET",
         "/api/businesses/{business_id}/versions/{version_int}/{scope}/reviews",
@@ -161,6 +162,9 @@ _READ_ONLY_ROUTES: set[tuple[str, str]] = {
     ("GET", "/api/model-versions/{model_version_id}/next-vibes"),
     ("GET", "/api/businesses/{business_id}/model-versions/{model_version_id}/artifacts"),
     ("GET", "/api/businesses/{business_id}/model-versions/{model_version_id}/artifacts/download"),
+    # The run form's pre-fill for a vibe of the version: reads its model.json
+    # conventions and the producing run's widgets. No mutation.
+    ("GET", "/api/businesses/{business_id}/model-versions/{model_version_id}/run-defaults"),
     # Model export (inverse of import) — read-only reconstruction of a
     # version's model.json / publishable bundle. No mutation.
     ("GET", "/api/businesses/{business_id}/model-versions/{model_version_id}/export"),
@@ -170,12 +174,23 @@ _READ_ONLY_ROUTES: set[tuple[str, str]] = {
     # Drift probe — read-only catalog-vs-Lakebase comparison (#69).
     # The reconcile endpoint that follows IS gated (BusinessAdminOnly).
     ("GET", "/api/model-versions/{model_version_id}/installation-status"),
+    # Unfinished _metamodel cleanups of deleted versions (read; Retry is BusinessAdminOnly).
+    ("GET", "/api/businesses/{business_id}/metamodel-cleanups"),
     # Runs (read endpoints — see router.py). Every run-scoped endpoint
     # nests under /api/businesses/{business_id}/runs/... so the bid in
     # the URL acts as the per-tenant scope check.
     ("GET", "/api/businesses/{business_id}/runs/{run_id}"),
     ("GET", "/api/businesses/{business_id}/runs/{run_id}/lineage"),
     ("GET", "/api/businesses/{business_id}/runs/{run_id}/progress"),
+    # Run report (per-feedback outcomes) - read-only, any role.
+    ("GET", "/api/businesses/{business_id}/runs/{run_id}/report"),
+    ("GET", "/api/businesses/{business_id}/versions/{version_id}/report"),
+    # Run change list (diff + hint + decisions) - read-only, any role; the
+    # decision and rejected-feedback writes are ModelerOnly.
+    ("GET", "/api/businesses/{business_id}/runs/{run_id}/changes"),
+    # Whether the run change review is on (an AppConfig flag) - every role
+    # reads it to decide whether to show the review.
+    ("GET", "/api/config/run-change-review"),
     # New-Run live form feedback — no DB write, just runs the validator
     # and returns warnings/blockers. The mutating sibling POST /runs is
     # role-gated separately.
@@ -237,7 +252,6 @@ _READ_ONLY_ROUTES: set[tuple[str, str]] = {
     ("GET", "/api/config/metamodel-catalog"),
     ("GET", "/api/config/warehouses"),
     ("GET", "/api/config/warehouse"),
-    ("GET", "/api/config/oob-check"),
     # Deployment (reads only — uc-schema / compare / catalog-check)
     ("GET", "/api/businesses/{business_id}/versions/{version_id}/deployment/catalog-check"),
     ("GET", "/api/businesses/{business_id}/versions/{version_id}/deployment/uc-schema"),
@@ -254,43 +268,61 @@ _READ_ONLY_ROUTES: set[tuple[str, str]] = {
     # for every role. The PUT, the Test call and the model-services picker
     # are AdminOnly (asserted below).
     ("GET", "/api/config/taxonomy"),
+    # What an orphan-schema drop run dropped; a run read like the others.
+    ("GET", "/api/businesses/{business_id}/runs/{run_id}/schema-drops"),
 }
 
 
-# Role guard dependency callables — any route that depends on one of
-# these (transitively) is considered RBAC-gated.
+# The 21 vibe_inputs routes. They declare a role (``ModelerDeclared`` on
+# writes, ``ViewerDeclared`` on reads) that is not enforced until
+# ``_roles.VIBE_INPUT_ROLE_GUARDS_ENFORCED`` is True. No other route may use a
+# declared guard.
+_VI = "/api/businesses/{business_id}"
+_DECLARED_VIEWER_ROUTES: set[tuple[str, str]] = {
+    ("GET", f"{_VI}/inputs"),
+    ("GET", f"{_VI}/inputs/{{input_id}}"),
+    ("GET", f"{_VI}/inputs/{{input_id}}/links"),
+    ("GET", f"{_VI}/links/review-queue"),
+    # Read-only computation over the selected inputs; no write.
+    ("POST", f"{_VI}/versions/{{version_id}}/inputs/compile"),
+}
+_DECLARED_MODELER_ROUTES: set[tuple[str, str]] = {
+    ("POST", f"{_VI}/inputs"),
+    ("PATCH", f"{_VI}/inputs/{{input_id}}"),
+    ("DELETE", f"{_VI}/inputs/{{input_id}}"),
+    ("POST", f"{_VI}/inputs/{{input_id}}/restore"),
+    ("POST", f"{_VI}/inputs/{{input_id}}/consume"),
+    ("POST", f"{_VI}/inputs/{{input_id}}/unconsume"),
+    ("POST", f"{_VI}/inputs/selection"),
+    ("POST", f"{_VI}/inputs/{{input_id}}/links"),
+    ("POST", f"{_VI}/versions/{{version_id}}/inputs/carry-forward"),
+    ("POST", f"{_VI}/links/{{link_id}}/review/accept"),
+    ("POST", f"{_VI}/links/{{link_id}}/review/reanchor"),
+    ("POST", f"{_VI}/links/{{link_id}}/review/dismiss"),
+    ("POST", f"{_VI}/versions/{{version_int}}/{{scope}}/reviews/product/{{product_id}}"),
+    ("DELETE", f"{_VI}/versions/{{version_int}}/{{scope}}/reviews/product/{{product_id}}"),
+    ("POST", f"{_VI}/versions/{{version_int}}/{{scope}}/reviews/domain/{{domain_id}}"),
+    ("POST", f"{_VI}/versions/{{version_int}}/{{scope}}/reviews/subdomain/{{subdomain_id}}"),
+}
+_DECLARED_UNENFORCED_ROUTES = _DECLARED_VIEWER_ROUTES | _DECLARED_MODELER_ROUTES
+
+
+# Enforced role guard callables. A route that depends on one of these, or on
+# a declared guard (see ``_declared_min_role``), transitively, is RBAC-gated.
 _ROLE_GUARDS = {require_admin, require_business_admin, require_modeler}
 
 
 def _build_app() -> FastAPI:
     app = FastAPI()
-    app.include_router(router)
-    for r in (
-        _routes_platform.router,
-        _routes_industries.router,
-        _routes_sectors.router,
-        _routes_sources.router,
-        _routes_taxonomy.router,
-        _routes_industry_models.router,
-        _routes_config.router,
-        _routes_businesses.router,
-        _routes_versions.router,
-        _routes_deployment.router,
-        _routes_dev_fixtures.router,
-        _routes_assessments.config_router,
-        _routes_assessments.router,
-    ):
+    for r in ROUTERS:
         app.include_router(r)
     return app
 
 
-def _route_has_role_guard(route: APIRoute) -> bool:
-    """Walk the route's dependency tree and return True if any of the
-    role-guard callables is present. FastAPI builds a flat dependant
-    chain we can traverse; we also check the endpoint signature in case
-    the guard is declared as a parameter rather than a top-level
-    Depends().
-    """
+def _dependant_calls(route: APIRoute) -> list:
+    """Every callable in the route's dependency tree (FastAPI exposes the
+    nested dependants on ``dependencies``)."""
+    calls: list = []
     seen: set[int] = set()
     stack = [route.dependant]
     while stack:
@@ -298,25 +330,32 @@ def _route_has_role_guard(route: APIRoute) -> bool:
         if id(d) in seen:
             continue
         seen.add(id(d))
-        if d.call in _ROLE_GUARDS:
-            return True
-        # FastAPI exposes the nested dependants on `dependencies`.
-        for child in getattr(d, "dependencies", []) or []:
-            stack.append(child)
-    return False
+        calls.append(d.call)
+        stack.extend(getattr(d, "dependencies", []) or [])
+    return calls
+
+
+def _declared_min_role(route: APIRoute) -> UserRole | None:
+    """The role a route declares through a ``declared_role`` guard, else None."""
+    for call in _dependant_calls(route):
+        role = getattr(call, "declared_min_role", None)
+        if role is not None:
+            return role
+    return None
+
+
+def _route_has_enforced_guard(route: APIRoute) -> bool:
+    return any(call in _ROLE_GUARDS for call in _dependant_calls(route))
+
+
+def _route_has_role_guard(route: APIRoute) -> bool:
+    """True when the route depends on an enforced or a declared role guard."""
+    return _route_has_enforced_guard(route) or _declared_min_role(route) is not None
 
 
 def _enumerate_routes(app: FastAPI) -> list[tuple[str, str, APIRoute]]:
     """Yield (method, path, route) for every concrete APIRoute on the app."""
-    out: list[tuple[str, str, APIRoute]] = []
-    for r in app.routes:
-        if not isinstance(r, APIRoute):
-            continue
-        for method in r.methods or []:
-            if method in ("HEAD", "OPTIONS"):
-                continue
-            out.append((method, r.path, r))
-    return out
+    return iter_route_methods(app.routes)
 
 
 # ---------------------------------------------------------------------------
@@ -383,14 +422,14 @@ def test_allowlist_entries_are_real_routes(all_routes):
 
 def test_admin_only_routes_have_admin_guard(all_routes):
     """The endpoints that absolutely must be admin-only — seed-model and
-    install-bundled-agent are the obvious ones — get an explicit
+    switch-to-bundled are the obvious ones — get an explicit
     cross-check so a refactor that swaps AdminOnly for ModelerOnly
     fails this test even though the broader coverage test still
     passes (any guard is better than none, but the wrong guard is
     a privilege escalation)."""
     must_be_admin: set[tuple[str, str]] = {
         ("POST", "/api/businesses/{business_id}/seed-model"),
-        ("POST", "/api/admin/install-bundled-agent"),
+        ("POST", "/api/admin/agent/switch-to-bundled"),
         ("PUT", "/api/config/agent"),
         ("PUT", "/api/assess/config"),
         (
@@ -401,6 +440,11 @@ def test_admin_only_routes_have_admin_guard(all_routes):
         ("PUT", "/api/config/taxonomy"),
         ("POST", "/api/config/taxonomy/test"),
         ("GET", "/api/config/taxonomy/model-services"),
+        # Orphan schemas: listing scans a catalog, the drop deletes schemas.
+        ("GET", "/api/businesses/{business_id}/orphan-schemas"),
+        ("POST", "/api/businesses/{business_id}/orphan-schemas/drop"),
+        # Rewrites an industry's model files and registry rows.
+        ("POST", "/api/industries/{business_id}/scope-prefixes"),
     }
     by_key = {(m, p): r for m, p, r in all_routes}
 
@@ -410,20 +454,7 @@ def test_admin_only_routes_have_admin_guard(all_routes):
             f"{method} {path} not found — the admin-only assertion list "
             f"is stale; update test_rbac_coverage.py."
         )
-        # Walk the dependant chain looking for require_admin specifically.
-        seen: set[int] = set()
-        stack = [route.dependant]
-        found_admin = False
-        while stack:
-            d = stack.pop()
-            if id(d) in seen:
-                continue
-            seen.add(id(d))
-            if d.call is require_admin:
-                found_admin = True
-                break
-            for c in getattr(d, "dependencies", []) or []:
-                stack.append(c)
+        found_admin = require_admin in _dependant_calls(route)
         assert found_admin, (
             f"{method} {path} must be guarded by Dependencies.AdminOnly "
             f"(require_admin); currently has no admin guard in its "
@@ -431,13 +462,46 @@ def test_admin_only_routes_have_admin_guard(all_routes):
         )
 
 
+def test_oob_routes_take_their_sibling_roles(all_routes):
+    """Out-of-band routes: reads, "Check now" and the per-business import are
+    ModelerOnly like ``executeImport``; creating businesses is
+    BusinessAdminOnly like ``createBusinessAndExecuteImport``."""
+    expected = {
+        ("GET", "/api/oob/summary"): require_modeler,
+        ("POST", "/api/oob/check"): require_modeler,
+        ("POST", "/api/businesses/{business_id}/oob/import"): require_modeler,
+        ("POST", "/api/oob/import-new-businesses"): require_business_admin,
+    }
+    by_key = {(m, p): r for m, p, r in all_routes}
+    for key, guard in expected.items():
+        assert key in by_key, f"{key} is not mounted"
+        guards = [c for c in _dependant_calls(by_key[key]) if c in _ROLE_GUARDS]
+        assert guards == [guard], f"{key}: {guards}"
+
+
+def test_link_run_routes_are_business_admin(all_routes):
+    """Linking an imported version to its run records a Run for the business:
+    BusinessAdminOnly, preview included (it reads the Jobs API and the
+    registry as the app)."""
+    by_key = {(m, p): r for m, p, r in all_routes}
+    for path in (
+        "/api/businesses/{business_id}/versions/{version_id}/link-run/preview",
+        "/api/businesses/{business_id}/versions/{version_id}/link-run",
+    ):
+        key = ("POST", path)
+        assert key in by_key, f"{key} is not mounted"
+        guards = [c for c in _dependant_calls(by_key[key]) if c in _ROLE_GUARDS]
+        assert guards == [require_business_admin], f"{key}: {guards}"
+
+
 def test_route_walker_reports_total_count(all_routes, capsys):
-    """Reporting hook — emits the total count to stdout so the CI log
-    captures the number of routes the walker covered. Useful for
-    spotting silent regressions in discovery (e.g. a router fails to
-    register and the count drops)."""
+    """Reporting hook: emits the counts to stdout so the CI log captures
+    the number of routes the walker covered. Useful for spotting silent
+    regressions in discovery (e.g. a router fails to register and the count
+    drops). Declared-but-unenforced routes are their own bucket."""
     total = len(all_routes)
-    gated = sum(1 for _, _, r in all_routes if _route_has_role_guard(r))
+    enforced = sum(1 for _, _, r in all_routes if _route_has_enforced_guard(r))
+    declared = sum(1 for _, _, r in all_routes if _declared_min_role(r) is not None)
     public = sum(
         1 for m, p, _ in all_routes if (m, p) in _PUBLIC_ROUTES
     )
@@ -446,17 +510,189 @@ def test_route_walker_reports_total_count(all_routes, capsys):
     )
     print(
         f"\nRBAC coverage: total={total} "
-        f"role-gated={gated} public={public} read-only={read_only}"
+        f"role-gated={enforced} declared(enforced="
+        f"{_roles_mod.VIBE_INPUT_ROLE_GUARDS_ENFORCED})={declared} "
+        f"public={public} read-only={read_only}"
     )
-    # Also assert the counts add up — every route is in exactly one
-    # bucket. (Read-only entries that also have a guard are fine; the
-    # bucket-coverage test only asserts each route fits >= 1 bucket.)
-    assert gated + public + read_only >= total, (
-        f"Bucket coverage shortfall: gated={gated} + public={public} "
-        f"+ read_only={read_only} < total={total}"
+    # Every route is in at least one bucket. (Read-only entries that also
+    # have a guard are fine; the bucket-coverage test only asserts each
+    # route fits >= 1 bucket.)
+    assert enforced + declared + public + read_only >= total, (
+        f"Bucket coverage shortfall: enforced={enforced} + declared={declared} "
+        f"+ public={public} + read_only={read_only} < total={total}"
     )
+
+
+def test_no_lifespan_dependency_adds_routers_outside_routers():
+    """``create_app`` mounts ``LifespanDependency.get_routers()`` beside ``ROUTERS``;
+    the walker only sees ``ROUTERS``. No dependency may override it, or its routes
+    would escape the RBAC coverage check."""
+    from vibe_modeling.backend.core._base import LifespanDependency
+
+    def subclasses(cls):
+        for sub in cls.__subclasses__():
+            yield sub
+            yield from subclasses(sub)
+
+    overriding = [
+        c.__qualname__
+        for c in subclasses(LifespanDependency)
+        if "get_routers" in vars(c)
+    ]
+    assert not overriding, (
+        f"{overriding} override get_routers(); extend this test's walker to "
+        f"cover the routers they add"
+    )
+
+
+def test_every_mounted_router_is_walked(all_routes):
+    """The walker sees every router the app mounts, including the ones a
+    hand-kept list used to miss (uc_browse, import_root, vibe_inputs)."""
+    discovered = {p for _, p, _ in all_routes}
+    for path in (
+        "/api/uc/volumes/browse",
+        "/api/import/preview",
+        f"{_VI}/inputs",
+    ):
+        assert path in discovered, f"{path} not mounted by ROUTERS"
+
+
+def test_declared_guards_are_exactly_the_vibe_inputs_routes(all_routes):
+    """Declared guards are used by the 21 vibe_inputs routes and nothing else,
+    each with its intended role, so a new route cannot hide behind
+    ``ModelerDeclared`` instead of an enforced guard."""
+    assert len(_DECLARED_UNENFORCED_ROUTES) == 21
+    declared = {
+        (m, p): role
+        for m, p, r in all_routes
+        if (role := _declared_min_role(r)) is not None
+    }
+    assert set(declared) == _DECLARED_UNENFORCED_ROUTES, (
+        "Declared-guard routes differ from _DECLARED_UNENFORCED_ROUTES:\n"
+        + "\n".join(
+            f"  extra {m} {p}" for m, p in sorted(set(declared) - _DECLARED_UNENFORCED_ROUTES)
+        )
+        + "\n"
+        + "\n".join(
+            f"  missing {m} {p}" for m, p in sorted(_DECLARED_UNENFORCED_ROUTES - set(declared))
+        )
+    )
+    for key in _DECLARED_VIEWER_ROUTES:
+        assert declared[key] == UserRole.VIEWER, key
+    for key in _DECLARED_MODELER_ROUTES:
+        assert declared[key] == UserRole.MODELER, key
+
+
+def test_every_vibe_inputs_route_declares_a_role():
+    """Every route on the vibe_inputs router declares a role."""
+    routes = iter_route_methods(_routes_vibe_inputs.router.routes)
+    assert len(routes) == 21
+    missing = [f"  {m} {p}" for m, p, r in routes if _declared_min_role(r) is None]
+    assert not missing, "vibe_inputs routes without a declared role:\n" + "\n".join(missing)
+
+
+# ---------------------------------------------------------------------------
+# Declared guards at request time: the two switches
+# ---------------------------------------------------------------------------
+
+
+def _viewer_ws():
+    """Workspace client whose SCIM lookup finds the caller in no app group."""
+    from unittest.mock import MagicMock
+
+    ws = MagicMock()
+    user = MagicMock()
+    user.groups = []
+    ws.users.list.return_value = [user]
+    return ws
+
+
+_VIEWER_HEADERS = {"X-Forwarded-Email": "viewer@example.com"}
+
+
+@pytest.fixture
+def seeded_version(engine) -> tuple[str, str]:
+    """A business with one completed version: (business_id, version_id)."""
+    with Session(engine) as session:
+        b = Business(name="Acme")
+        session.add(b)
+        session.commit()
+        mv = ModelVersion(business_id=b.id, version=1, status="completed", scope="ecm")
+        session.add(mv)
+        session.commit()
+        return b.id, mv.id
+
+
+@pytest.fixture
+def declared_guard_client(client):
+    """The shared test client, with role resolution left real (no override)
+    so the RBAC switch and SCIM decide the caller's role."""
+    client.app.state.workspace_client = _viewer_ws()
+    return client
+
+
+def _create_input(client, business_id: str, version_id: str):
+    return client.post(
+        f"/api/businesses/{business_id}/inputs",
+        json={"text": "Rename the orders table", "version_id": version_id},
+        headers=_VIEWER_HEADERS,
+    )
+
+
+def test_viewer_passes_modeler_declared_route_while_unenforced(
+    declared_guard_client, seeded_version, monkeypatch, caplog
+):
+    """RBAC on, constant False: a VIEWER passes a Modeler-declared route.
+
+    The guard's debug log proves the caller resolved to VIEWER, so the pass is
+    not the no-identity APP_ADMIN fallback."""
+    monkeypatch.setattr(_roles_mod, "RBAC_ENABLED", True)
+    monkeypatch.setattr(_roles_mod, "VIBE_INPUT_ROLE_GUARDS_ENFORCED", False)
+    bid, vid = seeded_version
+    with caplog.at_level("DEBUG", logger=_roles_mod.__name__):
+        r = _create_input(declared_guard_client, bid, vid)
+    assert r.status_code == 200, r.text
+    assert "would refuse role viewer (needs modeler)" in caplog.text
+
+
+def test_viewer_gets_403_on_modeler_declared_route_when_enforced(
+    declared_guard_client, seeded_version, monkeypatch
+):
+    """RBAC on, constant True: a VIEWER is refused before anything is written."""
+    monkeypatch.setattr(_roles_mod, "RBAC_ENABLED", True)
+    monkeypatch.setattr(_roles_mod, "VIBE_INPUT_ROLE_GUARDS_ENFORCED", True)
+    bid, vid = seeded_version
+    r = _create_input(declared_guard_client, bid, vid)
+    assert r.status_code == 403, r.text
+    assert r.json()["detail"] == "Modeler access required"
+    listed = declared_guard_client.get(
+        f"/api/businesses/{bid}/inputs", headers=_VIEWER_HEADERS
+    )
+    assert listed.status_code == 200, listed.text
+    assert listed.json() == []
+
+
+def test_enforced_constant_has_no_effect_with_rbac_off(
+    declared_guard_client, seeded_version, monkeypatch
+):
+    """RBAC off: every caller resolves to APP_ADMIN, so the constant does not matter."""
+    monkeypatch.setattr(_roles_mod, "RBAC_ENABLED", False)
+    monkeypatch.setattr(_roles_mod, "VIBE_INPUT_ROLE_GUARDS_ENFORCED", True)
+    bid, vid = seeded_version
+    r = _create_input(declared_guard_client, bid, vid)
+    assert r.status_code == 200, r.text
 
 
 def test_assessment_grant_route_is_removed(all_routes):
     """The app grants nothing on customer catalogs: the assessment grant-read route is gone."""
     assert not any(p == "/api/assess/grant-model-read" for _, p, _ in all_routes)
+
+
+def test_saved_taxonomy_wizard_routes_are_business_admin(all_routes):
+    """The saved Domain Taxonomy wizard (read, save, discard) takes the same
+    guard as createTaxonomyDraft and createBusiness: BusinessAdminOnly."""
+    by_key = {(m, p): r for m, p, r in all_routes}
+    for method in ("GET", "PUT", "DELETE"):
+        route = by_key.get((method, "/api/taxonomy/saved"))
+        assert route is not None, f"{method} /api/taxonomy/saved not mounted"
+        assert require_business_admin in _dependant_calls(route), f"{method} /api/taxonomy/saved"

@@ -21,7 +21,9 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { AlertTriangle } from "lucide-react";
-import { getOperationMetadata } from "@/lib/operations";
+import { getOperationMetadata, helpSlug } from "@/lib/operations";
+import { HelpLink } from "@/components/help/help-link";
+import { fullRunConsequence, type AgentRunMode } from "@/lib/vibe-scope";
 
 export interface LaunchRunDialogProps {
   /** Controls visibility. Parent owns this state. */
@@ -32,6 +34,13 @@ export interface LaunchRunDialogProps {
   businessName: string;
   /** Version label (e.g. "v3") — omitted from the dialog body when absent. */
   versionLabel?: string;
+  /** Vibe scope label (e.g. "Some domains: meter_to_cash"). Adds a Scope row. */
+  scopeLabel?: string;
+  /** Agent run type for a vibe iteration. Adds a Run type row; a Full Run
+   *  also adds a warning line that names `catalog`. */
+  agentRunMode?: AgentRunMode;
+  /** Deployment catalog, named in the Full Run warning. */
+  catalog?: string;
   /** Whether the launch request is currently in flight. Disables buttons. */
   submitting?: boolean;
   /** Called when the user confirms. Parent fires createRun(...) here. */
@@ -45,6 +54,9 @@ export function LaunchRunDialog({
   operationType,
   businessName,
   versionLabel,
+  scopeLabel,
+  agentRunMode,
+  catalog = "",
   submitting = false,
   onConfirm,
   onCancel,
@@ -82,10 +94,25 @@ export function LaunchRunDialog({
               <dd className="font-medium">{versionLabel}</dd>
             </>
           )}
+
+          {scopeLabel && (
+            <>
+              <dt className="text-muted-foreground">Scope</dt>
+              <dd className="font-medium">{scopeLabel}</dd>
+            </>
+          )}
+
+          {agentRunMode && (
+            <>
+              <dt className="text-muted-foreground">Run type</dt>
+              <dd className="font-medium">{agentRunMode === "dry" ? "Dry Run" : "Full Run"}</dd>
+            </>
+          )}
         </dl>
 
         <p className="text-xs text-muted-foreground -mt-1">
-          {meta.description}
+          {meta.description}{" "}
+          <HelpLink topic={helpSlug(operationType)}>What this run does</HelpLink>
         </p>
 
         <div
@@ -98,6 +125,17 @@ export function LaunchRunDialog({
             proportional to the source model and instructions size.
           </span>
         </div>
+
+        {agentRunMode === "full" && (
+          <div
+            role="note"
+            data-testid="full-run-warning"
+            className="flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning"
+          >
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" aria-hidden />
+            <span>{fullRunConsequence(catalog)}</span>
+          </div>
+        )}
 
         <AlertDialogFooter>
           <AlertDialogCancel

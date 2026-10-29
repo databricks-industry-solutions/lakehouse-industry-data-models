@@ -24,9 +24,9 @@ where ``<cfg-obj>`` is one of agent_config / agent_cfg / cfg / config.
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
-_BACKEND = Path(__file__).resolve().parents[2] / "src/app/src/vibe_modeling/backend"
+from ._source_scan import BACKEND as _BACKEND
+from ._source_scan import is_comment, iter_files
 
 # Files exempt from the ban: the resolver module itself is the one legitimate
 # home of the fallback logic.
@@ -50,23 +50,11 @@ _IF_NOT = re.compile(r"^\s*if\s+not\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*$")
 _ASSIGN_CFG = re.compile(rf"=\s*{_CFG}\.deployment_catalog\b")
 
 
-def _py_files():
-    for p in sorted(_BACKEND.rglob("*.py")):
-        rel = p.relative_to(_BACKEND).as_posix()
-        if rel in _EXEMPT or "__pycache__" in rel:
-            continue
-        yield p, rel
-
-
-def _is_comment(line: str) -> bool:
-    return line.lstrip().startswith("#")
-
-
 def test_no_single_line_cross_concern_catalog_fallback():
     offenders: list[str] = []
-    for path, rel in _py_files():
+    for path, rel in iter_files(_BACKEND, exempt=_EXEMPT):
         for i, line in enumerate(path.read_text().splitlines(), start=1):
-            if _is_comment(line):
+            if is_comment(line):
                 continue
             if (
                 _RHS_CFG_FALLBACK.search(line)
@@ -83,7 +71,7 @@ def test_no_single_line_cross_concern_catalog_fallback():
 
 def test_no_multiline_if_not_catalog_fallback():
     offenders: list[str] = []
-    for path, rel in _py_files():
+    for path, rel in iter_files(_BACKEND, exempt=_EXEMPT):
         lines = path.read_text().splitlines()
         for i, line in enumerate(lines):
             m = _IF_NOT.match(line)
@@ -93,7 +81,7 @@ def test_no_multiline_if_not_catalog_fallback():
             # Look at the next few lines for `<var> = <cfg>.deployment_catalog`
             for j in range(i + 1, min(i + 5, len(lines))):
                 nxt = lines[j]
-                if _is_comment(nxt):
+                if is_comment(nxt):
                     continue
                 if re.search(rf"\b{re.escape(var)}\s*=\s*", nxt) and _ASSIGN_CFG.search(nxt):
                     offenders.append(f"{rel}:{j + 1}: {nxt.strip()}")

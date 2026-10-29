@@ -2,7 +2,7 @@
  * `<ModelView/>` — the reusable model-visualization tab host extracted from
  * the model-version route (commit a). Covers:
  *  - renders the full tab set for the model-route config;
- *  - `focusAnchor.domain` pre-focuses the diagram via `initialDomain`;
+ *  - `diagramDomain` pre-focuses the diagram via `initialDomain`;
  *  - a reduced `tabs` set (card-details config) hides the omitted tabs;
  *  - the overview / between / trailing slots render.
  *
@@ -60,13 +60,13 @@ describe("ModelView", () => {
     }
   });
 
-  it("pre-focuses the diagram on focusAnchor.domain via initialDomain", () => {
+  it("pre-focuses the diagram on diagramDomain via initialDomain", () => {
     lastDiagramProps = {};
     render(
       <ModelView
         {...baseProps}
         defaultTab="diagram"
-        focusAnchor={{ domain: "Sales" }}
+        diagramDomain="Sales"
       />,
     );
     expect(screen.getByTestId("diagram-viewer-stub")).toBeInTheDocument();

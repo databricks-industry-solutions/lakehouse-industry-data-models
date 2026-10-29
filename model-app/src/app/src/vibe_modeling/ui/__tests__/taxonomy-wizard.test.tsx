@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from "@tanstack/react-router";
@@ -9,6 +10,9 @@ const m = vi.hoisted(() => ({
   retryTaxonomyDraftPart: vi.fn(),
   cancelTaxonomyDraft: vi.fn(),
   compileTaxonomy: vi.fn(),
+  getSavedTaxonomyWizard: vi.fn(),
+  saveTaxonomyWizard: vi.fn(),
+  discardTaxonomyWizard: vi.fn(),
   hook: { current: { draft: undefined, error: null, lost: false } as any },
   config: { current: {} as any },
   role: { current: undefined as string | undefined },
@@ -18,6 +22,8 @@ vi.mock("@/lib/api", async (orig) => ({
   createTaxonomyDraft: m.createTaxonomyDraft, getTaxonomyExample: m.getTaxonomyExample,
   retryTaxonomyDraftPart: m.retryTaxonomyDraftPart, cancelTaxonomyDraft: m.cancelTaxonomyDraft,
   compileTaxonomy: m.compileTaxonomy,
+  getSavedTaxonomyWizard: m.getSavedTaxonomyWizard, saveTaxonomyWizard: m.saveTaxonomyWizard,
+  discardTaxonomyWizard: m.discardTaxonomyWizard,
   useGetTaxonomyConfig: () => m.config.current,
 }));
 vi.mock("@/lib/hooks", async (orig) => ({ ...(await orig<any>()), useUserRole: () => m.role.current }));
@@ -26,7 +32,11 @@ vi.mock("@/lib/taxonomy/use-taxonomy-draft", async (orig) => ({
   useTaxonomyDraft: (id: string | null) => (id ? m.hook.current : { draft: undefined, error: null, lost: false }),
 }));
 vi.mock("@/components/business/sector-select", () => ({ SectorSelect: () => <div /> }));
-vi.mock("@/components/taxonomy/review-step", () => ({ ReviewStep: () => <div data-testid="review-step" /> }));
+vi.mock("@/components/taxonomy/review-step", () => ({
+  ReviewStep: (props: { onCreated?: () => Promise<void> }) => (
+    <div data-testid="review-step"><button onClick={() => void props.onCreated?.()}>Create business (stub)</button></div>
+  ),
+}));
 
 const SECTIONS = ["company", "channels", "processes", "terminology", "systems_of_record", "regulatory"];
 const TREE = {
@@ -48,6 +58,11 @@ const configResult = (data: any) => ({ data: { data }, error: null, isLoading: f
 beforeEach(() => {
   m.config.current = configResult(READY);
   m.role.current = undefined;
+  m.getSavedTaxonomyWizard.mockReset().mockResolvedValue({ data: { saved: null } });
+  m.saveTaxonomyWizard.mockReset().mockImplementation(async (body: any) => ({
+    data: { ...body, revision: body.revision + 1, updated_at: "2026-10-23T09:00:00Z", expires_at: "2026-10-30T09:00:00Z" },
+  }));
+  m.discardTaxonomyWizard.mockReset().mockResolvedValue({ data: { discarded: true } });
 });
 
 async function renderGate() {
@@ -64,6 +79,8 @@ async function renderGate() {
   render(<QueryClientProvider client={qc}><RouterProvider router={router as any} /></QueryClientProvider>);
   await screen.findByText("Build from your domains");
 }
+
+warmImports(() => import("@/routes/_sidebar/businesses.new_.from-domains"));
 
 describe("wizard gate", () => {
   it("not installed: explains it is enabled at install time and shows no wizard", async () => {
@@ -116,10 +133,12 @@ describe("wizard gate", () => {
     expect(screen.getByRole("link", { name: /open settings/i })).toBeTruthy();
   });
 
-  it("config read failed: shows the error and no wizard", async () => {
+  it("config read failed: shows the error with a counted-down retry and no wizard", async () => {
     m.config.current = { data: undefined, error: new Error("network down"), isLoading: false };
     await renderGate();
     expect(screen.getByTestId("taxonomy-gate").textContent).toMatch(/network down/);
+    expect(screen.getByTestId("taxonomy-gate").textContent).toMatch(/Next try in 00:\d\d/);
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
     expect(screen.queryByLabelText(/company name/i)).toBeNull();
   });
 
@@ -133,7 +152,7 @@ describe("wizard gate", () => {
   });
 });
 
-async function renderWizard() {
+async function renderWizard({ waitForIntake = true } = {}) {
   const { Route } = await import("@/routes/_sidebar/businesses.new_.from-domains");
   const root = createRootRoute({ component: () => <Outlet /> });
   const wiz = createRoute({ getParentRoute: () => root, path: "/businesses/new/from-domains", component: Route.options.component as any });
@@ -146,6 +165,7 @@ async function renderWizard() {
   render(<QueryClientProvider client={qc}><RouterProvider router={router as any} /></QueryClientProvider>);
   await screen.findByText("Build from your domains");
   await waitFor(() => expect(m.getTaxonomyExample).toHaveBeenCalled());
+  if (waitForIntake) await screen.findByLabelText(/company name/i);
   return qc;
 }
 
@@ -157,7 +177,7 @@ function fillIntake() {
 async function draftToStep2(draft: any) {
   m.hook.current = { draft, error: null, lost: false };
   fillIntake();
-  fireEvent.click(screen.getByRole("button", { name: /draft with claude/i }));
+  fireEvent.click(screen.getByRole("button", { name: /draft with the model/i }));
   await screen.findByTestId("domain-card-0");
 }
 
@@ -177,9 +197,9 @@ describe("Build from your domains wizard", () => {
     await renderWizard();
     m.hook.current = { draft: running, error: null, lost: false };
     fillIntake();
-    fireEvent.click(screen.getByRole("button", { name: /draft with claude/i }));
+    fireEvent.click(screen.getByRole("button", { name: /draft with the model/i }));
     await waitFor(() => expect(m.createTaxonomyDraft).toHaveBeenCalledWith(expect.objectContaining({ company_name: "Acme", industry: "Utility" })));
-    expect(await screen.findByText(/claude is drafting/i)).toBeTruthy();
+    expect(await screen.findByText(/the model is drafting/i)).toBeTruthy();
   });
 
   it("renders the drafted tree in the editor and diagram", async () => {
@@ -292,7 +312,7 @@ describe("Build from your domains wizard", () => {
     await waitFor(() => expect(qc.getQueryData(["taxonomy-draft", "d1"])).toEqual(cancelled));
   });
 
-  it("Start from the Ridgeline example loads the example tree AND sections without calling Claude", async () => {
+  it("Start from the Ridgeline example loads the example tree AND sections without calling the model", async () => {
     await renderWizard();
     fillIntake();
     fireEvent.click(screen.getByRole("button", { name: "Start from the Ridgeline example" }));
@@ -302,7 +322,7 @@ describe("Build from your domains wizard", () => {
     expect(m.createTaxonomyDraft).not.toHaveBeenCalled();
   });
 
-  it("Start blank opens an empty editor without calling Claude", async () => {
+  it("Start blank opens an empty editor without calling the model", async () => {
     await renderWizard();
     fillIntake();
     fireEvent.click(screen.getByRole("button", { name: "Start blank" }));
@@ -315,10 +335,13 @@ describe("Build from your domains wizard", () => {
     await renderWizard();
     m.hook.current = { draft: undefined, error: null, lost: true };
     fillIntake();
-    fireEvent.click(screen.getByRole("button", { name: /draft with claude/i }));
+    fireEvent.click(screen.getByRole("button", { name: /draft with the model/i }));
     fireEvent.click(await screen.findByRole("button", { name: /draft again/i }));
     await waitFor(() => expect(m.createTaxonomyDraft).toHaveBeenCalledTimes(2));
     expect(m.createTaxonomyDraft.mock.calls[1][0]).toMatchObject({ company_name: "Acme" });
+    // No tree yet: nothing to seed, the server drafts every part.
+    expect(m.createTaxonomyDraft.mock.calls[1][0]).toMatchObject({ seed_tree: null, seed_sections: {} });
+    expect(m.createTaxonomyDraft.mock.calls[0][0]).not.toHaveProperty("seed_tree");
   });
 
   describe("Draft again after a lost draft", () => {
@@ -346,6 +369,11 @@ describe("Build from your domains wizard", () => {
       m.createTaxonomyDraft.mockResolvedValueOnce({ data: { draft_id: "d2" } });
       fireEvent.click(await screen.findByRole("button", { name: /draft again/i }));
       await waitFor(() => expect(m.createTaxonomyDraft).toHaveBeenCalledTimes(2));
+      // The edited tree and sections are the seeds: the server makes no tree call and skips these sections.
+      const again = m.createTaxonomyDraft.mock.calls[1][0];
+      expect(again.seed_tree.domains.map((d: any) => d.name)).toEqual(["Customer & Premise", "Safety"]);
+      expect(again.seed_sections.company).toEqual({ claims: [{ text: "We run the grid.", provenance: "industry" }, { text: "We also sell water and gas.", provenance: "user" }] });
+      expect(Object.keys(again.seed_sections).sort()).toEqual([...SECTIONS].sort());
       m.hook.current = { draft: redrafted, error: null, lost: false };
       fireEvent.change(notes, { target: { value: "We also sell water and gas!" } });
 
@@ -364,7 +392,7 @@ describe("Build from your domains wizard", () => {
       await draftToStep2(allDone);
       fireEvent.click(screen.getByRole("button", { name: "Back" }));
       m.hook.current = { draft: running, error: null, lost: false };
-      fireEvent.click(await screen.findByRole("button", { name: /draft with claude/i }));
+      fireEvent.click(await screen.findByRole("button", { name: /draft with the model/i }));
       expect(await screen.findByText(/waiting for the domain draft/i)).toBeTruthy();
       expect(screen.queryByTestId("domain-card-0")).toBeNull();
     });
@@ -372,12 +400,18 @@ describe("Build from your domains wizard", () => {
 
   describe("fallback after a non-done tree", () => {
     const treeWith = (status: string) => ({ ...running, status: "failed", parts: { ...Object.fromEntries(SECTIONS.map((k) => [k, { status, error: "boom" }])), tree: { status, error: "boom" } } });
+    // The intake form has its own "Start blank" / "Start from the Ridgeline example" buttons (disabled while
+    // the draft starts), so waiting for those resolves before step 1 and the click is lost. Wait for a button only
+    // the step-1 fallback has. A delayed createTaxonomyDraft keeps that window open on every run.
+    beforeEach(() => {
+      m.createTaxonomyDraft.mockImplementation(() => new Promise((r) => setTimeout(() => r({ data: { draft_id: "d1" } }), 100)));
+    });
     async function toStep1(status: string) {
       await renderWizard();
       m.hook.current = { draft: treeWith(status), error: null, lost: false };
       fillIntake();
-      fireEvent.click(screen.getByRole("button", { name: /draft with claude/i }));
-      await screen.findByRole("button", { name: "Start blank" });
+      fireEvent.click(screen.getByRole("button", { name: /draft with the model/i }));
+      await screen.findByRole("button", { name: "Retry domains" });
     }
 
     it("cancelled tree shows the fallback plus Back; Back keeps the intake values", async () => {
@@ -401,11 +435,11 @@ describe("Build from your domains wizard", () => {
       await renderWizard();
       m.hook.current = { draft: busy, error: null, lost: false };
       fillIntake();
-      fireEvent.click(screen.getByRole("button", { name: /draft with claude/i }));
+      fireEvent.click(screen.getByRole("button", { name: /draft with the model/i }));
       const countdown = await screen.findByTestId("tree-busy-countdown");
       // Only the tree counts down; one countdown on the page.
       expect(screen.getAllByTestId(/busy-countdown/)).toHaveLength(1);
-      await waitFor(() => expect(countdown.textContent).toContain("The model is busy. Retrying in 00:15"));
+      await waitFor(() => expect(countdown.textContent).toContain("The model is busy. Next try in 00:15"));
       expect(screen.queryByText(/waiting for the domain draft/i)).toBeNull();
       expect(screen.getByRole("button", { name: "Start blank" })).toBeTruthy();
       expect(screen.getByRole("button", { name: "Start from the Ridgeline example" })).toBeTruthy();
@@ -437,5 +471,190 @@ describe("Build from your domains wizard", () => {
       expect(screen.queryByText(/didn't finish/i)).toBeNull();
       expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
     });
+  });
+});
+
+describe("save and resume", () => {
+  const minutesAgo = (n: number) => new Date(Date.now() - n * 60_000).toISOString();
+  const savedState = (extra: any = {}) => ({
+    revision: 3, step: 1, sector_id: null, strictness: "guided",
+    intake: { company_name: "Ridgeline Energy", industry: "Utility", one_liner: "", known_domains: "", key_systems: "", regulators: "", pasted_doc: "" },
+    tree: TREE, sections: { company: { claims: [{ text: "We run the grid.", provenance: "user" }] } },
+    updated_at: minutesAgo(4), expires_at: minutesAgo(-7 * 24 * 60), ...extra,
+  });
+  const lastSave = () => m.saveTaxonomyWizard.mock.calls.at(-1)?.[0];
+
+  it("offers Resume where you left off, with the step and when it was saved", async () => {
+    m.getSavedTaxonomyWizard.mockResolvedValue({ data: { saved: savedState() } });
+    await renderWizard({ waitForIntake: false });
+    const card = await screen.findByTestId("taxonomy-resume");
+    expect(card.textContent).toContain("Resume where you left off (Domains step, saved 4m ago)");
+    expect(card.textContent).toContain("Ridgeline Energy");
+    expect(screen.queryByLabelText(/company name/i)).toBeNull();
+    expect(m.saveTaxonomyWizard).not.toHaveBeenCalled();
+  });
+
+  it("Resume restores the step, tree, strictness and sections, and keeps saving on the loaded revision", async () => {
+    m.getSavedTaxonomyWizard.mockResolvedValue({ data: { saved: savedState() } });
+    await renderWizard({ waitForIntake: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    expect((await screen.findByTestId("domain-card-0")).textContent).toContain("Customer & Premise");
+    expect((screen.getByLabelText(/Guided/) as HTMLInputElement).checked).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText("New domain"), { target: { value: "Safety" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add domain" }));
+    await waitFor(() => expect(lastSave()?.tree?.domains).toHaveLength(2), { timeout: 3000 });
+    expect(lastSave()).toMatchObject({ revision: 3, step: 1, strictness: "guided", intake: { company_name: "Ridgeline Energy" } });
+    expect(lastSave().sections).toEqual(savedState().sections);
+    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    expect(await screen.findByDisplayValue("We run the grid.")).toBeTruthy();
+  });
+
+  it("Start over deletes the saved work and opens an empty intake", async () => {
+    m.getSavedTaxonomyWizard.mockResolvedValue({ data: { saved: savedState() } });
+    await renderWizard({ waitForIntake: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Start over" }));
+    expect((await screen.findByLabelText(/company name/i) as HTMLInputElement).value).toBe("");
+    expect(m.discardTaxonomyWizard).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("taxonomy-resume")).toBeNull();
+  });
+
+  it("autosaves 1 s after a change, once there is an intake", async () => {
+    await renderWizard();
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(m.saveTaxonomyWizard).not.toHaveBeenCalled(); // nothing to save before the intake
+    await draftToStep2(treeDone);
+    await waitFor(() => expect(lastSave()?.tree).toBeTruthy(), { timeout: 3000 });
+    expect(lastSave()).toMatchObject({ revision: expect.any(Number), step: 1, intake: { company_name: "Acme", industry: "Utility" } });
+    expect(lastSave().tree.domains[0].name).toBe("Customer & Premise");
+    expect(await screen.findByTestId("taxonomy-save-status")).toHaveProperty("textContent", "Progress saved");
+  });
+
+  it("a resumed wizard offers to draft only the missing sections, seeded with what it has", async () => {
+    m.getSavedTaxonomyWizard.mockResolvedValue({ data: { saved: savedState() } });
+    await renderWizard({ waitForIntake: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    const note = await screen.findByTestId("taxonomy-not-drafted");
+    expect(note.textContent).toContain("Not drafted yet: Channels, Core processes, Terminology, Systems of record, Regulatory.");
+    fireEvent.click(screen.getByRole("button", { name: "Draft the missing parts" }));
+    await waitFor(() => expect(m.createTaxonomyDraft).toHaveBeenCalledTimes(1));
+    const body = m.createTaxonomyDraft.mock.calls[0][0];
+    expect(body).toMatchObject({ company_name: "Ridgeline Energy", seed_tree: TREE, seed_sections: savedState().sections });
+    await waitFor(() => expect(screen.queryByTestId("taxonomy-not-drafted")).toBeNull());
+  });
+
+  it("a resumed wizard whose domains were still drafting offers to draft them", async () => {
+    m.getSavedTaxonomyWizard.mockResolvedValue({ data: { saved: savedState({ tree: null, sections: {}, step: 2 }) } });
+    await renderWizard({ waitForIntake: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    expect(await screen.findByText(/still drafting when your work was saved/i)).toBeTruthy();
+    expect(screen.queryByText(/waiting for the domain draft/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Start blank" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Draft the domains" }));
+    await waitFor(() => expect(m.createTaxonomyDraft).toHaveBeenCalledTimes(1));
+    expect(m.createTaxonomyDraft.mock.calls[0][0]).toMatchObject({ seed_tree: null, seed_sections: {} });
+  });
+
+  it("Start blank on a resumed wizard without domains ends the offer to draft missing parts", async () => {
+    m.getSavedTaxonomyWizard.mockResolvedValue({ data: { saved: savedState({ tree: null, sections: {} }) } });
+    await renderWizard({ waitForIntake: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Start blank" }));
+    expect(await screen.findByText(/add a domain to see the diagram/i)).toBeTruthy();
+    expect(screen.queryByTestId("taxonomy-not-drafted")).toBeNull();
+  });
+
+  it("a save refused as stale pauses saving; Keep this tab's version saves over it", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+    m.saveTaxonomyWizard.mockRejectedValueOnce(
+      new ApiError(409, "Conflict", { detail: { error: "stale_revision", revision: 9, message: "This wizard was saved more recently in another tab or window." } }),
+    );
+    await renderWizard();
+    await draftToStep2(treeDone);
+    const conflict = await screen.findByTestId("taxonomy-save-conflict", {}, { timeout: 3000 });
+    expect(conflict.textContent).toContain("saved more recently in another tab");
+    fireEvent.click(screen.getByRole("button", { name: "Keep this tab's version" }));
+    await waitFor(() => expect(lastSave()?.revision).toBe(9));
+    expect(screen.queryByTestId("taxonomy-save-conflict")).toBeNull();
+  });
+
+  it("Load the newer save puts the other tab's wizard on screen", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+    m.saveTaxonomyWizard.mockRejectedValueOnce(
+      new ApiError(409, "Conflict", { detail: { error: "stale_revision", revision: 9, message: "Saved elsewhere." } }),
+    );
+    await renderWizard();
+    await draftToStep2(treeDone);
+    await screen.findByTestId("taxonomy-save-conflict", {}, { timeout: 3000 });
+    m.getSavedTaxonomyWizard.mockResolvedValueOnce({ data: { saved: savedState({ revision: 9, tree: EXAMPLE_TREE }) } });
+    fireEvent.click(screen.getByRole("button", { name: "Load the newer save" }));
+    await waitFor(() => expect(screen.getByTestId("domain-card-0").textContent).toContain("Ridgeline Domain"));
+  });
+
+  it("creating the business discards the saved wizard", async () => {
+    m.getSavedTaxonomyWizard.mockResolvedValue({ data: { saved: savedState({ step: 3 }) } });
+    await renderWizard({ waitForIntake: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create business (stub)" }));
+    await waitFor(() => expect(m.discardTaxonomyWizard).toHaveBeenCalledTimes(1));
+    const saves = m.saveTaxonomyWizard.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(m.saveTaxonomyWizard.mock.calls.length).toBe(saves);
+  });
+
+  it("Resume writes nothing until something changes", async () => {
+    m.getSavedTaxonomyWizard.mockResolvedValue({ data: { saved: savedState() } });
+    await renderWizard({ waitForIntake: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+    await screen.findByTestId("domain-card-0");
+    await new Promise((r) => setTimeout(r, 1300));
+    expect(m.saveTaxonomyWizard).not.toHaveBeenCalled();
+  });
+
+  it("the resume card says a step-4 description is written again", async () => {
+    m.getSavedTaxonomyWizard.mockResolvedValue({ data: { saved: savedState({ step: 3 }) } });
+    await renderWizard({ waitForIntake: false });
+    expect((await screen.findByTestId("taxonomy-resume")).textContent).toContain("The description is written again when you resume.");
+  });
+
+  it("a failed Start over keeps the saved work and the resume card", async () => {
+    m.getSavedTaxonomyWizard.mockResolvedValue({ data: { saved: savedState() } });
+    m.discardTaxonomyWizard.mockRejectedValueOnce(new Error("Couldn't reach the app"));
+    await renderWizard({ waitForIntake: false });
+    fireEvent.click(await screen.findByRole("button", { name: "Start over" }));
+    await waitFor(() => expect(m.discardTaxonomyWizard).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Start over" }) as HTMLButtonElement).disabled).toBe(false));
+    expect(screen.getByTestId("taxonomy-resume")).toBeTruthy();
+    expect(screen.queryByLabelText(/company name/i)).toBeNull();
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(m.saveTaxonomyWizard).not.toHaveBeenCalled();
+  });
+
+  it("a save cleared elsewhere says so and offers Start over instead of loading", async () => {
+    const { ApiError } = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
+    const cleared = "Your saved work was cleared: the business was created, or the wizard was started over, in another tab or window.";
+    m.saveTaxonomyWizard.mockRejectedValueOnce(
+      new ApiError(409, "Conflict", { detail: { error: "stale_revision", revision: 0, message: cleared } }),
+    );
+    await renderWizard();
+    await draftToStep2(treeDone);
+    const notice = await screen.findByTestId("taxonomy-save-conflict", {}, { timeout: 3000 });
+    expect(notice.textContent).toContain(cleared);
+    expect(screen.queryByRole("button", { name: "Load the newer save" })).toBeNull();
+    m.getSavedTaxonomyWizard.mockResolvedValueOnce({ data: { saved: null } });
+    fireEvent.click(within(notice).getByRole("button", { name: "Start over" }));
+    expect((await screen.findByLabelText(/company name/i) as HTMLInputElement).value).toBe("");
+  });
+
+  it("Draft again with a domain name blanked seeds the last tree that had no problems", async () => {
+    await renderWizard();
+    await draftToStep2(treeDone);
+    fireEvent.click(screen.getByTestId("domain-card-0"));
+    fireEvent.change(within(screen.getByTestId("domain-dialog")).getByLabelText("Domain name"), { target: { value: " " } });
+    fireEvent.click(within(screen.getByTestId("domain-dialog")).getByRole("button", { name: "Done" }));
+    m.hook.current = { draft: undefined, error: null, lost: true };
+    fireEvent.change(screen.getByPlaceholderText("New domain"), { target: { value: "x" } }); // re-render with the lost poll
+    fireEvent.click(await screen.findByRole("button", { name: /draft again/i }));
+    await waitFor(() => expect(m.createTaxonomyDraft).toHaveBeenCalledTimes(2));
+    expect(m.createTaxonomyDraft.mock.calls[1][0].seed_tree.domains.map((d: any) => d.name)).toEqual(["Customer & Premise"]);
   });
 });

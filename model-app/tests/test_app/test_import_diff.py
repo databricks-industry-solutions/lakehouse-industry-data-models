@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 from sqlmodel import Session
 
-from vibe_modeling.backend.db_models import Business
+from vibe_modeling.backend.db_models import Business, Industry
 
 
 def _mock_download(mock_ws, content: str):
@@ -65,6 +65,46 @@ def _seed_target_business(engine, name: str, industry_alignment: str) -> str:
 
 
 class TestAnalyzeDiff:
+    def test_a_slug_alignment_matches_the_stored_catalog_name(
+        self, client_with_agent, mock_ws, engine,
+    ):
+        """create-by-import stores "Energy - Utilities" for the agent's
+        "energy-utilities"; a later per-business import is not a mismatch."""
+        with Session(engine) as s:
+            ind = Industry(name="Energy - Utilities", short_name="utilities")
+            s.add(ind)
+            s.flush()
+            b = Business(name="Gaming", industry_alignment="Energy - Utilities", industry_id=ind.id)
+            s.add(b)
+            s.commit()
+            biz_id = b.id
+        _mock_download(mock_ws, json.dumps(_payload(industry="energy-utilities")))
+        r = client_with_agent.post(
+            f"/api/businesses/{biz_id}/import/analyze",
+            json={"volume_path": "/Volumes/a/b/c.json"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["business_digest_diff"]["mismatch_fields"] == []
+
+    def test_an_alignment_resolving_to_the_business_industry_matches(
+        self, client_with_agent, mock_ws, engine,
+    ):
+        with Session(engine) as s:
+            ind = Industry(name="Energy - Utilities", short_name="utilities")
+            s.add(ind)
+            s.flush()
+            b = Business(name="Gaming", industry_alignment="Energy - Utilities", industry_id=ind.id)
+            s.add(b)
+            s.commit()
+            biz_id = b.id
+        _mock_download(mock_ws, json.dumps(_payload(industry="UTILITIES")))
+        r = client_with_agent.post(
+            f"/api/businesses/{biz_id}/import/analyze",
+            json={"volume_path": "/Volumes/a/b/c.json"},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["business_digest_diff"]["mismatch_fields"] == []
+
     def test_analyze_surfaces_mismatch_when_business_name_differs(
         self, client_with_agent, mock_ws, engine,
     ):

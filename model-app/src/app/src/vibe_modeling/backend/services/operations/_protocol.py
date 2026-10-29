@@ -90,6 +90,11 @@ class OperationDispatchHandle:
     reconstructable."""
 
 
+# ``rollback_state`` key for the warnings a succeeded op reports: texts, or
+# ``{"message", "sql"}`` for a warning with a statement an admin can run.
+RUN_WARNINGS_KEY = "run_warnings"
+
+
 @dataclass(frozen=True, slots=True)
 class OperationResult:
     """What an operation tells the orchestrator on terminal completion."""
@@ -107,7 +112,10 @@ class OperationResult:
 
     rollback_state: dict
     """Opaque blob the op's :meth:`Operation.rollback` can use to undo this
-    invocation. Persisted as JSON on the ``RunOperation`` row."""
+    invocation. Persisted as JSON on the ``RunOperation`` row. A succeeded
+    op that finished with something the user should know sets
+    :data:`RUN_WARNINGS_KEY` to a list of texts; the run page shows them
+    (``RunOut.warnings``)."""
 
     error: Optional[str]
     """Populated when ``succeeded=False``; ``None`` otherwise."""
@@ -141,8 +149,9 @@ class Operation(ABC):
     Implementations live under ``services/operations/{name}.py`` (Phase 2)
     and are registered at startup via :func:`._registry.register`.
 
-    Subclasses MUST set the four class attributes below and implement
-    :meth:`dispatch`, :meth:`observe`, and :meth:`rollback`.
+    Subclasses MUST set the four required class attributes below and
+    implement :meth:`dispatch`, :meth:`observe`, and :meth:`rollback`;
+    ``rollback_is_noop`` defaults to False.
     """
 
     name: str
@@ -160,6 +169,11 @@ class Operation(ABC):
     produces_version: bool
     """If ``True``, the orchestrator expects ``output_version_id`` to be
     populated on success."""
+
+    rollback_is_noop: bool = False
+    """``True`` when :meth:`rollback` undoes nothing (the op's effect stands,
+    e.g. an uninstall): a rolled-back run then keeps the step
+    ``succeeded``, because ``rolled_back`` would be untrue."""
 
     @abstractmethod
     def dispatch(

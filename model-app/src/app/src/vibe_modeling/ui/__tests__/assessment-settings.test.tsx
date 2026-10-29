@@ -10,13 +10,18 @@ const { putAssessConfig, state } = vi.hoisted(() => ({
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
-    ApiError: actual.ApiError,
+    ...actual,
     useGetAssessConfigSuspense: () => ({ data: state.config }),
     putAssessConfig,
     getAssessConfigKey: () => ["/api/assess/config"],
   };
 });
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ children, to, search, ...rest }: any) => (
+    <a href={`${to}${search?.tab ? `?tab=${search.tab}` : ""}`} {...rest}>{children}</a>
+  ),
+}));
 
 import { ApiError } from "@/lib/api";
 import { ASSESS_MODEL, ASSESS_MODEL_SERVICE } from "@/lib/assessment";
@@ -156,14 +161,14 @@ describe("AssessSettings status", () => {
   it("shows ready status details", () => {
     state.config = { ...unconfigured, ready: true, missing: [], reader_application_id: "app-1", job_id: 42, workspace_path: "/Workspace/x" };
     renderIt();
-    expect(screen.getByText("Ready")).toBeInTheDocument();
+    expect(screen.queryByTestId("assess-missing")).toBeNull();
     expect(screen.getByText("42")).toBeInTheDocument();
     expect(screen.getByText(/4c709f7/)).toBeInTheDocument();
   });
 
-  it("shows Not ready while the setup is incomplete", () => {
+  it("lists what is missing while the setup is incomplete", () => {
     renderIt();
-    expect(screen.getByText("Not ready")).toBeInTheDocument();
+    expect(screen.getByTestId("assess-missing")).toHaveTextContent("No reader service principal");
   });
 });
 
@@ -187,18 +192,74 @@ describe("AssessSettings save", () => {
     expect(screen.queryByTestId("assess-save-error")).toBeNull();
   });
 
-  it("shows a 422 refusal in the SaveErrorBox, with no admin-help block", async () => {
-    putAssessConfig.mockRejectedValue(new ApiError(422, "Unprocessable", { detail: "Reader service principal not found" }));
+  it.each([
+    ["reader_application_id", /reader application id/i],
+    ["warehouse_id", /sql warehouse id/i],
+  ])("a 400 setting_refused for %s highlights and focuses that field, with its message under it", async (key, label) => {
+    putAssessConfig.mockRejectedValue(new ApiError(400, "Bad Request", {
+      detail: { error: "setting_refused", key, message: "Not found in this workspace" },
+    }));
     renderIt();
     typeReaderAndSave("bad");
-    expect(await screen.findByTestId("assess-save-error")).toHaveTextContent("Reader service principal not found");
+    const line = await screen.findByTestId(`assess-refused-${key}`);
+    expect(line).toHaveTextContent("Not found in this workspace");
+    expect(line.getAttribute("data-tone")).toBe("error");
+    const field = screen.getByLabelText(label);
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(field.getAttribute("aria-describedby")).toBe(line.id);
+    expect(field.className).toContain("border-destructive");
+    await waitFor(() => expect(document.activeElement).toBe(field));
+    expect(screen.queryByTestId("assess-save-error")).toBeNull();
     expect(screen.queryByTestId("assess-save-admin-help")).toBeNull();
   });
 
-  it("shows a 502 sync failure as SaveErrorBox plus the copyable admin-help block", async () => {
+  it("editing a refused field clears its error at once", async () => {
+    putAssessConfig.mockRejectedValue(new ApiError(400, "Bad Request", {
+      detail: { error: "setting_refused", key: "reader_application_id", message: "Not found in this workspace" },
+    }));
+    renderIt();
+    typeReaderAndSave("bad");
+    await screen.findByTestId("assess-refused-reader_application_id");
+    const field = screen.getByLabelText(/reader application id/i);
+    fireEvent.change(field, { target: { value: "good-id" } });
+    expect((field as HTMLInputElement).value).toBe("good-id");
+    expect(screen.queryByTestId("assess-refused-reader_application_id")).toBeNull();
+    expect(field).not.toHaveAttribute("aria-invalid");
+    expect(field.className).not.toContain("border-destructive");
+  });
+
+  it("editing another field keeps the refused field's error", async () => {
+    putAssessConfig.mockRejectedValue(new ApiError(400, "Bad Request", {
+      detail: { error: "setting_refused", key: "warehouse_id", message: "No such warehouse" },
+    }));
+    renderIt();
+    typeReaderAndSave("app-1");
+    await screen.findByTestId("assess-refused-warehouse_id");
+    fireEvent.change(screen.getByLabelText(/reader application id/i), { target: { value: "app-2" } });
+    expect(screen.getByTestId("assess-refused-warehouse_id")).toBeInTheDocument();
+  });
+
+  it("a 422 config_missing shows its message with the Settings link, no field highlighted", async () => {
+    putAssessConfig.mockRejectedValue(new ApiError(422, "Unprocessable Entity", {
+      detail: {
+        error: "config_missing",
+        missing: [{ key: "metamodel_catalog", label: "Metamodel catalog", settings_url: "/settings?tab=platform" }],
+        message: "Missing required configuration: Metamodel catalog. Configure it in Settings, then retry.",
+      },
+    }));
+    renderIt();
+    typeReaderAndSave();
+    const notice = within(await screen.findByTestId("assess-save-config-missing"));
+    expect(notice.getByText(/Missing required configuration: Metamodel catalog/)).toBeInTheDocument();
+    expect(notice.getByRole("link", { name: "Configure" })).toHaveAttribute("href", "/settings?tab=platform");
+    expect(screen.getByLabelText(/reader application id/i)).not.toHaveAttribute("aria-invalid");
+    expect(screen.queryByTestId("assess-save-error")).toBeNull();
+  });
+
+  it("shows a 409 sync failure as SaveErrorBox plus the copyable admin-help block", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    putAssessConfig.mockRejectedValue(new ApiError(502, "Bad Gateway", {
+    putAssessConfig.mockRejectedValue(new ApiError(409, "Conflict", {
       detail: { error: "admin_help", message: "The assessment job sync failed: PermissionDenied", job_url: "https://ws/jobs/42" },
     }));
     renderIt();
@@ -219,12 +280,15 @@ describe("AssessSettings save", () => {
   });
 
   it("clears an earlier error on the next successful save", async () => {
-    putAssessConfig.mockRejectedValueOnce(new ApiError(422, "Unprocessable", { detail: "nope" }));
+    putAssessConfig.mockRejectedValueOnce(new ApiError(400, "Bad Request", {
+      detail: { error: "setting_refused", key: "reader_application_id", message: "nope" },
+    }));
     putAssessConfig.mockResolvedValueOnce({ data: { ...unconfigured } });
     renderIt();
     typeReaderAndSave();
-    expect(await screen.findByTestId("assess-save-error")).toBeInTheDocument();
+    expect(await screen.findByTestId("assess-refused-reader_application_id")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
-    await waitFor(() => expect(screen.queryByTestId("assess-save-error")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("assess-refused-reader_application_id")).toBeNull());
+    expect(screen.getByLabelText(/reader application id/i)).not.toHaveAttribute("aria-invalid");
   });
 });

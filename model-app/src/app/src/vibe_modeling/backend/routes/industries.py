@@ -10,6 +10,7 @@ from sqlmodel import func, select
 from ..._metadata import api_prefix
 from ..core import Dependencies
 from ..db_models import Business, Industry
+from ..industry_resolve import industry_ambiguous_detail, industry_candidates
 from ..models import IndustryIn, IndustryOut
 
 router = APIRouter(prefix=api_prefix)
@@ -37,7 +38,21 @@ def create_industry(
     session: Dependencies.Session,
     _role: Dependencies.BusinessAdminOnly,
 ):
-    """Create a new industry."""
+    """Create a new industry. An active industry whose ``name`` or
+    ``short_name`` slug equals an active one's is refused (409): the
+    resolver could match neither."""
+    if data.is_active:
+        taken = {
+            i.id: i
+            for text in (data.name, data.short_name)
+            for i in industry_candidates(session, text)
+        }
+        if taken:
+            detail = industry_ambiguous_detail(data.name, taken.values())
+            names = ", ".join(f"'{i['name']}'" for i in detail["industries"])
+            detail["error"] = "industry_slug_taken"
+            detail["message"] = f"An active industry already has this name or short name: {names}."
+            raise HTTPException(status_code=409, detail=detail)
     industry = Industry(
         name=data.name,
         short_name=data.short_name,

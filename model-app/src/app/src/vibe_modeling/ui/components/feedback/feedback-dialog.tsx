@@ -4,7 +4,6 @@ import { X } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import { PrioritySelect } from "@/components/vibe-inputs/priority-select";
 import {
   createVibeInput,
@@ -13,7 +12,10 @@ import {
   VibeInputPriority,
   type FeedbackContext,
 } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-error";
 import { cn } from "@/lib/utils";
+import { describeFeedbackContext } from "./feedback-context";
+import { useFeedbackDraft } from "./feedback-draft";
 
 interface FeedbackDialogProps {
   open: boolean;
@@ -21,27 +23,6 @@ interface FeedbackDialogProps {
   businessId: string;
   versionId?: string;
   context: FeedbackContext;
-}
-
-/**
- * Render a foreign-key edge id in human-readable form.
- *
- * The diagram layer uses ids in the shape
- *   `fk:<src_domain>.<src_product>.<src_col>><tgt_domain>.<tgt_product>.<tgt_col>`
- * which packs six fields into one string. Users composing feedback don't
- * benefit from seeing that raw form — they want to see "which tables and
- * which columns is this relationship about". This helper parses the id
- * and produces `<src_domain>.<src_product>.<src_col> → <tgt_domain>.<tgt_product>.<tgt_col>`;
- * if the id doesn't parse it falls back to the raw string so we never
- * silently drop information.
- */
-function formatEdgeLabel(edgeId: string): string {
-  const stripped = edgeId.startsWith("fk:") ? edgeId.slice(3) : edgeId;
-  const arrowIdx = stripped.indexOf(">");
-  if (arrowIdx === -1) return edgeId;
-  const src = stripped.slice(0, arrowIdx);
-  const tgt = stripped.slice(arrowIdx + 1);
-  return `${src} → ${tgt}`;
 }
 
 /**
@@ -58,8 +39,16 @@ export function FeedbackDialog({
   versionId,
   context,
 }: FeedbackDialogProps) {
-  const [text, setText] = useState("");
-  const [priority, setPriority] = useState<VibeInputPriority>(VibeInputPriority.medium);
+  // Text and priority live in the draft store, so they survive a remount.
+  const [draft, updateDraft, clearDraft] = useFeedbackDraft(businessId, versionId);
+  // Cancel, the X and Escape discard the draft; only a tab switch keeps it.
+  const discard = useCallback(() => {
+    clearDraft();
+    onOpenChange(false);
+  }, [clearDraft, onOpenChange]);
+  const { text, priority } = draft;
+  const setText = (next: string) => updateDraft({ text: next });
+  const setPriority = (next: VibeInputPriority) => updateDraft({ priority: next });
   const [error, setError] = useState<string | null>(null);
   const [position, setPosition] = useState({ x: 24, y: 80 });
   const dragRef = useRef<{ startX: number; startY: number; startPos: { x: number; y: number } } | null>(null);
@@ -98,26 +87,29 @@ export function FeedbackDialog({
       ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: listVibeInputsKey({ business_id: businessId }) });
-      setText("");
+      clearDraft();
       setError(null);
       onOpenChange(false);
     },
     onError: (err: unknown) => {
-      setError(err instanceof Error ? err.message : "Failed to save feedback");
+      setError(apiErrorMessage(err, "Failed to save feedback"));
     },
   });
 
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
+      // A nested Radix layer (the Priority select, the Cmd-K search) that
+      // closed itself on this Escape marks it handled; the draft stays.
+      if (e.defaultPrevented) return;
       if (e.key === "Escape") {
         e.preventDefault();
-        onOpenChange(false);
+        discard();
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onOpenChange]);
+  }, [open, discard]);
 
   // Reset position when reopened
   useEffect(() => {
@@ -154,16 +146,6 @@ export function FeedbackDialog({
 
   if (!open) return null;
 
-  const contextBadges: { key: string; label: string }[] = [];
-  if (context.view_mode) contextBadges.push({ key: "view", label: context.view_mode });
-  if (context.domain_filter) contextBadges.push({ key: "domain", label: context.domain_filter });
-  if (context.selected_node_id) {
-    contextBadges.push({ key: "table", label: context.selected_node_id });
-  }
-  if (context.selected_edge_id) {
-    contextBadges.push({ key: "relationship", label: formatEdgeLabel(context.selected_edge_id) });
-  }
-
   const panel = (
     <div
       className="fixed z-50 w-[440px] rounded-md border border-border bg-background shadow-md"
@@ -178,7 +160,7 @@ export function FeedbackDialog({
         <h2 className="text-sm font-semibold">Add feedback</h2>
         <button
           type="button"
-          onClick={() => onOpenChange(false)}
+          onClick={discard}
           className="rounded-sm p-1 hover:bg-muted transition-colors"
           aria-label="Close"
         >
@@ -187,15 +169,9 @@ export function FeedbackDialog({
       </div>
 
       <div className="p-4 space-y-3">
-        {contextBadges.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {contextBadges.map((b) => (
-              <Badge key={b.key} variant="secondary" className="text-[10px]">
-                {b.key}: {b.label}
-              </Badge>
-            ))}
-          </div>
-        )}
+        <p className="text-xs text-muted-foreground break-words" data-testid="feedback-about">
+          About: <span className="font-medium text-foreground">{describeFeedbackContext(context)}</span>
+        </p>
 
         <Textarea
           value={text}
@@ -225,7 +201,7 @@ export function FeedbackDialog({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => onOpenChange(false)}
+            onClick={discard}
             disabled={mutation.isPending}
           >
             Cancel

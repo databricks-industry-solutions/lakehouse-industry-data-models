@@ -1,39 +1,40 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, type ReactNode } from "react";
 import { MessageSquarePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { cn } from "@/lib/utils";
 import { FeedbackDialog } from "./feedback-dialog";
+import { useFeedbackDraft } from "./feedback-draft";
 import type { FeedbackContext } from "@/lib/api";
 
 interface AddFeedbackButtonProps {
   businessId: string;
   versionId?: string;
-  /** Function called at click time to snapshot the current view state. */
+  /** Called at click time to snapshot the model element the surface is
+   *  about (build it with `buildFeedbackContext`). */
   getContext: () => FeedbackContext;
   variant?: "default" | "outline" | "ghost";
   size?: "default" | "sm" | "icon";
   /** Optional override for the button label. Defaults to "Add <u>F</u>eedback". */
   label?: ReactNode;
   className?: string;
-  /** Controlled open state. When provided alongside `onOpenChange`, the
-   *  parent owns the dialog and is responsible for snapshotting context
-   *  before opening. Otherwise the button manages state internally. */
-  open?: boolean;
-  onOpenChange?: (next: boolean) => void;
-  /** Optional context override. When provided, takes precedence over the
-   *  internal context state — used by parents that capture context at
-   *  trigger sites outside the button (page-level F shortcut, diagram
-   *  double-click). */
-  context?: FeedbackContext;
+  /** When set, the surface has no model content to give feedback on: the
+   *  button renders disabled with this text as its tooltip, and the F
+   *  shortcut does nothing. */
+  disabledReason?: string;
 }
 
 /**
- * Button that opens a feedback dialog pre-populated with the current view context.
+ * Button that opens a feedback dialog pre-populated with the model element the
+ * surface is about.
  *
  * The context is captured lazily at click time via `getContext` so the button
- * doesn't need to re-render on every selection change in its parent. When
- * the parent supplies `open` + `onOpenChange`, it can also drive the dialog
- * from a keyboard shortcut or another trigger and pass the captured context
- * via the `context` prop.
+ * doesn't need to re-render on every selection change in its parent.
  */
 export function AddFeedbackButton({
   businessId,
@@ -43,38 +44,23 @@ export function AddFeedbackButton({
   size = "sm",
   label,
   className,
-  open: openProp,
-  onOpenChange,
-  context: contextProp,
+  disabledReason,
 }: AddFeedbackButtonProps) {
-  const isControlled = openProp !== undefined && onOpenChange !== undefined;
-  const [internalOpen, setInternalOpen] = useState(false);
-  const [internalContext, setInternalContext] = useState<FeedbackContext>({
-    context_version: 1,
-    view_mode: "",
-  });
+  // Open state and captured context live in the draft store, so a remount
+  // (the button moves between the diagram toolbar and the tab bar) keeps them.
+  const [draft, updateDraft] = useFeedbackDraft(businessId, versionId);
 
-  const open = isControlled ? openProp! : internalOpen;
-  const context = contextProp ?? internalContext;
-
-  const handleOpenChange = (next: boolean) => {
-    if (isControlled) {
-      onOpenChange!(next);
-    } else {
-      setInternalOpen(next);
-    }
-  };
+  const handleOpenChange = useCallback(
+    (next: boolean) => updateDraft({ open: next }),
+    [updateDraft],
+  );
 
   const handleClick = useCallback(() => {
-    if (isControlled) {
-      onOpenChange!(true);
-      return;
-    }
-    setInternalContext(getContext());
-    setInternalOpen(true);
-  }, [isControlled, onOpenChange, getContext]);
+    updateDraft({ context: getContext(), open: true });
+  }, [getContext, updateDraft]);
 
   useEffect(() => {
+    if (disabledReason) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== "f" && e.key !== "F") return;
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
@@ -90,24 +76,47 @@ export function AddFeedbackButton({
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [handleClick]);
+  }, [handleClick, disabledReason]);
 
   const renderedLabel = label ?? (
     <span>Add <u>F</u>eedback</span>
   );
 
+  // Disabled covers the trigger and the F shortcut only: the dialog stays
+  // mounted, so an open draft stays visible on a surface without model
+  // content (the draft itself lives in the draft store).
+  const trigger = disabledReason ? (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className={cn("inline-flex", className)} tabIndex={0} data-testid="add-feedback-disabled">
+            <Button variant={variant} size={size} disabled aria-label="Add feedback">
+              <MessageSquarePlus className="h-4 w-4 mr-1.5" />
+              {renderedLabel}
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>
+          <p className="max-w-xs text-sm">{disabledReason}</p>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  ) : (
+    <Button variant={variant} size={size} onClick={handleClick} className={className}>
+      <MessageSquarePlus className="h-4 w-4 mr-1.5" />
+      {renderedLabel}
+    </Button>
+  );
+
   return (
     <>
-      <Button variant={variant} size={size} onClick={handleClick} className={className}>
-        <MessageSquarePlus className="h-4 w-4 mr-1.5" />
-        {renderedLabel}
-      </Button>
+      {trigger}
       <FeedbackDialog
-        open={open}
+        open={draft.open}
         onOpenChange={handleOpenChange}
         businessId={businessId}
         versionId={versionId}
-        context={context}
+        context={draft.context}
       />
     </>
   );

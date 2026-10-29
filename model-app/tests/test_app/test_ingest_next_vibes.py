@@ -150,9 +150,12 @@ class TestIngestContract:
         assert "ingest_next_vibes(" in inspect.getsource(
             industry_download.download_industry_model
         )
+        from vibe_modeling.backend.services import dialog_import
+
+        assert "ingest_next_vibes(" in inspect.getsource(dialog_import.finish_dialog_import)
         for mod in (import_root_route, businesses_route):
-            assert "ingest_next_vibes(" in inspect.getsource(mod), (
-                f"{mod.__name__} must call ingest_next_vibes"
+            assert "finish_dialog_import(" in inspect.getsource(mod), (
+                f"{mod.__name__} must index through finish_dialog_import"
             )
 
     def test_drift_alarm_materialize_referenced(self):

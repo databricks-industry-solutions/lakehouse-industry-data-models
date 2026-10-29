@@ -44,7 +44,7 @@ Degradation (never fabricate):
 ``has_predecessor`` is derived from ``version_trend`` (and a >1-entry history
 as a fallback), NOT from ``progression.previous_version`` — that field is
 unreliable: it labels the output version, and is ``"unknown"`` for many
-real exports (see ``routes/import_root._extract_gfv_tag``).
+real exports (see ``agent_compat.generated_from_version_tag``).
 
 ``has_metadata`` is ``False`` when the envelope carried no
 ``_vibe_session_metadata`` at all (hand-edited / pre-metadata imports). The

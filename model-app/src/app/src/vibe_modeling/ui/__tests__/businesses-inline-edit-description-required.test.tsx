@@ -3,6 +3,7 @@
  * page header) requires a non-empty description before Save enables.
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense } from "react";
@@ -117,6 +118,8 @@ async function openEditDialog() {
 function getSaveButton(): HTMLButtonElement {
   return screen.getByRole("button", { name: /Save|Saving/i }) as HTMLButtonElement;
 }
+
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.runs.index"));
 
 describe("v0.4.0 #6 — Inline edit dialog: description required", () => {
   it("Save disabled when description is cleared; helper visible", async () => {

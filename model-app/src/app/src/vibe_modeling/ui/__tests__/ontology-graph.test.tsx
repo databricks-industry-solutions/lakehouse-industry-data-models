@@ -73,12 +73,12 @@ function stubGraphFetch(opts: {
   );
 }
 
-function renderGraph() {
+function renderGraph(onDomainChange?: (domain: string | null) => void) {
   return render(
     <QueryClientProvider client={makeClient()}>
       <ErrorBoundary fallbackRender={({ error }) => <div role="alert">{String(error)}</div>}>
         <Suspense fallback={<div data-testid="suspense-fallback" />}>
-          <OntologyGraph businessId="biz-1" version="1" scope="ecm" />
+          <OntologyGraph businessId="biz-1" version="1" scope="ecm" onDomainChange={onDomainChange} />
         </Suspense>
       </ErrorBoundary>
     </QueryClientProvider>,
@@ -207,6 +207,180 @@ describe("OntologyGraph", () => {
     );
     expect(matched.length).toBeGreaterThan(0);
     expect(dom.messages).toEqual([]);
+  });
+
+  it("reports the chosen domain for Add-feedback on every layout", async () => {
+    stubGraphFetch({
+      modelSummary: {
+        name: "Test Biz",
+        domain_count: 1,
+        product_count: 1,
+        attribute_count: 3,
+        domains: [{ name: "Sales", product_count: 1 }],
+      },
+      domainDetail: () => ({
+        name: "Sales",
+        products: [
+          { name: "Order", table_name: "orders", type: "Transactional", attribute_count: 3, fk_count: 0, fk_targets: [] },
+        ],
+      }),
+    });
+    const onDomainChange = vi.fn();
+    renderGraph(onDomainChange);
+    await waitFor(() => expect(screen.getByRole("combobox")).toBeInTheDocument());
+    expect(onDomainChange).toHaveBeenLastCalledWith(null);
+
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(await screen.findByRole("option", { name: /Sales/ }));
+    expect(onDomainChange).toHaveBeenLastCalledWith("Sales");
+
+    fireEvent.click(screen.getByRole("button", { name: "Circular" }));
+    expect(onDomainChange).toHaveBeenLastCalledWith("Sales");
+  });
+
+  const TWO_DOMAINS = {
+    modelSummary: {
+      name: "Test Biz",
+      domain_count: 2,
+      product_count: 3,
+      attribute_count: 9,
+      domains: [
+        { name: "Sales", product_count: 2 },
+        { name: "Inventory", product_count: 1 },
+        { name: "Legacy", product_count: 0, change_status: "deleted" },
+      ],
+    },
+    domainDetail: (name: string) =>
+      name === "Sales"
+        ? {
+            name: "Sales",
+            products: [
+              // One cross-domain FK: Sales.orders -> Inventory.products.
+              { name: "Order", table_name: "orders", attribute_count: 3, fk_count: 1, fk_targets: ["Inventory.products"] },
+              { name: "Customer", table_name: "customers", attribute_count: 3, fk_count: 0, fk_targets: [] },
+            ],
+          }
+        : {
+            name: "Inventory",
+            products: [
+              { name: "Product", table_name: "products", attribute_count: 3, fk_count: 0, fk_targets: [] },
+            ],
+          },
+  };
+
+  it("lists the model's live domains, in model order, in the dropdown", async () => {
+    stubGraphFetch(TWO_DOMAINS);
+    renderGraph();
+    fireEvent.click(await screen.findByRole("combobox"));
+    const names = (await screen.findAllByRole("option")).map((o) => o.textContent);
+    expect(names).toEqual(["All domains", "Sales", "Inventory"]);
+  });
+
+  // Inventory chosen, cross-domain edges shown: the node layouts also draw
+  // Sales.orders (the far end of Inventory's FK), never the unconnected
+  // Sales.customers; the Sunburst shows Inventory's own tables. Center labels
+  // count the chosen domain only, never the far-end domains.
+  it.each([
+    ["Clustered", [], true],
+    ["Circular", ["1 tables"], true],
+    ["Concentric", ["1 domains, 1 tables"], true],
+    ["Sunburst", ["1 domains", "1 tables"], false],
+  ] as const)("the %s layout keeps the dropdown, draws the chosen domain and counts it in the center", async (layout, centerLabels, drawsFarEnd) => {
+    stubGraphFetch(TWO_DOMAINS);
+    const { container } = renderGraph();
+    const box = await screen.findByRole("combobox");
+    // The whole-model counts line shows only while no domain is chosen.
+    expect(screen.queryAllByText(/2 domains, 3 tables/).length).toBeGreaterThan(0);
+    fireEvent.click(box);
+    fireEvent.click(await screen.findByRole("option", { name: /Inventory/ }));
+    fireEvent.click(screen.getByRole("button", { name: layout }));
+    expect(screen.getByRole("combobox")).toHaveTextContent("Inventory");
+    expect(screen.queryAllByText(/2 domains, 3 tables/)).toHaveLength(0);
+    const texts = Array.from(container.querySelectorAll("text, title")).map((t) => (t.textContent ?? "").trim());
+    expect(texts.some((t) => /products/.test(t))).toBe(true);
+    expect(texts.some((t) => /customers/.test(t))).toBe(false);
+    expect(texts.some((t) => /orders/.test(t))).toBe(drawsFarEnd);
+    for (const label of centerLabels) expect(texts).toContain(label);
+    expect(texts.some((t) => /^[2-9]\d* domains/.test(t))).toBe(false);
+  });
+
+  it("in host mode, a new domainFilter re-scopes the graph and onDomainChange follows it", async () => {
+    stubGraphFetch(TWO_DOMAINS);
+    const onDomainChange = vi.fn();
+    const onDomainPick = vi.fn();
+    const client = makeClient();
+    const ui = (domain: string) => (
+      <QueryClientProvider client={client}>
+        <Suspense fallback={<div data-testid="suspense-fallback" />}>
+          <OntologyGraph
+            businessId="biz-1"
+            version="1"
+            scope="ecm"
+            domainFilter={domain}
+            onDomainChange={onDomainChange}
+            onDomainPick={onDomainPick}
+          />
+        </Suspense>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui("Sales"));
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent("Sales"));
+    expect(onDomainChange).toHaveBeenLastCalledWith("Sales");
+    rerender(ui("Inventory"));
+    await waitFor(() => expect(screen.getByRole("combobox")).toHaveTextContent("Inventory"));
+    expect(onDomainChange).toHaveBeenLastCalledWith("Inventory");
+    fireEvent.click(screen.getByRole("button", { name: "Sunburst" }));
+    expect(onDomainChange).toHaveBeenLastCalledWith("Inventory");
+  });
+
+  it("with onDomainPick, the dropdown shows domainFilter and a pick calls the host instead of filtering", async () => {
+    stubGraphFetch({
+      modelSummary: {
+        name: "Test Biz",
+        domain_count: 2,
+        product_count: 2,
+        attribute_count: 6,
+        domains: [
+          { name: "Sales", product_count: 1 },
+          { name: "Inventory", product_count: 1 },
+        ],
+      },
+      domainDetail: (name) => ({
+        name,
+        products: [
+          { name: `${name}Item`, table_name: `${name.toLowerCase()}_items`, attribute_count: 3, fk_count: 0, fk_targets: [] },
+        ],
+      }),
+    });
+    const onDomainPick = vi.fn();
+    const onDomainChange = vi.fn();
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <Suspense fallback={<div data-testid="suspense-fallback" />}>
+          <OntologyGraph
+            businessId="biz-1"
+            version="1"
+            scope="ecm"
+            domainFilter="Sales"
+            onDomainChange={onDomainChange}
+            onDomainPick={onDomainPick}
+          />
+        </Suspense>
+      </QueryClientProvider>,
+    );
+    const box = await screen.findByRole("combobox");
+    expect(box).toHaveTextContent("Sales");
+    expect(onDomainChange).toHaveBeenLastCalledWith("Sales");
+
+    fireEvent.click(box);
+    fireEvent.click(await screen.findByRole("option", { name: /Inventory/ }));
+    expect(onDomainPick).toHaveBeenLastCalledWith("Inventory");
+    // The host owns the value: nothing changes until it re-renders with a new domainFilter.
+    expect(screen.getByRole("combobox")).toHaveTextContent("Sales");
+
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(await screen.findByRole("option", { name: "All domains" }));
+    expect(onDomainPick).toHaveBeenLastCalledWith(null);
   });
 
   it("colors intra-domain edges with the unified light-slate stroke", async () => {

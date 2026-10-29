@@ -1,7 +1,8 @@
 """Tests for _roles.py — RBAC role resolution from workspace groups."""
 
-import sys
 import os
+import subprocess
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "app", "src"))
 
@@ -18,6 +19,8 @@ from vibe_modeling.backend.core._roles import (
     require_admin,
     require_business_admin,
     require_modeler,
+    require_modeler_declared,
+    require_viewer_declared,
 )
 
 
@@ -113,6 +116,19 @@ class TestResolveUserRole:
         with patch.object(_roles_mod, "RBAC_ENABLED", False):
             assert resolve_user_role(request, headers) == UserRole.APP_ADMIN
 
+    def test_rbac_env_var_is_ignored(self):
+        """Roles stay off even when VIBE_MODELING_RBAC_ENABLED is set true (fresh interpreter, real import)."""
+        src = os.path.join(os.path.dirname(__file__), "..", "..", "src", "app", "src")
+        probe = (
+            "from unittest.mock import MagicMock\n"
+            "import vibe_modeling.backend.core._roles as r\n"
+            "h = MagicMock(user_email='anyone@example.com', user_name='Anyone')\n"
+            "print(r.RBAC_ENABLED, r.resolve_user_role(MagicMock(), h).value)\n"
+        )
+        env = {**os.environ, "VIBE_MODELING_RBAC_ENABLED": "true", "PYTHONPATH": src}
+        out = subprocess.run([sys.executable, "-c", probe], env=env, capture_output=True, text=True, check=True)
+        assert out.stdout.split() == ["False", UserRole.APP_ADMIN.value]
+
     @patch.object(_roles_mod, "RBAC_ENABLED", True)
     def test_no_user_name_returns_app_admin(self):
         request, _ = self._make_request()
@@ -178,3 +194,37 @@ class TestPermissionGuards:
         with pytest.raises(HTTPException) as ei:
             require_modeler(UserRole.VIEWER)
         assert ei.value.status_code == 403
+
+
+class TestDeclaredGuards:
+    """Declared guards pass everyone until VIBE_INPUT_ROLE_GUARDS_ENFORCED is True."""
+
+    def test_modeler_declared_passes_viewer_and_logs_while_unenforced(self, caplog):
+        with patch.object(_roles_mod, "VIBE_INPUT_ROLE_GUARDS_ENFORCED", False):
+            with caplog.at_level("DEBUG", logger=_roles_mod.__name__):
+                assert require_modeler_declared(UserRole.VIEWER) == UserRole.VIEWER
+        assert "would refuse role viewer (needs modeler)" in caplog.text
+
+    def test_modeler_declared_matches_require_modeler_when_enforced(self):
+        with patch.object(_roles_mod, "VIBE_INPUT_ROLE_GUARDS_ENFORCED", True):
+            for role in (UserRole.APP_ADMIN, UserRole.BUSINESS_ADMIN, UserRole.MODELER):
+                assert require_modeler_declared(role) == role
+            with pytest.raises(HTTPException) as ei:
+                require_modeler_declared(UserRole.VIEWER)
+        assert ei.value.status_code == 403
+        assert ei.value.detail == "Modeler access required"
+
+    def test_viewer_declared_passes_every_role_when_enforced(self):
+        with patch.object(_roles_mod, "VIBE_INPUT_ROLE_GUARDS_ENFORCED", True):
+            for role in UserRole:
+                assert require_viewer_declared(role) == role
+
+    def test_vibe_input_guards_are_not_enforced_in_this_release(self):
+        """Turning enforcement on is a deliberate, reviewed change: update this
+        test, INSTALL.md and docs/conventions.md with it."""
+        assert _roles_mod.VIBE_INPUT_ROLE_GUARDS_ENFORCED is False
+
+    def test_declared_guards_carry_their_role(self):
+        assert require_modeler_declared.declared_min_role == UserRole.MODELER
+        assert require_viewer_declared.declared_min_role == UserRole.VIEWER
+        assert _roles_mod.declared_role(UserRole.BUSINESS_ADMIN).declared_min_role == UserRole.BUSINESS_ADMIN

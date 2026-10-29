@@ -2,8 +2,15 @@ import { Link } from "@tanstack/react-router";
 import { ClipboardCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAssessReady } from "@/lib/assessment";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
-const NOT_INSTALLED_HINT = "Install this version into a catalog to assess it";
+const NOT_INSTALLED_HINT =
+  "This version isn't installed yet. Install it into a catalog first; Assess reads the installed tables.";
 
 /**
  * Entry point into the assessment wizard from a model version / domain page.
@@ -26,12 +33,21 @@ export function AssessButton({
   if (!ready) return null;
   if (!installed) {
     return (
-      <span title={NOT_INSTALLED_HINT} className="inline-flex">
-        <Button variant="outline" size="sm" disabled>
-          <ClipboardCheck className="mr-1.5 h-4 w-4" />
-          Assess
-        </Button>
-      </span>
+      <TooltipProvider delayDuration={200}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex" tabIndex={0}>
+              <Button variant="outline" size="sm" disabled>
+                <ClipboardCheck className="mr-1.5 h-4 w-4" />
+                Assess
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p className="max-w-xs text-sm">{NOT_INSTALLED_HINT}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     );
   }
   return (

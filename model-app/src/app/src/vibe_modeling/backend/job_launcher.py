@@ -3,6 +3,7 @@
 import io
 import json
 import logging
+import unicodedata
 import uuid
 from typing import Any, Optional
 
@@ -10,10 +11,20 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import NotFound
 from databricks.sdk.service.jobs import JobSettings, NotebookTask, Task
 
+from .core._intents import AGENT_OP_GENERATE_SAMPLES, AGENT_OP_INSTALL, AGENT_OP_UNINSTALL
+from .. import __version__
+from .core._headers import databricks_app_name
 from .core._ids import session_id_to_bigint
-from .core._names import agent_business_segment, sanitize_tag
-from .core._widgets import build_widget_map
+from .core._job_tags import (
+    IDENTITY_TAG_KEYS,
+    LAUNCHER_SOURCE_APP,
+    TAG_LAUNCHER_SOURCE,
+    app_identity_tags,
+)
+from .core._names import agent_business_segment, normalize_scope, sanitize_tag
+from .core._widgets import build_widget_map, empty_catalog_message, is_model_producing
 from .db_models import AgentConfig, Business
+from .error_sanitization import sanitize_error_message
 from .progress_schema import ensure_progress_schema
 
 logger = logging.getLogger(__name__)
@@ -48,7 +59,6 @@ _WIDGET_UI_LABELS: dict[str, str] = {
     "classification_levels": "Classification levels",
     "org_divisions": "Organization divisions",
     "context_file": "Business context file path",
-    "model_folder": "Model folder",
     "schema_prefix": "Schema prefix",
     "schema_suffix": "Schema suffix",
     "tag_prefix": "Tag prefix",
@@ -70,7 +80,9 @@ _WIDGET_UI_LABELS: dict[str, str] = {
     "business_name": "Business name",
     "housekeeping_columns": "Housekeeping columns",
     "history_tracking_columns": "History tracking columns",
-    "generate_samples": "Generate samples",
+    "vibe_scope": "Vibe scope",
+    "run_type": "Run type",
+    "runtime_budget_seconds": "Runtime budget",
 }
 
 
@@ -117,24 +129,12 @@ def generate_session_id() -> str:
     return str(uuid.uuid4())
 
 
-# Operations that produce model artifacts via VibeWriter
-MODEL_PRODUCING_OPS = frozenset({
-    "new base model",
-    "vibe modeling of version",
-    "shrink ecm",
-    "enlarge mvm",
-})
-
 # Lifecycle operations — no VibeWriter, Jobs API polling only
 LIFECYCLE_OPS = frozenset({
-    "install model",
-    "uninstall model version",
-    "generate sample data",
+    AGENT_OP_INSTALL,
+    AGENT_OP_UNINSTALL,
+    AGENT_OP_GENERATE_SAMPLES,
 })
-
-
-def is_model_producing(operation: str) -> bool:
-    return operation in MODEL_PRODUCING_OPS
 
 
 # Agent ``data_model_scopes`` widget labels keyed by the short scope
@@ -160,14 +160,14 @@ def map_run_params_to_widgets(
     business: Business,
     catalog: str,
     session_id: str,
+    *,
+    runtime_budget_seconds: int,
     vibe_instructions: str = "",
     model_size: str = "small model",
     data_model_scopes: str = "",
-    generate_samples: bool = False,
     business_context_path: str = "",
     business_description_override: str = "",
     model_version: str = "",
-    model_folder: str = "",
     # Convention overrides (sensible defaults; exposed in UI later)
     naming_convention: str = "snake_case",
     primary_key_suffix: str = "_id",
@@ -187,6 +187,8 @@ def map_run_params_to_widgets(
     classification_levels: str = "",
     housekeeping_columns: str = "No",
     history_tracking_columns: str = "No",
+    vibe_scope: str = "All Domains",
+    run_type: str = "Full Run",
 ) -> dict[str, str]:
     """Map app run parameters to monolith notebook widget values.
 
@@ -198,6 +200,9 @@ def map_run_params_to_widgets(
     ``data_model_scopes`` overrides the model_size-derived label when the
     caller already knows the scope (a vibe-iterate must run in the PARENT
     version's scope, which model_size cannot re-choose).
+
+    ``runtime_budget_seconds`` is required: the caller passes the run's budget
+    (see ``backend/runtime_budget.py``).
     """
     scope_map = {
         "small model": "Minimum Viable Model - MVM",
@@ -211,11 +216,11 @@ def map_run_params_to_widgets(
         business=business,
         catalog=catalog,
         session_id=session_id,
+        runtime_budget_seconds=runtime_budget_seconds,
         vibe_instructions=vibe_instructions,
         business_context_path=business_context_path,
         business_description_override=business_description_override,
         model_version=model_version,
-        model_folder=model_folder,
         naming_convention=naming_convention,
         primary_key_suffix=primary_key_suffix,
         schema_prefix=schema_prefix,
@@ -234,8 +239,18 @@ def map_run_params_to_widgets(
         classification_levels=classification_levels,
         housekeeping_columns=housekeeping_columns,
         history_tracking_columns=history_tracking_columns,
-        generate_samples=generate_samples,
+        vibe_scope=vibe_scope,
+        run_type=run_type,
     )
+
+
+def app_job_tags() -> dict[str, str]:
+    """The app identity tags every job the app creates carries, always on.
+
+    ``managed_by``, the deployed App's name (``DATABRICKS_APP_NAME``; left out
+    outside the Apps runtime) and the app version (``vibe_modeling.__version__``).
+    """
+    return app_identity_tags(databricks_app_name(), __version__)
 
 
 def build_job_tags(
@@ -249,8 +264,13 @@ def build_job_tags(
 ) -> dict[str, str]:
     """Build the job tags applied to the persistent agent job per run.
 
+    ``launch_run`` replaces the job's whole tag map with this set, so every
+    always-on tag must be here.
+
     Always emitted (operational metadata only):
-        ``managed_by``, ``dbx_vibe_modelling_launcher_source``,
+        the app identity tags (:func:`app_job_tags`: ``managed_by``,
+        ``dbx_vibe_modelling_app``, ``dbx_vibe_modelling_app_version``),
+        ``dbx_vibe_modelling_launcher_source``,
         ``dbx_vibe_modelling_model``, ``dbx_vibe_modelling_operation``,
         and the six count tags (domains, products, attributes,
         foreign_keys, tags, metrics) which start at ``"0"`` and are
@@ -261,17 +281,17 @@ def build_job_tags(
         ``dbx_vibe_modelling_notebook`` (filename only — the workspace
         folder path is stripped even when opted in).
 
-    Gated by ``AgentConfig.collect_vibe_run_statistics``; default is
-    OFF so existing deployments stop emitting identity tags on upgrade
-    until the operator opts in via Settings.
+    ``collect_statistics`` is Settings -> Agent -> "Annotate jobs with run
+    tags" (``AgentConfig.collect_vibe_run_statistics``, on by default); read it
+    through :func:`job_tags_for_config`.
     """
-    scope_abbr = "mvm" if "MVM" in model_scope or "mvm" in model_scope.lower() else "ecm"
+    scope_abbr = "mvm" if normalize_scope(model_scope) == "mvm" else "ecm"
     model_tag = f"{scope_abbr}_v{version}" if version else scope_abbr
     notebook_filename = notebook_path.rsplit("/", 1)[-1] if notebook_path else ""
 
     tags = {
-        "managed_by": "vibe_modeling_app",
-        "dbx_vibe_modelling_launcher_source": "vibe_modeling_app",
+        **app_job_tags(),
+        TAG_LAUNCHER_SOURCE: LAUNCHER_SOURCE_APP,
         "dbx_vibe_modelling_model": sanitize_tag(model_tag),
         "dbx_vibe_modelling_operation": sanitize_tag(operation),
         "dbx_vibe_modelling_domains": "0",
@@ -282,14 +302,13 @@ def build_job_tags(
         "dbx_vibe_modelling_metrics": "0",
     }
     if collect_statistics:
-        tags["dbx_vibe_modelling_business"] = sanitize_tag(business_name)
-        tags["dbx_vibe_modelling_session_id"] = sanitize_tag(session_id) if session_id else ""
-        tags["dbx_vibe_modelling_notebook"] = sanitize_tag(notebook_filename) if notebook_filename else ""
+        identity = (business_name, session_id, notebook_filename)  # IDENTITY_TAG_KEYS order
+        tags.update(zip(IDENTITY_TAG_KEYS, (sanitize_tag(v) if v else "" for v in identity), strict=True))
     return tags
 
 
-def build_job_tags_from_session(
-    session: Any,
+def job_tags_for_config(
+    cfg: Optional[AgentConfig],
     *,
     business_name: str = "",
     model_scope: str = "",
@@ -297,28 +316,17 @@ def build_job_tags_from_session(
     operation: str = "",
     session_id: str = "",
 ) -> dict[str, str]:
-    """Convenience: load AgentConfig.collect_vibe_run_statistics + notebook_path
-    via a Session and build the tag set in one call.
+    """The run's job tags, with the run-tags setting and notebook path read off ``cfg``.
 
-    Every dispatch site that launches a run already has a Session in scope
-    (they load AgentConfig themselves to get job_id / notebook_path). Using
-    this wrapper keeps the toggle's effect uniform across all entry points
-    instead of relying on each call site to remember the threading.
+    Every dispatch site goes through this (or :func:`build_job_tags_from_session`),
+    so the setting has the same effect on every entry point.
 
-    Tolerant of mock sessions that return MagicMocks (test fixtures often
-    pass ``MagicMock()`` as the session): if the AgentConfig lookup yields
-    anything other than a real row with bool/str fields, fall back to the
-    default-OFF / empty-notebook behaviour. Production sessions always
-    return either ``None`` or a typed ``AgentConfig`` row.
+    Tolerant of test doubles: a ``cfg`` whose fields are not a real bool/str
+    (a ``MagicMock``) reads as setting off and no notebook. ``None`` (no row)
+    is also off; production always has the row (it is created at boot).
     """
-    from sqlmodel import select
-
     collect = False
     notebook_path = ""
-    try:
-        cfg = session.exec(select(AgentConfig).limit(1)).first()
-    except Exception:
-        cfg = None
     if cfg is not None:
         cs = getattr(cfg, "collect_vibe_run_statistics", False)
         if isinstance(cs, bool):
@@ -334,6 +342,36 @@ def build_job_tags_from_session(
         notebook_path=notebook_path,
         session_id=session_id,
         collect_statistics=collect,
+    )
+
+
+def build_job_tags_from_session(
+    session: Any,
+    *,
+    business_name: str = "",
+    model_scope: str = "",
+    version: str = "",
+    operation: str = "",
+    session_id: str = "",
+) -> dict[str, str]:
+    """:func:`job_tags_for_config` for the singleton ``AgentConfig`` loaded through ``session``.
+
+    For dispatch sites that have a Session but not the row. A lookup that
+    raises (a bare ``MagicMock`` session in tests) reads as no row.
+    """
+    from sqlmodel import select
+
+    try:
+        cfg = session.exec(select(AgentConfig).limit(1)).first()
+    except Exception:
+        cfg = None
+    return job_tags_for_config(
+        cfg,
+        business_name=business_name,
+        model_scope=model_scope,
+        version=version,
+        operation=operation,
+        session_id=session_id,
     )
 
 
@@ -375,7 +413,7 @@ def setup_agent_job(ws: WorkspaceClient, agent_config: AgentConfig) -> int:
             notebook_task=NotebookTask(notebook_path=agent_config.notebook_path),
         )
     ]
-    tags = {"managed_by": "vibe_modeling_app"}
+    tags = app_job_tags()
 
     # D-012 blocks concurrent user-launched runs. The app still needs a small
     # budget above 1 to cover two benign overlaps: (a) during unified-pipeline
@@ -485,44 +523,84 @@ def finalize_widgets_or_raise(
        ``WIDGET_PAYLOAD_LIMIT_BYTES``, check whether offloading vibes
        would bring it under. If yes, offload. If no, skip the Volume
        write and fall through to the rejection path.
-    4. After any offload, re-measure. If the total still exceeds the
+    4. Measure the map it would send (with the Volume path when it
+       offloads) before writing anything. If the total still exceeds the
        limit, raise ``WidgetPayloadTooLargeError`` naming the three
-       largest fields (using their UI labels) so the user can act.
+       largest fields (using their UI labels) so the user can act; nothing
+       is written (``plan_widget_payload``).
 
     No catalog or no vibes → no offload (no Volume to write to). In
     that case if the inline total is over the limit we go straight to
     rejection.
     """
+    planned, offload = plan_widget_payload(
+        widgets, catalog=catalog, business_name=business_name,
+        session_id=session_id, raw_vibes=raw_vibes,
+    )
+    if offload:
+        path = write_vibe_instructions_to_volume(ws, catalog, business_name, session_id, raw_vibes)
+        planned = {**planned, "model_vibes": path}
+    return planned
+
+
+def plan_widget_payload(
+    widgets: dict[str, str],
+    *,
+    catalog: str,
+    business_name: str,
+    session_id: str,
+    raw_vibes: str,
+) -> tuple[dict[str, str], bool]:
+    """The widget map ``finalize_widgets_or_raise`` sends and whether it
+    offloads the vibe instructions, without writing anything. Raises
+    ``WidgetPayloadTooLargeError`` when the map is over the limit even after
+    the offload, so a caller can refuse before it prepares the Volume."""
     total = _widget_payload_bytes(widgets)
     can_offload = bool(raw_vibes) and bool(catalog)
-
     must_offload_for_per_value = len(raw_vibes) > VIBE_INSTRUCTIONS_INLINE_LIMIT
-    over_aggregate = total > WIDGET_PAYLOAD_LIMIT_BYTES
-
-    # Estimate post-offload savings: replace inline vibes (their UTF-8
-    # byte count) with the eventual Volume path (~120 chars worst case).
-    # Used to skip a wasted Volume write when offloading wouldn't move
-    # the needle on the aggregate limit.
-    inline_vibes_bytes = len(raw_vibes.encode("utf-8"))
-    estimated_post_offload_total = total - inline_vibes_bytes + 200
+    offloaded = {
+        **widgets,
+        "model_vibes": vibe_instructions_volume_path(catalog, business_name, session_id),
+    }
+    # Offload for the aggregate limit only when it brings the map under it.
     aggregate_offload_would_help = (
-        over_aggregate and estimated_post_offload_total <= WIDGET_PAYLOAD_LIMIT_BYTES
+        total > WIDGET_PAYLOAD_LIMIT_BYTES
+        and _widget_payload_bytes(offloaded) <= WIDGET_PAYLOAD_LIMIT_BYTES
     )
-
-    if can_offload and (must_offload_for_per_value or aggregate_offload_would_help):
-        path = write_vibe_instructions_to_volume(
-            ws, catalog, business_name, session_id, raw_vibes,
-        )
-        widgets = {**widgets, "model_vibes": path}
-        total = _widget_payload_bytes(widgets)
-
+    offload = can_offload and (must_offload_for_per_value or aggregate_offload_would_help)
+    planned = offloaded if offload else widgets
+    total = _widget_payload_bytes(planned)
     if total > WIDGET_PAYLOAD_LIMIT_BYTES:
         raise WidgetPayloadTooLargeError(
             total_bytes=total,
-            top_fields=_top_widget_fields(widgets, n=3),
+            top_fields=_top_widget_fields(planned, n=3),
         )
+    return planned, offload
 
-    return widgets
+
+_WIDGET_ASCII_TRANSLATIONS = str.maketrans({
+    "\u2013": "-",   # en dash
+    "\u2014": "-",   # em dash
+    "\u2212": "-",   # minus sign
+    "\u2018": "'",   # left single quote
+    "\u2019": "'",   # right single quote
+    "\u201c": '"',   # left double quote
+    "\u201d": '"',   # right double quote
+    "\u2026": "...", # horizontal ellipsis
+    "\u00a0": " ",   # non-breaking space
+    "\u2022": "*",   # bullet
+    "\u00b7": "*",   # middle dot
+})
+
+
+def widget_value_to_ascii(value: str) -> str:
+    """The exact ASCII form ``launch_run`` sends for one widget string value
+    (see :func:`_sanitize_widget_params_to_ascii`). Preflight uses it to
+    predict what the agent will receive."""
+    translated = value.translate(_WIDGET_ASCII_TRANSLATIONS)
+    return unicodedata.normalize("NFKD", translated).encode(
+        "ascii", errors="ignore"
+    ).decode("ascii")
 
 
 def _sanitize_widget_params_to_ascii(
@@ -545,32 +623,10 @@ def _sanitize_widget_params_to_ascii(
     fail the run — this matches the "best-effort transport" semantics of
     widget parameters.
     """
-    import unicodedata
-
-    translations = str.maketrans({
-        "\u2013": "-",   # en dash
-        "\u2014": "-",   # em dash
-        "\u2212": "-",   # minus sign
-        "\u2018": "'",   # left single quote
-        "\u2019": "'",   # right single quote
-        "\u201c": '"',   # left double quote
-        "\u201d": '"',   # right double quote
-        "\u2026": "...", # horizontal ellipsis
-        "\u00a0": " ",   # non-breaking space
-        "\u2022": "*",   # bullet
-        "\u00b7": "*",   # middle dot
-    })
-    out: dict[str, str] = {}
-    for k, v in widget_params.items():
-        if not isinstance(v, str):
-            out[k] = v
-            continue
-        translated = v.translate(translations)
-        ascii_bytes = unicodedata.normalize("NFKD", translated).encode(
-            "ascii", errors="ignore"
-        )
-        out[k] = ascii_bytes.decode("ascii")
-    return out
+    return {
+        k: widget_value_to_ascii(v) if isinstance(v, str) else v
+        for k, v in widget_params.items()
+    }
 
 
 def launch_run(
@@ -592,7 +648,15 @@ def launch_run(
     legacy STRING `_vibe_progress.result_json` schema so the agent's v0.5.x
     VARIANT INSERTs don't fail (see backend.progress_schema). Requires
     `warehouse_id` — omitted or empty disables the hook.
+
+    Raises ``ValueError`` before any workspace call for a model-producing op
+    with an empty ``deployment_catalog`` (``core._widgets.empty_catalog_message``).
     """
+    operation = widget_params.get("operation", "") if widget_params else ""
+    catalog = (widget_params.get("deployment_catalog", "") if widget_params else "").strip()
+    if is_model_producing(operation) and not catalog:
+        raise ValueError(empty_catalog_message(operation))
+
     # Update job tags if provided (for per-run tag values). databricks-sdk
     # 0.112.0 rejects raw-dict `new_settings`; needs the typed JobSettings
     # object — the bare `except` below was masking that for the entire app's
@@ -613,9 +677,7 @@ def launch_run(
     # Pre-launch schema compat hook — model-producing ops only. Best-effort:
     # any failure is already swallowed inside ensure_progress_schema, and we
     # also guard here so a new bug in this path never blocks a launch.
-    operation = widget_params.get("operation", "") if widget_params else ""
-    catalog = widget_params.get("deployment_catalog", "") if widget_params else ""
-    if warehouse_id and catalog and is_model_producing(operation):
+    if warehouse_id and is_model_producing(operation):
         try:
             ensure_progress_schema(
                 ws, warehouse_id, catalog,
@@ -629,10 +691,18 @@ def launch_run(
             )
 
     safe_params = _sanitize_widget_params_to_ascii(widget_params)
-    result = ws.jobs.run_now(
-        job_id=job_id,
-        notebook_params=safe_params,
-    )
+    try:
+        result = ws.jobs.run_now(
+            job_id=job_id,
+            notebook_params=safe_params,
+        )
+    except Exception as exc:
+        # The SDK error text can carry paths, emails and tokens, and callers
+        # store this message on the run.
+        logger.error("launch_run: run_now failed (job_id=%s): %r", job_id, exc)
+        raise RuntimeError(
+            f"Could not start the job ({type(exc).__name__}): {sanitize_error_message(str(exc))}"
+        ) from exc
     # Extract run_id from Wait[Run] or direct response
     try:
         rid = result.response.run_id
@@ -643,4 +713,9 @@ def launch_run(
     rid = getattr(result, "run_id", None)
     if isinstance(rid, int):
         return rid
-    raise RuntimeError(f"Could not extract run_id from job launch result: {result}")
+    logger.error(
+        "launch_run: no run_id in the run_now result (job_id=%s): %r", job_id, result,
+    )
+    raise RuntimeError(
+        f"Could not extract run_id from the job launch result (type {type(result).__name__})"
+    )

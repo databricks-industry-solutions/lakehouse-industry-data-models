@@ -15,6 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { jsonResponse } from "./helpers/first-run";
 
 vi.mock("sonner", () => ({
   toast: { error: vi.fn(), success: vi.fn() },
@@ -218,14 +219,9 @@ describe("NewRunForm — debounced /runs/validate", () => {
         // The Orval-generated `createRun` helper reads errors via
         // `res.text()` (then JSON.parses), not `res.json()`. Surface
         // both so the test stub matches both fetch contracts.
-        const errBody = JSON.stringify({ detail: "catalog already in use" });
-        return Promise.resolve({
-          ok: false,
-          status: 400,
-          statusText: "Bad Request",
-          text: () => Promise.resolve(errBody),
-          json: () => Promise.resolve({ detail: "catalog already in use" }),
-        } as Response);
+        return Promise.resolve(
+          jsonResponse(400, { detail: "catalog already in use" }, "Bad Request") as Response,
+        );
       }
       return Promise.resolve({
         ok: true,

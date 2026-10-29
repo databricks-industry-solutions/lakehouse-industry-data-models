@@ -62,7 +62,7 @@ export function SectionCard({
   sectionKey, section, partStatus, partError, exampleText, onChange, onRetry, onCancel, waitingForTree, draftId,
 }: Props) {
   const [showExample, setShowExample] = useState(false);
-  // Once Claude drafted industry claims, keep the block mounted even if the user clears it (focus must survive).
+  // Once the model drafted industry claims, keep the block mounted even if the user clears it (focus must survive).
   const [hadIndustry, setHadIndustry] = useState(false);
   const claims: TaxonomyClaim[] = section?.claims ?? [];
   const industry = claims.filter((c) => c.provenance === "industry");
@@ -110,11 +110,11 @@ export function SectionCard({
 
         {(industry.length > 0 || hadIndustry) && (
           <div className="space-y-1 rounded-md border border-sky-200 bg-sky-50 p-2 dark:border-sky-900 dark:bg-sky-950/40">
-            <label htmlFor={`${id}-claude`} className="block text-xs font-medium text-sky-900 dark:text-sky-200">
-              From Claude <span className="font-normal text-muted-foreground">· typical for your industry</span>
+            <label htmlFor={`${id}-industry`} className="block text-xs font-medium text-sky-900 dark:text-sky-200">
+              From the model <span className="font-normal text-muted-foreground">· typical for your industry</span>
             </label>
             <AutoTextarea
-              id={`${id}-claude`}
+              id={`${id}-industry`}
               className="bg-background text-sm"
               value={industry.map((c) => c.text).join("\n")}
               onValue={(v) => emit(toClaims(v, "industry"), confirm, user)}
@@ -124,7 +124,7 @@ export function SectionCard({
 
         {confirm.length > 0 && (
           <div className="space-y-1 rounded-md border border-amber-300 bg-amber-50 p-2 dark:border-amber-800 dark:bg-amber-950/40">
-            <p className="text-xs font-medium text-amber-900 dark:text-amber-200">Claude guessed — please confirm</p>
+            <p className="text-xs font-medium text-amber-900 dark:text-amber-200">The model guessed. Please confirm.</p>
             {confirm.map((c, i) => (
               <div key={i} className="flex items-start gap-2">
                 <input
@@ -158,7 +158,7 @@ export function SectionCard({
               id={`${id}-notes`}
               rows={2}
               className="bg-background text-sm"
-              placeholder="Add anything Claude missed — one point per line."
+              placeholder="Add anything the model missed, one point per line."
               value={user.map((c) => c.text).join("\n")}
               onValue={(v) => emit(industry, confirm, toClaims(v, "user"))}
             />

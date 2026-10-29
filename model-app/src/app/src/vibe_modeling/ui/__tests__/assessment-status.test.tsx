@@ -33,7 +33,7 @@ import { StatusBadge } from "@/components/assessment/status-badge";
 import { DomainRunRow } from "@/components/assessment/domain-run-row";
 import { BatchStatus } from "@/components/assessment/batch-status";
 import { useBreadcrumbs } from "@/components/explorer/breadcrumb-context";
-import { formatResume } from "@/lib/assessment";
+import { nextTryAt, retryClock } from "@/lib/retry-time";
 import { ApiError } from "@/lib/api";
 import { RelaunchButton } from "@/components/assessment/relaunch-button";
 
@@ -47,10 +47,15 @@ const batch = (runs: any[]) => ({
 });
 
 describe("StatusBadge", () => {
-  it("renders rate limited with attempt and resume time", () => {
-    const resumeAt = "2026-10-08T14:30:00Z";
-    render(<StatusBadge status="rate_limited" attempt={3} resumeAt={resumeAt} />);
-    expect(screen.getByText(`Rate limited · attempt 3 · resumes ${formatResume(resumeAt)}`)).toBeTruthy();
+  it("renders a busy (rate-limited) run with its attempt and next try", () => {
+    vi.useFakeTimers({ now: new Date("2026-10-08T14:10:00Z") });
+    try {
+      const resumeAt = "2026-10-08T14:30:00Z";
+      render(<StatusBadge status="rate_limited" attempt={3} resumeAt={resumeAt} />);
+      expect(screen.getByText(`Model busy · attempt 3 · next try in 20 min (${retryClock(resumeAt)})`)).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
   it("uses the destructive variant for failed", () => {
     render(<StatusBadge status="failed" />);
@@ -75,7 +80,7 @@ describe("DomainRunRow", () => {
         last_message: "OperationalError: timeout talking to Lakebase while writing assess_entity rows for the run",
       }) as any} onCancel={vi.fn()} />);
       const retry = screen.getByTestId("ingest-retry-r1");
-      expect(retry).toHaveTextContent("Saving results (attempt 2 of 5), next try in 5 min");
+      expect(retry).toHaveTextContent(`Saving results (attempt 2 of 5), next try in 5 min (${retryClock("2026-10-19T10:05:00Z")})`);
       const error = screen.getByText("OperationalError: timeout talking to Lakebase while writing assess_entity rows for the run");
       expect(error.className).not.toContain("truncate");
       expect(screen.queryByRole("button", { name: /cancel/i })).toBeNull();
@@ -87,9 +92,10 @@ describe("DomainRunRow", () => {
     render(<DomainRunRow run={run({ status: "assessing", ingest_attempts: 3, ingest_next_at: null, last_message: "boom" }) as any} onCancel={vi.fn()} />);
     expect(screen.getByTestId("ingest-retry-r1")).toHaveTextContent("Saving results (attempt 3), next try soon");
   });
-  it("formatResume reads an offset-less timestamp as UTC", () => {
-    expect(formatResume("2026-10-08T14:30:00")).toBe(formatResume("2026-10-08T14:30:00Z"));
-    expect(formatResume(null)).toBe("");
+  it("retryClock reads an offset-less timestamp as UTC", () => {
+    expect(retryClock("2026-10-08T14:30:00")).toBe(retryClock("2026-10-08T14:30:00Z"));
+    expect(retryClock(null)).toBe("");
+    expect(nextTryAt(null)).toBe("next try soon");
   });
   it("a live run without ingest attempts keeps its message and Cancel", () => {
     render(<DomainRunRow run={run({ ingest_attempts: 0 }) as any} onCancel={vi.fn()} />);
@@ -206,7 +212,7 @@ describe("BatchStatus", () => {
     ["Cancel", "cancelAssessmentDomainRun"],
     ["Cancel all", "cancelAssessment"],
   ] as const)("a refused %s shows the admin-help block with the run's links", async (label, fn) => {
-    api[fn].mockRejectedValue(new ApiError(502, "Bad Gateway", { detail: {
+    api[fn].mockRejectedValue(new ApiError(409, "Conflict", { detail: {
       error: "admin_help", message: "Databricks could not cancel run 9: denied",
       job_url: "https://ws/jobs/7", run_url: "https://ws/jobs/7/runs/9", job_reader: "rdr",
     } }));
@@ -304,7 +310,7 @@ describe("Relaunch", () => {
     api.useGetAssessmentSuspense.mockReturnValue({ data: batch([run({ id: "r1", status: "failed" })]) });
     mount();
     expect(screen.queryByRole("button", { name: /relaunch/i })).toBeNull();
-    expect(screen.getByTestId("assess-not-ready")).toBeTruthy();
+    expect(screen.getByTestId("feature-not-ready")).toBeTruthy();
     const { container } = render(<QueryClientProvider client={new QueryClient()}>
       <RelaunchButton businessId="biz" batch={batch([run({ status: "failed" })]) as any} /></QueryClientProvider>);
     expect(container.textContent).toBe("");
@@ -325,7 +331,7 @@ describe("Relaunch", () => {
     expect(screen.getByText("Assessment is blocked; resolve the failing checks.")).toBeTruthy();
   });
   it("list-row relaunch shows an admin-help failure inline", async () => {
-    api.relaunchAssessment.mockRejectedValue(new ApiError(502, "Bad Gateway", {
+    api.relaunchAssessment.mockRejectedValue(new ApiError(409, "Conflict", {
       detail: { error: "admin_help", message: "Launch failed: assets unreadable", job_url: "https://ws/jobs/7" },
     }));
     render(<QueryClientProvider client={new QueryClient()}>

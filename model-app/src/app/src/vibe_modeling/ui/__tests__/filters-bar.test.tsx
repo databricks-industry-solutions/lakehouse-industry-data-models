@@ -63,6 +63,18 @@ describe("filtersToQueryParams", () => {
       }),
     ).toEqual({ q: "rename", origin: "agent_next_vibe", priority: "high" });
   });
+  it("passes the change_rejection origin through", () => {
+    expect(filtersToQueryParams({ ...DEFAULT_FILTERS, origin: "change_rejection" })).toEqual({
+      origin: "change_rejection",
+    });
+  });
+  it("filters a list by the change_rejection origin client-side", () => {
+    const rejected = makeInput({ id: "r", origin: "change_rejection" });
+    const user = makeInput({ id: "u", origin: "user" });
+    expect(
+      applyFilters([rejected, user], { ...DEFAULT_FILTERS, origin: "change_rejection" }, new Set()).map((i) => i.id),
+    ).toEqual(["r"]);
+  });
   it("does not send a concrete origin for the import group (handled client-side)", () => {
     expect(filtersToQueryParams({ ...DEFAULT_FILTERS, origin: "import" })).toEqual({});
   });
@@ -185,6 +197,20 @@ describe("FiltersBar component", () => {
     fireEvent.click(screen.getByLabelText("Filter by selection"));
     fireEvent.click(screen.getByRole("option", { name: "Selected" }));
     expect(onChange).toHaveBeenCalledWith({ ...DEFAULT_FILTERS, selected: "selected" });
+  });
+
+  it("offers the Deprecated state unless the caller hides it", () => {
+    const { rerender } = render(
+      <FiltersBar filters={DEFAULT_FILTERS} onChange={vi.fn()} shown={3} total={9} />,
+    );
+    fireEvent.click(screen.getByLabelText("Filter by state"));
+    expect(screen.getByRole("option", { name: "Deprecated" })).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("listbox"), { key: "Escape" });
+    rerender(
+      <FiltersBar filters={DEFAULT_FILTERS} onChange={vi.fn()} shown={3} total={9} showDeprecated={false} />,
+    );
+    fireEvent.click(screen.getByLabelText("Filter by state"));
+    expect(screen.queryByRole("option", { name: "Deprecated" })).not.toBeInTheDocument();
   });
 
   it("renders the domain select only when domains are given", () => {

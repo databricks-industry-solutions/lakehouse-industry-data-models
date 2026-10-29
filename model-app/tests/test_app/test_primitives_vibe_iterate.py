@@ -15,6 +15,7 @@ primitive class but the production module isn't present yet, a local
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -22,12 +23,19 @@ import pytest
 from pydantic import BaseModel, ValidationError
 from sqlmodel import Session, select
 
+from ._lifecycle_fixtures import require_files_catalog  # noqa: F401
 from vibe_modeling.backend.db_models import (
     Business,
     ModelVersion,
+    ModelVersionInstall,
     Run,
     RunArtifact,
+    RunOperation,
     RunProgressEvent,
+)
+from vibe_modeling.backend.services.operations._version_lifecycle import (
+    REGISTRY_RELEASE_PENDING_KEY,
+    REGISTRY_RELEASED_KEY,
 )
 from vibe_modeling.backend.version_resolution_parser import (
     STAGE_NAME as VR_STAGE_NAME,
@@ -824,67 +832,98 @@ def test_terminal_success_result_includes_model_json_artifact(
         )
 
 
-def test_terminal_success_never_stamps_deployed_even_with_catalog(
-    engine, primitive, seed_business, parent_version, run_row
+def _finalize_on_mock_model(
+    engine, primitive, seed_business, parent_version, run_row, *, dry_run, guard,
+    extra_params=None, seed=None, inherited=None, ctx_parent=True,
 ):
-    """Regression (0.6.6 walkthrough, live-confirmed). vibe_iterate only
-    rewrites DDL/model artifacts in Lakebase/Volumes; it never performs a
-    physical UC install, unlike the generation primitives whose agent job
-    inline-installs (Stages 12-14) for every cataloging_style. A prior
-    version of this primitive stamped ``deployment_status="deployed"``
-    whenever ``deployment_catalog`` was present, which lied about reality:
-    a version was born "deployed" with completion_date set and no install
-    ever run against it. Track 4's catalog-drift reconciler immediately
-    (and correctly) found the expected schemas missing and flipped it to
-    "uninstalled", a state that should never have existed per the
-    state-atomicity rule (never create a state reconcile has to mop up).
+    from pathlib import Path
 
-    ``_ctx``'s default params include a non-empty ``deployment_catalog``,
-    which is exactly the condition that used to trigger the bogus
-    "deployed" stamp. The output version must be "draft" regardless.
-    """
     ws = MagicMock()
     state = MagicMock()
     state.life_cycle_state.value = "TERMINATED"
     state.result_state.value = "SUCCESS"
     ws.jobs.get_run.return_value = MagicMock(state=state)
-
-    body = json.dumps({
-        "model": {
-            "type": "business", "name": "test", "version": "v2_ecm",
-            "description": "x", "domains": [],
-        }
-    }).encode("utf-8")
+    body = (Path(__file__).resolve().parents[1] / "fixtures" / "mock_model.json").read_bytes()
     download = MagicMock()
     download.contents.read.return_value = body
     ws.files.download.return_value = download
-
+    with Session(engine) as s:
+        parent = s.get(ModelVersion, parent_version)
+        parent.deployment_status = "deployed"
+        parent.files_catalog = "test_catalog"
+        s.add(parent)
+        if seed is not None:
+            seed(s)
+        s.commit()
     handle = OperationDispatchHandle(
         databricks_run_id=99,
-        vibe_session_id="sess-no-lie",
+        vibe_session_id="sess-deploy",
         extra={"deployment_catalog": "test_catalog"},
     )
     ctx = _ctx(
         run_id=run_row,
         business_id=seed_business,
-        parent_version_id=parent_version,
+        parent_version_id=parent_version if ctx_parent else None,
         params={
             "vibe_instructions": "make the customer table denormalised",
             "deployment_catalog": "test_catalog",
+            "dry_run": dry_run,
+            **(extra_params or {}),
         },
     )
-    with Session(engine) as s:
+    if inherited is not None:
+        from dataclasses import replace
+
+        ctx = replace(ctx, inherited_params=inherited)
+    with Session(engine) as s, guard:
         obs = primitive.observe(handle, ctx, ws, s)
-        assert obs.is_terminal and obs.terminal_result and obs.terminal_result.succeeded
+        s.commit()
+    assert guard.checked == 1
+    return obs
+
+
+def test_full_run_output_is_deployed_and_evicts_its_parent(
+    engine, primitive, seed_business, parent_version, run_row, require_files_catalog
+):
+    """B2: a Full Run vibe runs the agent's physical schema stages and
+    registers the version ``installed``, so its output is born deployed in
+    the dispatch catalog, with its files there, and the same-scope version it
+    replaces in that catalog is uninstalled. Rollback reinstates it."""
+    obs = _finalize_on_mock_model(
+        engine, primitive, seed_business, parent_version, run_row, dry_run=False,
+        guard=require_files_catalog,
+    )
+    assert obs.terminal_result.succeeded
+    with Session(engine) as s:
         new_mv = s.get(ModelVersion, obs.terminal_result.output_version_id)
-        assert new_mv is not None
-        assert new_mv.deployment_status == "draft", (
-            "vibe_iterate must never stamp deployment_status='deployed' at "
-            f"finalize (it doesn't install to UC); got {new_mv.deployment_status!r}"
+        parent = s.get(ModelVersion, parent_version)
+        assert new_mv.sync_state == "ok"
+        assert (new_mv.deployment_status, new_mv.uc_catalog) == ("deployed", "test_catalog")
+        assert new_mv.files_catalog == "test_catalog"
+        assert parent.deployment_status == "uninstalled"
+        assert obs.terminal_result.rollback_state["evicted_ids"] == [parent_version]
+
+        primitive.rollback(
+            _ctx(run_id=run_row, business_id=seed_business, parent_version_id=parent_version),
+            obs.terminal_result.rollback_state, MagicMock(), s,
         )
-        # The resolved catalog is still recorded (it's where an explicit
-        # `install` run would target), just not treated as already live.
-        assert new_mv.uc_catalog == "test_catalog"
+        s.commit()
+        parent = s.get(ModelVersion, parent_version)
+        assert (parent.status, parent.deployment_status) == ("completed", "deployed")
+
+
+def test_dry_run_output_stays_a_draft_and_evicts_nothing(
+    engine, primitive, seed_business, parent_version, run_row, require_files_catalog
+):
+    obs = _finalize_on_mock_model(
+        engine, primitive, seed_business, parent_version, run_row, dry_run=True,
+        guard=require_files_catalog,
+    )
+    with Session(engine) as s:
+        new_mv = s.get(ModelVersion, obs.terminal_result.output_version_id)
+        assert (new_mv.status, new_mv.deployment_status) == ("draft", "draft")
+        assert new_mv.files_catalog == "test_catalog"
+        assert s.get(ModelVersion, parent_version).deployment_status == "deployed"
 
 
 # --------------------------------------------------------------------------
@@ -1092,3 +1131,215 @@ class TestRollbackAdversarial:
             assert "delete" in str(exc_info.value).lower() or "fail" in str(
                 exc_info.value
             ).lower()
+
+
+def _other_scope_installed(seed_business):
+    """Seed an MVM v1 installed in the same catalog; return its holder."""
+    holder: dict = {}
+
+    def seed(s):
+        mvm = ModelVersion(business_id=seed_business, version=1, scope="mvm", status="completed",
+                           deployment_status="deployed", uc_catalog="test_catalog", files_catalog="test_catalog")
+        s.add(mvm)
+        s.flush()
+        holder["id"] = mvm.id
+
+    return holder, seed
+
+
+def _newer_replaced_ecm(seed_business, extra):
+    def seed(s):
+        extra(s)
+        s.add(ModelVersion(business_id=seed_business, version=3, scope="ecm", status="superseded",
+                           deployment_status="uninstalled", uc_catalog="test_catalog",
+                           files_catalog="test_catalog"))
+    return seed
+
+
+def _mvm_status(engine, holder):
+    with Session(engine) as s:
+        return s.get(ModelVersion, holder["id"]).deployment_status
+
+
+def test_full_run_on_the_installed_head_keeps_the_other_scope(
+    engine, primitive, seed_business, parent_version, run_row, require_files_catalog
+):
+    """The base is the latest installed version in the catalog, so the agent
+    keeps the installed tables and drops nothing (``_vov_keeps_installed_tables``,
+    nb 8446-8460, 8505-8507): only the same scope is evicted."""
+    holder, seed = _other_scope_installed(seed_business)
+    _finalize_on_mock_model(engine, primitive, seed_business, parent_version, run_row,
+                            dry_run=False, guard=require_files_catalog, seed=seed)
+    assert _mvm_status(engine, holder) == "deployed"
+
+
+def test_full_run_on_an_older_base_drops_every_scope_of_the_business(
+    engine, primitive, seed_business, parent_version, run_row, require_files_catalog
+):
+    """A newer ECM v3 is still registered in the catalog, so the base is not
+    the latest installed: the agent's staging teardown drops every schema the
+    business owns there (nb 8462-8536), the MVM's too."""
+    holder, seed = _other_scope_installed(seed_business)
+    _finalize_on_mock_model(engine, primitive, seed_business, parent_version, run_row, dry_run=False,
+                            guard=require_files_catalog, seed=_newer_replaced_ecm(seed_business, seed))
+    assert _mvm_status(engine, holder) == "uninstalled"
+
+
+def _newer_ecm_uninstalled(seed_business, extra, *, released):
+    """ECM v3, replaced when v1 was made current over it: that run uninstalled
+    v3 from test_catalog first, and its registry release went through
+    (``released``) or is still pending."""
+    def seed(s):
+        extra(s)
+        now = datetime.now(timezone.utc)
+        v3 = ModelVersion(business_id=seed_business, version=3, scope="ecm", status="superseded",
+                          deployment_status="uninstalled", uc_catalog="test_catalog",
+                          files_catalog="test_catalog", replaced_at=now)
+        run = Run(business_id=seed_business, intent="install", status="completed", parameters_json="{}")
+        s.add(v3)
+        s.add(run)
+        s.flush()
+        state = ({REGISTRY_RELEASED_KEY: True} if released
+                 else {REGISTRY_RELEASE_PENDING_KEY: {"catalog": "test_catalog", "version_id": v3.id}})
+        s.add(RunOperation(run_id=run.id, step_index=0, operation_name="uninstall", status="succeeded",
+                           params_json=json.dumps({"version_id": v3.id, "deployment_catalog": "test_catalog"}),
+                           rollback_state_json=json.dumps(state)))
+        s.add(ModelVersionInstall(version_id=v3.id, catalog="test_catalog", installed_at=now,
+                                  uninstalled_at=now, uninstalled_by_run_id=run.id))
+    return seed
+
+
+@pytest.mark.parametrize("released, mvm_status", [(True, "deployed"), (False, "uninstalled")])
+def test_full_run_after_make_current_follows_the_registry_release(
+    engine, primitive, seed_business, parent_version, run_row, require_files_catalog, released, mvm_status,
+):
+    """v1 made current over the installed v3 (J10): once v3's registry rows
+    are released the agent's latest installed version is v1, so it keeps the
+    installed tables and the MVM stays installed. With the release pending,
+    v3 is still ``installed`` for the agent and the teardown drops the MVM's
+    schemas too."""
+    holder, seed = _other_scope_installed(seed_business)
+    _finalize_on_mock_model(engine, primitive, seed_business, parent_version, run_row, dry_run=False,
+                            guard=require_files_catalog,
+                            seed=_newer_ecm_uninstalled(seed_business, seed, released=released))
+    assert _mvm_status(engine, holder) == mvm_status
+
+
+def test_full_run_on_a_seeded_never_installed_base_drops_every_scope(
+    engine, primitive, seed_business, parent_version, run_row, require_files_catalog
+):
+    """A kickstarted ECM v1, never installed (its only registry rows are the
+    app's ``dry_run`` seed), with the MVM installed: the agent has no latest
+    installed ECM, so its teardown drops the MVM's schemas too."""
+    holder, seed_mvm = _other_scope_installed(seed_business)
+
+    def seed(s):
+        seed_mvm(s)
+        base = s.get(ModelVersion, parent_version)
+        base.deployment_status, base.uc_catalog = "draft", ""
+        base.import_schema_prefix_added = base.import_view_prefix_added = ""
+        s.add(base)
+
+    _finalize_on_mock_model(engine, primitive, seed_business, parent_version, run_row, dry_run=False,
+                            guard=require_files_catalog, seed=seed)
+    assert _mvm_status(engine, holder) == "uninstalled"
+
+
+def test_scoped_full_run_drops_nothing(
+    engine, primitive, seed_business, parent_version, run_row, require_files_catalog
+):
+    """A Some domains run skips the teardown (nb 8493-8497) even on an older
+    base, so the other scope stays installed."""
+    holder, seed = _other_scope_installed(seed_business)
+    _finalize_on_mock_model(
+        engine, primitive, seed_business, parent_version, run_row, dry_run=False,
+        guard=require_files_catalog, seed=_newer_replaced_ecm(seed_business, seed),
+        extra_params={"vibe_scope": "some_domains", "vibe_scope_domains": ["Sales"]},
+    )
+    assert _mvm_status(engine, holder) == "deployed"
+
+
+def test_full_run_in_catalog_per_division_from_the_run_evicts_every_scope(
+    engine, primitive, seed_business, parent_version, run_row, require_files_catalog
+):
+    """The style comes from the run (``inherited_params``): both scopes share
+    catalogs and schema names there, so the deploy overwrites the other
+    scope in place (nb 84984, 107368) even on the installed head."""
+    holder, seed = _other_scope_installed(seed_business)
+    _finalize_on_mock_model(engine, primitive, seed_business, parent_version, run_row, dry_run=False,
+                            guard=require_files_catalog, seed=seed,
+                            inherited={"cataloging_style": "Catalog per Division"})
+    assert _mvm_status(engine, holder) == "uninstalled"
+
+
+def test_full_run_without_a_resolved_base_evicts_every_scope(
+    engine, primitive, seed_business, parent_version, run_row, require_files_catalog
+):
+    """No base to compare with the latest installed: the agent's keep-tables
+    test cannot hold, so the teardown runs (nb 8505-8507)."""
+    holder, seed = _other_scope_installed(seed_business)
+    _finalize_on_mock_model(engine, primitive, seed_business, parent_version, run_row, dry_run=False,
+                            guard=require_files_catalog, seed=seed, ctx_parent=False)
+    assert _mvm_status(engine, holder) == "uninstalled"
+
+
+def test_a_failed_sync_keeps_the_teardown_eviction(
+    engine, primitive, seed_business, parent_version, run_row, require_files_catalog
+):
+    """The agent's staging teardown dropped the other scope before it
+    deployed; a Lakebase sync failure afterwards does not bring it back
+    (the eviction runs outside the sync savepoint)."""
+    from unittest.mock import patch
+
+    holder, seed = _other_scope_installed(seed_business)
+    with patch(
+        "vibe_modeling.backend.services.operations.vibe_iterate.ModelSyncService.sync_model",
+        side_effect=RuntimeError("sync broke"),
+    ):
+        obs = _finalize_on_mock_model(
+            engine, primitive, seed_business, parent_version, run_row, dry_run=False,
+            guard=require_files_catalog, seed=_newer_replaced_ecm(seed_business, seed),
+        )
+    with Session(engine) as s:
+        assert s.get(ModelVersion, obs.terminal_result.output_version_id).sync_state == "incomplete_metadata"
+    assert _mvm_status(engine, holder) == "uninstalled"
+
+
+def test_terminal_success_prefers_the_5_3_3_lineage_block_over_ctx_parent(
+    engine, primitive, seed_business, parent_version, run_row
+):
+    """The vibe-iterate finalize takes the parent the lineage block names (ECM
+    v1) over ``ctx.parent_version_id`` (ECM v2), as the captured 5.3.3 vibe
+    model.json carries it, with no ``generated_from_version`` tag."""
+    import os
+
+    with Session(engine) as s:
+        ecm2 = ModelVersion(business_id=seed_business, version=2, status="completed", scope="ecm",
+                            uc_catalog="test_catalog")
+        s.add(ecm2)
+        s.commit()
+        ecm2_id = ecm2.id
+    shapes = os.path.join(os.path.dirname(__file__), "..", "fixtures", "agent_shapes")
+    with open(os.path.join(shapes, "model_json_5_3_3_vibe.json")) as fh:
+        doc = json.load(fh)
+    assert "generated_from_version" not in doc and "generated_from_version" not in doc["model"]
+    doc["lineage"].update(base_version=1, base_scope="ecm", output_version="3")
+    doc["model"]["version"] = "v3_ecm"
+
+    ws = MagicMock()
+    state = MagicMock()
+    state.life_cycle_state.value = "TERMINATED"
+    state.result_state.value = "SUCCESS"
+    ws.jobs.get_run.return_value = MagicMock(state=state)
+    download = MagicMock()
+    download.contents.read.return_value = json.dumps(doc).encode("utf-8")
+    ws.files.download.return_value = download
+
+    handle = OperationDispatchHandle(databricks_run_id=99, vibe_session_id="sess-lineage")
+    ctx = _ctx(run_id=run_row, business_id=seed_business, parent_version_id=ecm2_id)
+    with Session(engine) as s:
+        obs = primitive.observe(handle, ctx, ws, s)
+        assert obs.is_terminal and obs.terminal_result.succeeded, obs
+        new_mv = s.get(ModelVersion, obs.terminal_result.output_version_id)
+        assert (new_mv.version, new_mv.scope) == (3, "ecm")
+        assert new_mv.base_version_id == parent_version

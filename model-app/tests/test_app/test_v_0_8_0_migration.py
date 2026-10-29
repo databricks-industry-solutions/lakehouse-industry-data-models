@@ -171,19 +171,22 @@ def test_decision_option_fks_are_use_alter_with_set_null():
 # --- registry and the upgrade from 0.7.3 ----------------------------------------------------------
 
 
-def test_registered_as_head_right_after_0_7_3():
+def test_registered_right_after_0_7_3():
     versions = [m.version for m in runtime_migrations.MIGRATIONS]
-    assert versions[-2:] == ["0.7.3", "0.8.0"]
-    assert runtime_migrations.MIGRATIONS[-1] is MIGRATION
+    at = versions.index("0.8.0")
+    assert versions[at - 1] == "0.7.3"
+    assert runtime_migrations.MIGRATIONS[at] is MIGRATION
     assert not [v for v in versions if v.startswith("0.8.0.") or v.startswith("0.7.4")]
 
 
 def test_a_0_7_3_database_upgrades_in_one_step(monkeypatch):
-    """Production-style partial upgrade: only 0.8.0 is pending, it runs once, rows survive
+    """Production-style partial upgrade on the 0.8.0 registry: only 0.8.0 is pending, it runs once, rows survive
     with the column defaults, and the version row lands on 0.8.0."""
     monkeypatch.setattr(reg, "PRE_PROD_DESTRUCTIVE_RESET", False)
+    up_to_0_8_0 = [m for m in runtime_migrations.MIGRATIONS if reg._vkey(m.version) <= reg._vkey("0.8.0")]
+    monkeypatch.setattr(reg, "MIGRATIONS", up_to_0_8_0)
     engine = _engine_at_0_7_3()
-    pending = [m.version for m in runtime_migrations.MIGRATIONS if reg._vkey(m.version) > reg._vkey("0.7.3")]
+    pending = [m.version for m in up_to_0_8_0 if reg._vkey(m.version) > reg._vkey("0.7.3")]
     assert pending == ["0.8.0"]
 
     reg.reconcile_schema(engine)

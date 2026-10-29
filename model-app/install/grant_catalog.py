@@ -52,8 +52,6 @@ Idempotent. Safe to re-run.
 from __future__ import annotations
 
 import argparse
-import functools
-import importlib.util
 import logging
 import sys
 from pathlib import Path
@@ -61,6 +59,8 @@ from pathlib import Path
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import NotFound, PermissionDenied
 from databricks.sdk.service.catalog import PermissionsChange, Privilege
+
+from _install_common import load_backend_module, workspace_client
 
 logger = logging.getLogger("install.grant_catalog")
 logging.basicConfig(format="%(message)s", level=logging.INFO)
@@ -83,24 +83,11 @@ METAMODEL_SETUP_PATH = (
 )
 
 
-@functools.lru_cache(maxsize=1)
 def _load_metamodel_setup():
-    """Load the app's canonical ``_metamodel`` setup module by file path
-    (``vibe_modeling`` is not installed in the operator env). Loaded lazily so
-    the script imports, and ``--help`` works, without the app source."""
-    if not METAMODEL_SETUP_PATH.is_file():
-        raise RuntimeError(
-            f"{METAMODEL_SETUP_PATH} not found; run install/grant_catalog.py from "
-            f"a repo checkout."
-        )
-    spec = importlib.util.spec_from_file_location(
-        "_vibe_install_metamodel_setup", METAMODEL_SETUP_PATH
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load {METAMODEL_SETUP_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    """The app's canonical ``_metamodel`` setup module (``vibe_modeling`` is not
+    installed in the operator env). Loaded lazily so the script imports, and
+    ``--help`` works, without the app source."""
+    return load_backend_module(METAMODEL_SETUP_PATH)
 
 
 def _grant(
@@ -190,7 +177,11 @@ def _ensure_schema_and_volume(w: WorkspaceClient, *, catalog: str) -> bool:
     return True
 
 
-def _schema_grant_sql(schema_full: str, app_sp: str) -> str:
+def catalog_grant_sql(catalog: str, app_sp: str) -> str:
+    return f"GRANT USE CATALOG, CREATE SCHEMA, BROWSE ON CATALOG {catalog} TO `{app_sp}`;"
+
+
+def schema_grant_sql(schema_full: str, app_sp: str) -> str:
     return (
         f"GRANT USE SCHEMA, CREATE TABLE, MODIFY, SELECT, "
         f"READ VOLUME, WRITE VOLUME, CREATE VOLUME, MANAGE ON SCHEMA {schema_full} "
@@ -199,7 +190,7 @@ def _schema_grant_sql(schema_full: str, app_sp: str) -> str:
 
 
 def grant_all(*, profile: str | None, catalog: str, app_sp: str) -> int:
-    w = WorkspaceClient(profile=profile) if profile else WorkspaceClient()
+    w = workspace_client(profile)
 
     if not _exists(w.catalogs.get, catalog, label="catalog"):
         # The installer creates the catalog if absent (INSTALL.md documents
@@ -247,9 +238,7 @@ def grant_all(*, profile: str | None, catalog: str, app_sp: str) -> int:
         full_name=catalog,
         principal=app_sp,
         privileges=CATALOG_PRIVS,
-        sql_fallback=(
-            f"GRANT USE CATALOG, CREATE SCHEMA, BROWSE ON CATALOG {catalog} TO `{app_sp}`;"
-        ),
+        sql_fallback=catalog_grant_sql(catalog, app_sp),
     )
 
     try:
@@ -265,7 +254,7 @@ def grant_all(*, profile: str | None, catalog: str, app_sp: str) -> int:
         )
         logger.warning(f"[warn]   CREATE SCHEMA IF NOT EXISTS {schema_full};")
         logger.warning(f"[warn]   CREATE VOLUME IF NOT EXISTS {schema_full}.vol_root;")
-        logger.warning(f"[warn]   {_schema_grant_sql(schema_full, app_sp)}")
+        logger.warning(f"[warn]   {schema_grant_sql(schema_full, app_sp)}")
         return 0
 
     schema_full = f"{catalog}.{setup.METAMODEL_SCHEMA}"
@@ -276,7 +265,7 @@ def grant_all(*, profile: str | None, catalog: str, app_sp: str) -> int:
             full_name=schema_full,
             principal=app_sp,
             privileges=SCHEMA_PRIVS,
-            sql_fallback=_schema_grant_sql(schema_full, app_sp),
+            sql_fallback=schema_grant_sql(schema_full, app_sp),
         )
     else:
         logger.info(

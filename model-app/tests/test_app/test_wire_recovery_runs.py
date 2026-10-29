@@ -1,51 +1,29 @@
-"""Adversarial tests for Phase 4 wire-recovery-runs DAG factories.
+"""Adversarial tests for the recovery DAG factories and the orchestrator.
 
-Phase 4 of the orchestrator refactor wires the two recovery intents
-(``revert`` and ``import-from-volume``) onto the new ``POST /runs``
-``intent`` body shape, replacing the legacy ``progress_tracker._advance_revert``
-walker and the standalone ``POST /businesses/{id}/versions/import-from-volume``
-admin endpoint with proper DAG factories that go through the orchestrator.
+Covers the ``import-from-volume`` factory and primitive, the orchestrator's
+failure semantics for the uninstall-then-install DAG that an install into an
+occupied catalog uses, and the delete-version route.
 
 See ``docs/orchestrator-design.md`` §3 (DAG factories), §6 (failure
 semantics), §8 (API contract changes).
 
-These tests are written without reading the dev implementation. We import
-the expected wirer surface from the package paths the spec calls out
-(``services.orchestrator.factories``) and fall back to ``# STUB-FOR-INTEGRATION``
-sentinels that raise ``NotImplementedError``. On ``main`` the imports
-fail (no factories) and the autouse fixture short-circuits every test
-with a single, clear ``ImportError``-style message — that's the
-expected "fails before implementation" signal per the test acceptance bar.
+Coverage map:
 
-Once the integrator merges the wire-recovery-runs branch the symbols
-resolve and the tests run.
-
-Coverage map (see task brief):
-
-revert intent
-    1. 2-op DAG persists in order (uninstall → install)
-    2. install step's ``needs_version_from`` is None — version comes
-       from the request, not from a prior step
-    3. uninstall fails → install does NOT dispatch; rollback runs
-    4. install fails → uninstall already succeeded → rollback re-installs
-       the original version (orchestrator handles uninstall's "no rollback"
-       semantics by re-installing the original via Install primitive)
-    5. No current installed version → 400
-    6. ``target_version_id == current installed`` → 400 (no-op revert)
-    7. Idempotent re-call — same revert request twice doesn't double-execute
+uninstall-then-install DAG (install over an occupant)
+    - uninstall fails -> install does NOT dispatch; rollback runs
+    - install fails -> uninstall already succeeded -> rollback replays
 
 import-from-volume intent
-    8. 1-op DAG persists with the right ``volume_path``
-    9. Path-traversal attempt → 400 with blocker
-    10. Volume path doesn't exist → terminal failure, succeeded=False,
-        error mentions file-not-found
-    11. Re-import same path → idempotent (returns existing version's id)
-    12. Malformed model.json → terminal failure with parse error
+    - 1-op DAG persists with the right ``volume_path``
+    - Path-traversal attempt -> 400 with blocker
+    - Volume path doesn't exist -> terminal failure, succeeded=False,
+      error mentions file-not-found
+    - Re-import same path -> idempotent (returns existing version's id)
+    - Malformed model.json -> terminal failure with parse error
 
-Generic
-    13. POST /runs with body ``intent: "revert"`` and missing
-        ``target_version_id`` → 422 (FastAPI)
-    14. Validation warnings echoed back, Run still created
+delete-version route
+    - Repeating the delete does not double-execute
+    - A request still carrying ``reinstall_previous`` starts no run
 """
 
 from __future__ import annotations
@@ -78,23 +56,6 @@ from vibe_modeling.backend.services.orchestrator.dag import Dag, OperationStep
 
 # ---------------------------------------------------------------------------
 # STUB-FOR-INTEGRATION: import the Phase 4 DAG factories.
-#
-# Phase 4 introduces DAG factories (one per intent) under
-# ``services.orchestrator.factories``. The spec §3 quote:
-#
-#     def dag_for_new_base_model(req: RunRequest, business: Business) -> Dag:
-#         ...
-#
-# We expect at least these two for the recovery intents:
-#
-#   * ``dag_for_revert(req, business, session) -> Dag``
-#   * ``dag_for_import_from_volume(req, business, session) -> Dag``
-#
-# Plus a coordinator (``build_dag(intent, ...)``) the route handler calls.
-# If the integrator names the module / functions slightly differently,
-# adjust the import path below — these tests target observable behaviour
-# (the resulting ``Dag`` shape, the route response, the persisted
-# ``RunOperation`` rows) so they survive a rename of the factory itself.
 # ---------------------------------------------------------------------------
 
 
@@ -102,20 +63,12 @@ WIRER_AVAILABLE = False
 WIRER_IMPORT_ERROR: Optional[str] = None
 
 try:
-    # Preferred location per the design doc's §3 example.
     from vibe_modeling.backend.services.orchestrator.factories import (  # type: ignore[import-not-found]
-        dag_for_revert,
         dag_for_import_from_volume,
     )
     WIRER_AVAILABLE = True
 except ImportError as _e:  # pragma: no cover — STUB-FOR-INTEGRATION
     WIRER_IMPORT_ERROR = str(_e)
-
-    def dag_for_revert(*args: Any, **kwargs: Any) -> Dag:  # STUB-FOR-INTEGRATION
-        raise NotImplementedError(
-            "dag_for_revert is not implemented on this branch — "
-            "merge feat/wire-recovery-runs (Phase 4)."
-        )
 
     def dag_for_import_from_volume(*args: Any, **kwargs: Any) -> Dag:  # STUB-FOR-INTEGRATION
         raise NotImplementedError(
@@ -126,10 +79,8 @@ except ImportError as _e:  # pragma: no cover — STUB-FOR-INTEGRATION
 
 @pytest.fixture(autouse=True)
 def _require_wirer():
-    """Per acceptance bar: tests MUST fail on `main` (where the wirers
-    don't exist) with a clear single-line reason — not skip. Every test
-    in this module short-circuits here when the import above fell back
-    to the stub functions."""
+    """Tests MUST fail on a branch where the wirers don't exist with a
+    clear single-line reason — not skip."""
     if not WIRER_AVAILABLE:
         raise ImportError(
             "wire-recovery-runs DAG factories are not yet importable from "
@@ -279,31 +230,6 @@ def _make_run(engine, business_id: str, *, intent: str = "") -> str:
         return r.id
 
 
-class _RevertReq:
-    """Stand-in for the Phase 4 ``RunRequest`` shape for revert.
-
-    The dev wirer may use a Pydantic ``RunRequest`` with fields
-    ``intent``, ``business_id``, ``target_version_id``. We pass a
-    plain attribute-bag here so the factory's exact attribute access
-    (``req.target_version_id``) works without coupling these tests to
-    the request schema. Adjust if the integrator picks a different
-    attribute name."""
-
-    def __init__(
-        self,
-        *,
-        business_id: str,
-        target_version_id: str,
-        intent: str = "revert",
-    ) -> None:
-        self.intent = intent
-        self.business_id = business_id
-        self.target_version_id = target_version_id
-        # Common pass-throughs the factory may read.
-        self.parent_version_id = None
-        self.form_overrides: dict = {}
-
-
 class _ImportReq:
     """Stand-in for the Phase 4 ``RunRequest`` shape for import-from-volume.
 
@@ -325,133 +251,32 @@ class _ImportReq:
 
 
 # ---------------------------------------------------------------------------
-# revert intent — DAG-level tests
+# uninstall-then-install DAG — orchestrator-driven failure semantics
 # ---------------------------------------------------------------------------
 
 
-class TestRevertDagFactory:
-    """The Phase 4 revert factory composes a 2-op DAG: uninstall (the
-    currently-installed version) followed by install (the target
-    version). Spec §3 + the legacy ``_advance_revert`` walker informs
-    the contract."""
+def _install_over_occupant_dag(engine, biz_id: str, v_ids: dict[int, str]) -> Dag:
+    """The DAG of installing v1 into the catalog v2 occupies."""
+    from types import SimpleNamespace
 
-    def test_2_op_dag_persists_in_order_uninstall_then_install(self, engine):
-        """1. The factory yields exactly two ``OperationStep``s in the
-        correct order — uninstall first, install second."""
-        biz_id, v_ids = _seed_business_with_two_versions(engine)
-        req = _RevertReq(business_id=biz_id, target_version_id=v_ids[1])
+    from vibe_modeling.backend.services.orchestrator.dag_factories import dag_for_install
 
-        with Session(engine) as s:
-            biz = s.get(Business, biz_id)
-            dag = dag_for_revert(req, biz, s)
-
-        assert isinstance(dag, Dag)
-        assert dag.intent == "revert"
-        names = [step.name for step in dag.steps]
-        assert names == ["uninstall", "install"], (
-            f"revert DAG must be uninstall→install, got {names}"
+    req = SimpleNamespace(
+        catalog=None, deployment_catalog=None, cataloging_style="One Catalog",
+        scope=None, schema_prefix=None, version_int=None, naming_convention=None,
+        primary_key_suffix=None, table_id_type=None, schema_suffix=None, tag_prefix=None,
+    )
+    with Session(engine) as s:
+        biz = s.get(Business, biz_id)
+        ctx = SimpleNamespace(
+            parent_mv=s.get(ModelVersion, v_ids[1]),
+            occupant=s.get(ModelVersion, v_ids[2]),
+            occupant_install_widgets=None,
         )
-
-    def test_install_step_needs_version_from_is_none(self, engine):
-        """2. The install step's ``needs_version_from`` is ``None`` —
-        the version to install is the user-specified target, not the
-        output of the prior uninstall step (uninstall doesn't produce
-        a version per spec §2 table)."""
-        biz_id, v_ids = _seed_business_with_two_versions(engine)
-        req = _RevertReq(business_id=biz_id, target_version_id=v_ids[1])
-
-        with Session(engine) as s:
-            biz = s.get(Business, biz_id)
-            dag = dag_for_revert(req, biz, s)
-
-        # Find the install step (regardless of its index in case the
-        # factory uses an unconventional ordering).
-        install_step = next(s for s in dag.steps if s.name == "install")
-        assert install_step.needs_version_from is None, (
-            "install in a revert DAG must NOT inherit from the uninstall "
-            "step — its target version comes from the request payload "
-            f"(spec §3). Got needs_version_from={install_step.needs_version_from!r}"
-        )
-        # Belt-and-braces: the install step's params should embed the
-        # target version int (v1 here).
-        assert install_step.params.get("model_version") in (1, "1", "v1"), (
-            "install step must carry the target version in params; got "
-            f"params={install_step.params!r}"
-        )
-
-    def test_no_current_installed_version_raises_400(self, engine):
-        """5. When the business has no ``deployment_status="deployed"``
-        version, the factory must raise an HTTPException(400) with an
-        informative message — there's nothing to uninstall, so the
-        revert is meaningless."""
-        from fastapi import HTTPException
-
-        biz_id = _seed_business_no_install(engine)
-        # target_version_id can be any version on the business — what
-        # matters is the absence of an installed one.
-        with Session(engine) as s:
-            biz = s.get(Business, biz_id)
-            mv = s.exec(
-                select(ModelVersion).where(ModelVersion.business_id == biz_id)
-            ).first()
-            req = _RevertReq(business_id=biz_id, target_version_id=mv.id)
-
-            with pytest.raises(HTTPException) as excinfo:
-                dag_for_revert(req, biz, s)
-
-        assert excinfo.value.status_code == 400
-        detail = (str(excinfo.value.detail) or "").lower()
-        assert any(
-            tok in detail for tok in ("install", "deployed", "current", "no")
-        ), (
-            f"400 detail must mention the missing installation: "
-            f"{excinfo.value.detail!r}"
-        )
-
-    def test_target_version_equals_current_installed_raises_400(self, engine):
-        """6. If the user picks the version that's already installed,
-        the revert is a no-op — must reject with 400."""
-        from fastapi import HTTPException
-
-        biz_id, v_ids = _seed_business_with_two_versions(engine, deployed_version=2)
-        # Target the SAME version that's already deployed.
-        req = _RevertReq(business_id=biz_id, target_version_id=v_ids[2])
-
-        with Session(engine) as s:
-            biz = s.get(Business, biz_id)
-            with pytest.raises(HTTPException) as excinfo:
-                dag_for_revert(req, biz, s)
-
-        assert excinfo.value.status_code == 400
-        detail = (str(excinfo.value.detail) or "").lower()
-        assert "already" in detail or "no-op" in detail or "same" in detail, (
-            f"400 detail must explain the no-op revert: {excinfo.value.detail!r}"
-        )
-
-    def test_factory_dag_passes_cross_step_validation(self, engine):
-        """The DAG produced for revert must pass ``Dag.validate_cross_step``
-        (no broken ``needs_version_from`` references). Catches a factory
-        that emits a self-inconsistent DAG."""
-        biz_id, v_ids = _seed_business_with_two_versions(engine)
-        req = _RevertReq(business_id=biz_id, target_version_id=v_ids[1])
-
-        with Session(engine) as s:
-            biz = s.get(Business, biz_id)
-            dag = dag_for_revert(req, biz, s)
-
-        issues = dag.validate_cross_step()
-        blockers = [i for i in issues if i.severity == "blocker"]
-        assert blockers == [], (
-            f"revert DAG produced cross-step blockers: {blockers}"
-        )
+        return dag_for_install(req, biz, ctx, SimpleNamespace(deployment_catalog="meta_cat"))
 
 
-# ---------------------------------------------------------------------------
-# revert intent — orchestrator-driven failure semantics
-# ---------------------------------------------------------------------------
-
-
-class TestRevertOrchestrationFailures:
+class TestUninstallThenInstallFailures:
     """Failure-mode tests that go through the full orchestrator
     (``orch.start`` → ``advance``) so we observe the persisted
     ``RunOperation`` lifecycle, not just the DAG shape.
@@ -553,16 +378,12 @@ class TestRevertOrchestrationFailures:
         ``pending`` post-rollback, but never ``running``). Run ends
         in ``failed``."""
         biz_id, v_ids = _seed_business_with_two_versions(engine)
-        req = _RevertReq(business_id=biz_id, target_version_id=v_ids[1])
         orch, uninstall, install = self._make_orch_with_fakes(
             uninstall_succeeds=False, install_succeeds=True
         )
+        dag = _install_over_occupant_dag(engine, biz_id, v_ids)
 
-        with Session(engine) as s:
-            biz = s.get(Business, biz_id)
-            dag = dag_for_revert(req, biz, s)
-
-        run_id = _make_run(engine, biz_id, intent="revert")
+        run_id = _make_run(engine, biz_id, intent="install")
 
         with Session(engine) as s:
             run = s.get(Run, run_id)
@@ -622,16 +443,12 @@ class TestRevertOrchestrationFailures:
         (b) The Run terminates in ``failed`` (not ``rolled_back_failed``).
         """
         biz_id, v_ids = _seed_business_with_two_versions(engine)
-        req = _RevertReq(business_id=biz_id, target_version_id=v_ids[1])
         orch, uninstall, install = self._make_orch_with_fakes(
             uninstall_succeeds=True, install_succeeds=False
         )
+        dag = _install_over_occupant_dag(engine, biz_id, v_ids)
 
-        with Session(engine) as s:
-            biz = s.get(Business, biz_id)
-            dag = dag_for_revert(req, biz, s)
-
-        run_id = _make_run(engine, biz_id, intent="revert")
+        run_id = _make_run(engine, biz_id, intent="install")
 
         with Session(engine) as s:
             run = s.get(Run, run_id)
@@ -672,38 +489,35 @@ class TestRevertOrchestrationFailures:
 
 
 # ---------------------------------------------------------------------------
-# revert intent — POST /runs HTTP-level tests
+# delete-version route
 # ---------------------------------------------------------------------------
 
 
-class TestRevertRoute:
+class TestDeleteVersionRoute:
     """End-to-end through the FastAPI delete-version route.
 
-    The route is now operation_id ``deleteVersion`` (path:
-    ``DELETE /businesses/{business_id}/versions/{version_id}``); its
-    default behaviour is to delete the target version's rows without
-    dispatching an orchestrator DAG. The legacy revert (uninstall →
-    install previous) is gated behind ``reinstall_previous=true``. These
-    tests assert the observable invariants that survived the rename.
+    The route is operation_id ``deleteVersion`` (path:
+    ``DELETE /businesses/{business_id}/versions/{version_id}``); it
+    deletes the target version's rows without dispatching an
+    orchestrator DAG. These tests assert that invariant.
     """
 
-    def test_revert_idempotent_re_call_does_not_duplicate(
+    def test_repeated_delete_does_not_duplicate(
         self, engine, client_with_agent
     ):
-        """7. Issuing the same delete request twice must not double-
-        execute. Without ``reinstall_previous`` the first call returns
-        200 and deletes the row; the second call returns 404 because
+        """Issuing the same delete request twice must not double-
+        execute. The first call returns 200 and deletes the row; the second call returns 404 because
         the row is gone. Either way no orchestrator dispatch happens
         and no active Runs leak."""
-        biz_id, v_ids = _seed_business_with_two_versions(engine)
-        # The "current" being reverted-from is the deployed v2.
+        # An installed version cannot be deleted: v2 is the uninstalled head.
+        biz_id, v_ids = _seed_business_with_two_versions(engine, deployed_version=0)
         current_id = v_ids[2]
 
         r1 = client_with_agent.delete(
             f"/api/businesses/{biz_id}/versions/{current_id}"
         )
         assert r1.status_code in (200, 201), (
-            f"first revert should succeed; got {r1.status_code}: {r1.text}"
+            f"first delete should succeed; got {r1.status_code}: {r1.text}"
         )
 
         r2 = client_with_agent.delete(
@@ -726,28 +540,18 @@ class TestRevertRoute:
                 r for r in runs if r.status in ("pending", "running", "stale")
             ]
             assert len(active) <= 1, (
-                f"two identical revert DELETEs left {len(active)} "
+                f"two identical DELETEs left {len(active)} "
                 f"active Runs (must be at most one): {active!r}"
             )
 
-    def test_revert_missing_target_version_id_returns_422(
+    def test_unknown_version_id_is_rejected_without_a_run(
         self, engine, client_with_agent
     ):
-        """13. Body-level validation gate for revert.
-
-        Reconciliation note: the canonical spec §8 contract
-        (``POST /runs`` with ``intent: revert`` + body
-        ``target_version_id``) lands in a later phase. On this branch
-        the existing route puts the version-id in the path, so a
-        missing value cannot be a 422 — the request fails to match
-        the route at all. We verify the equivalent gate: a malformed
-        request (non-existent version_id in the path) is rejected
+        """A version_id that does not exist on the business is rejected
         before any orchestrator state is mutated."""
         biz_id, _v_ids = _seed_business_with_two_versions(engine)
 
-        # Equivalent of "missing target": a version_id that doesn't
-        # exist on this business. The route gates with 404 before any
-        # DAG construction.
+        # The route gates with 404 before any DAG construction.
         r = client_with_agent.delete(
             f"/api/businesses/{biz_id}/versions/does-not-exist"
         )
@@ -762,7 +566,7 @@ class TestRevertRoute:
                 s.exec(select(Run).where(Run.business_id == biz_id)).all()
             )
             assert runs == [], (
-                f"rejected revert must not persist a Run; got {runs!r}"
+                f"a rejected delete must not persist a Run; got {runs!r}"
             )
 
 
@@ -904,7 +708,7 @@ class TestImportFromVolumeOrchestration:
         succeeded=False, error mentions file-not-found / inaccessible."""
         biz_id, _ = _seed_business_with_two_versions(engine)
         ws = self._ws_with_download(Exception("404: Files API: not found"))
-        path = "/Volumes/cat/_metamodel/vol_root/business/test/v9_mvm/model.json"
+        path = "/Volumes/cat/_metamodel/vol_root/business/test/v9/mvm/model.json"
         req = _ImportReq(business_id=biz_id, volume_path=path)
 
         with Session(engine) as s:
@@ -950,7 +754,7 @@ class TestImportFromVolumeOrchestration:
         a parse-error message. No partial ModelVersion is created."""
         biz_id, _ = _seed_business_with_two_versions(engine)
         ws = self._ws_with_download(b"{ definitely not, json ::::")
-        path = "/Volumes/cat/_metamodel/vol_root/business/test/v9_mvm/model.json"
+        path = "/Volumes/cat/_metamodel/vol_root/business/test/v9/mvm/model.json"
         req = _ImportReq(business_id=biz_id, volume_path=path)
 
         with Session(engine) as s:
@@ -1003,7 +807,7 @@ class TestImportFromVolumeOrchestration:
         guaranteed by the primitive's RunOperation-row resume guard."""
         biz_id = _seed_business_no_install(engine)  # start from clean slate
         ws = self._ws_with_download(self._valid_model_json_bytes())
-        path = "/Volumes/cat/_metamodel/vol_root/business/test/v9_mvm/model.json"
+        path = "/Volumes/cat/_metamodel/vol_root/business/test/v9/mvm/model.json"
         req = _ImportReq(business_id=biz_id, volume_path=path)
 
         with Session(engine) as s:
@@ -1088,15 +892,13 @@ class TestRunsRouteValidationEnvelope:
     warnings echoed when the request validates with non-blocker
     issues."""
 
-    def test_validation_warnings_echoed_back_run_still_created(
+    def test_delete_with_reinstall_previous_starts_no_run(
         self, engine, client_with_agent
     ):
-        """14. A valid ``?reinstall_previous=true`` request creates a
-        Run row and is not rejected. Default DELETE doesn't dispatch
-        orchestration — the reinstall opt-in is the only path that
-        persists a Run."""
-        biz_id, v_ids = _seed_business_with_two_versions(engine)
-        # Current = deployed v2; reinstall flips it back to v1.
+        """``reinstall_previous`` was removed from the delete route: a
+        request still carrying it deletes the version and persists no Run
+        (making a prior version current is an install of it)."""
+        biz_id, v_ids = _seed_business_with_two_versions(engine, deployed_version=0)
         current_id = v_ids[2]
 
         r = client_with_agent.delete(
@@ -1104,23 +906,7 @@ class TestRunsRouteValidationEnvelope:
             f"?reinstall_previous=true"
         )
 
-        assert r.status_code in (200, 201), (
-            f"valid reinstall request must not be rejected; got "
-            f"{r.status_code}: {r.text}"
-        )
-        try:
-            payload = r.json()
-        except Exception:
-            payload = {}
-        if isinstance(payload, dict) and "warnings" in payload:
-            assert isinstance(payload["warnings"], list)
-
-        # And exactly one Run row was persisted (the reinstall run).
+        assert r.status_code == 200, r.text
+        assert "run_id" not in r.json()
         with Session(engine) as s:
-            runs = list(
-                s.exec(select(Run).where(Run.business_id == biz_id)).all()
-            )
-            assert len(runs) == 1
-            # Orchestrator.start overwrites run.intent from dag.intent,
-            # which is "revert" for the uninstall→install DAG.
-            assert (runs[0].intent or "").lower() == "revert"
+            assert s.exec(select(Run).where(Run.business_id == biz_id)).all() == []

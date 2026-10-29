@@ -13,6 +13,7 @@
  *   4. Anything else → a stable fallback string.
  */
 import { ApiError } from "@/lib/api";
+import { featureSettingsUrl, SETTING_FEATURE } from "@/lib/features";
 
 type PydanticErrorEntry = {
   msg?: string;
@@ -88,8 +89,9 @@ const optionalText = (v: unknown): string | undefined =>
 
 /**
  * Parse an `ApiError` into its `admin_help` detail, or `null` when it isn't
- * one. Keys on the `error === "admin_help"` discriminator (any status: the
- * backend sends it on 4xx and 5xx alike) through the shared `unwrapEnvelope`.
+ * one. Keys on the `error === "admin_help"` discriminator (the backend sends
+ * it with 409, `core/_errors.admin_help_error`; the status is not checked)
+ * through the shared `unwrapEnvelope`.
  * An empty `message` falls back to the HTTP-level message: `apiErrorMessage`
  * would return the `error` discriminator itself.
  */
@@ -167,6 +169,132 @@ export function parseConfigMissing(err: unknown): ConfigMissing | null {
       ? envelope.message
       : "Required configuration is missing.";
   return { error: "config_missing", missing, message };
+}
+
+/**
+ * The backend's 400 refusal of a setting's value, from a Save check or a
+ * feature call: `model_service_refused` (the model service failed its test
+ * call; `status` is `denied` / `not_found` / `error`) or `setting_refused`
+ * (any other setting, e.g. a reader that does not exist). `key` names the
+ * setting. Shape:
+ *   { detail: { error, key, message, status? } }
+ */
+export interface SettingRefused {
+  error: "model_service_refused" | "setting_refused";
+  key: string;
+  message: string;
+  status?: string;
+}
+
+const REFUSED_ERRORS = new Set<string>(["model_service_refused", "setting_refused"]);
+
+/**
+ * Parse an `ApiError` into its setting refusal, or `null` when it isn't one.
+ * Keys on the discriminator, like `parseConfigMissing`.
+ */
+export function parseSettingRefused(err: unknown): SettingRefused | null {
+  if (!(err instanceof ApiError)) return null;
+  const envelope = unwrapEnvelope(err);
+  if (!envelope || typeof envelope.error !== "string" || !REFUSED_ERRORS.has(envelope.error)) return null;
+  return {
+    error: envelope.error as SettingRefused["error"],
+    key: typeof envelope.key === "string" ? envelope.key : "",
+    message: optionalText(envelope.message) ?? err.message,
+    ...(typeof envelope.status === "string" ? { status: envelope.status } : {}),
+  };
+}
+
+/**
+ * Where each refusable setting is changed: its feature's card in Settings →
+ * Platform, Optional features (`lib/features.featureSettingsUrl`). A refusal
+ * carries only its `key`. The `taxonomy_llm` link adds the card's
+ * `#feature-taxonomy` anchor to the backend's `core/_errors.CONFIG_REQUIREMENTS`
+ * URL (`/settings?tab=platform`); `parseSettingsError` adds it to a
+ * `config_missing` item of a feature setting too.
+ */
+export const REFUSED_SETTING_LOCATIONS: Readonly<Record<string, { label: string; settings_url: string }>> = {
+  taxonomy_llm: { label: "Domain Taxonomy Builder model service", settings_url: featureSettingsUrl(SETTING_FEATURE.taxonomy_llm) },
+  reader_application_id: { label: "Assessment reader service principal", settings_url: featureSettingsUrl(SETTING_FEATURE.reader_application_id) },
+  warehouse_id: { label: "Assessment SQL warehouse", settings_url: featureSettingsUrl(SETTING_FEATURE.warehouse_id) },
+};
+
+/** A settings error the user fixes in Settings: its sentence and the Settings links that fix it. */
+export interface SettingsError {
+  message: string;
+  missing: ConfigMissingItem[];
+  /** The refused setting's key; null for `config_missing`. */
+  refusedKey: string | null;
+}
+
+/**
+ * The one reader for every error a Settings change fixes: 422
+ * `config_missing` (its own links; a feature setting's link without an anchor
+ * gets its card's) and the 400 refusals (`model_service_refused`,
+ * `setting_refused`; the link from `REFUSED_SETTING_LOCATIONS`). `null` for
+ * anything else.
+ */
+export function parseSettingsError(err: unknown): SettingsError | null {
+  const cm = parseConfigMissing(err);
+  if (cm) {
+    const missing = cm.missing.map((m) =>
+      SETTING_FEATURE[m.key] && !m.settings_url.includes("#")
+        ? { ...m, settings_url: featureSettingsUrl(SETTING_FEATURE[m.key]) }
+        : m,
+    );
+    return { message: cm.message, missing, refusedKey: null };
+  }
+  const refused = parseSettingRefused(err);
+  if (!refused) return null;
+  const where = REFUSED_SETTING_LOCATIONS[refused.key];
+  return {
+    message: refused.message,
+    missing: [{ key: refused.key, label: where?.label ?? refused.key, settings_url: where?.settings_url ?? "/settings" }],
+    refusedKey: refused.key,
+  };
+}
+
+/** One subject-bound `confirm` issue of a `needs_confirmation` 422. */
+export interface ConfirmIssue {
+  subject: string;
+  message: string;
+  field_path: string;
+  /** The version numbers the issue names (`IssueOut.versions`). */
+  versions: number[];
+}
+
+/**
+ * The backend's `needs_confirmation` error from `POST /runs`: the run changes
+ * something the request did not confirm. Shape:
+ *   { detail: { error: "needs_confirmation", issues: [IssueOut], message } }
+ * `issues` holds every confirm issue the run needs, confirmed or not, so a
+ * dialog re-renders from them. `message` is cut at 500 characters by the
+ * error handler; render `issues`, never `message`.
+ */
+export interface NeedsConfirmation {
+  error: "needs_confirmation";
+  issues: ConfirmIssue[];
+}
+
+/**
+ * Parse an `ApiError` into its `needs_confirmation` payload, or `null` when it
+ * isn't one. Keys on the discriminator, beside `parseConfigMissing`. Issues
+ * without a subject are dropped: nothing can confirm them.
+ */
+export function parseNeedsConfirmation(err: unknown): NeedsConfirmation | null {
+  if (!(err instanceof ApiError)) return null;
+  const envelope = unwrapEnvelope(err);
+  if (!envelope || envelope.error !== "needs_confirmation") return null;
+  const raw = Array.isArray(envelope.issues) ? envelope.issues : [];
+  const issues: ConfirmIssue[] = raw
+    .filter((i): i is Record<string, unknown> => !!i && typeof i === "object")
+    .filter((i) => typeof i.subject === "string" && i.subject !== "")
+    .map((i) => ({
+      subject: String(i.subject),
+      message: String(i.message ?? ""),
+      field_path: String(i.field_path ?? ""),
+      versions: Array.isArray(i.versions) ? i.versions.filter((n): n is number => typeof n === "number") : [],
+    }));
+  return { error: "needs_confirmation", issues };
 }
 
 /**

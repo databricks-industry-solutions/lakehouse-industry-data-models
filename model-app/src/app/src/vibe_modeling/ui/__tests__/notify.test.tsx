@@ -7,7 +7,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import { toast } from "sonner";
-import { notifyError, openDetails, closeDetails, useErrorDetails } from "@/lib/notify";
+import { notifyError, notifyWarnings, openDetails, closeDetails, useErrorDetails } from "@/lib/notify";
 import { ApiError } from "@/lib/api";
 
 vi.mock("sonner", async () => {
@@ -18,6 +18,7 @@ vi.mock("sonner", async () => {
       ...actual.toast,
       error: vi.fn(),
       success: vi.fn(),
+      warning: vi.fn(),
     },
   };
 });
@@ -68,5 +69,21 @@ describe("error details store", () => {
     expect(result.current).toBe("the full error text");
     act(() => closeDetails());
     expect(result.current).toBeNull();
+  });
+});
+
+describe("notifyWarnings", () => {
+  beforeEach(() => vi.mocked(toast.warning).mockClear());
+
+  it("shows the warnings as the description of one warning toast", () => {
+    expect(notifyWarnings("Imported with warnings", ["First.", "Second."])).toBe(true);
+    expect(toast.warning).toHaveBeenCalledWith("Imported with warnings", { description: "First. Second." });
+  });
+
+  it("shows nothing for no warnings", () => {
+    expect(notifyWarnings("Imported with warnings", [])).toBe(false);
+    expect(notifyWarnings("Imported with warnings", undefined)).toBe(false);
+    expect(notifyWarnings("Imported with warnings", ["  "])).toBe(false);
+    expect(toast.warning).not.toHaveBeenCalled();
   });
 });

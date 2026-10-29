@@ -1,0 +1,93 @@
+{
+  "generated_by": "scripts/dev/gen_agent_registry_schema.py",
+  "notebook_file": "vibe_modelling_agent_v5.3.3.ipynb",
+  "source_sha256": {
+    "_ensure_metamodel_registry": "f16131d5acc66cf53d2032894f7cd91f1a9b255abc45fc5118b7573f7c568648",
+    "map_data_type": "f03b0f31c6aad42abf0507bb3631cfa3b83c1b8bed9f0623bb2dcf9401e938f3"
+  },
+  "tables": {
+    "business": [
+      ["business", "STRING"],
+      ["version", "STRING"],
+      ["model_scope", "STRING"],
+      ["industry_alignment", "STRING"],
+      ["description", "STRING"],
+      ["catalog", "STRING"],
+      ["location", "STRING"],
+      ["core_business_processes", "STRING"],
+      ["orgnaization_divisions", "STRING"],
+      ["data_domains", "STRING"],
+      ["common_business_jargons", "STRING"],
+      ["operational_systems_of_records", "STRING"],
+      ["industry_governing_body", "STRING"],
+      ["vibe_modelling_instructions", "STRING"],
+      ["model_conventions", "STRING"],
+      ["completion_date", "TIMESTAMP"],
+      ["session_id", "BIGINT"],
+      ["processing_status", "STRING"],
+      ["completed_percent", "DOUBLE"],
+      ["session_started_at", "TIMESTAMP"],
+      ["last_updated_at", "TIMESTAMP"],
+      ["session_json", "STRING"],
+      ["results_json", "STRING"]
+    ],
+    "domain": [
+      ["business", "STRING"],
+      ["version", "STRING"],
+      ["model_scope", "STRING"],
+      ["domain", "STRING"],
+      ["division", "STRING"],
+      ["description", "STRING"],
+      ["database_name", "STRING"],
+      ["catalog", "STRING"],
+      ["reference", "STRING"],
+      ["tags", "STRING"]
+    ],
+    "product": [
+      ["business", "STRING"],
+      ["version", "STRING"],
+      ["model_scope", "STRING"],
+      ["domain", "STRING"],
+      ["subdomain", "STRING"],
+      ["product", "STRING"],
+      ["description", "STRING"],
+      ["type", "STRING"],
+      ["division", "STRING"],
+      ["function", "STRING"],
+      ["data_type", "STRING"],
+      ["source_domains", "STRING"],
+      ["association_edges", "STRING"],
+      ["primary_key", "STRING"],
+      ["reference", "STRING"],
+      ["table_name", "STRING"],
+      ["sample_path", "STRING"],
+      ["tags", "STRING"]
+    ],
+    "attribute": [
+      ["business", "STRING"],
+      ["version", "STRING"],
+      ["model_scope", "STRING"],
+      ["domain", "STRING"],
+      ["product", "STRING"],
+      ["attribute", "STRING"],
+      ["column_name", "STRING"],
+      ["type", "STRING"],
+      ["tags", "STRING"],
+      ["value_regex", "STRING"],
+      ["foreign_key_to", "STRING"],
+      ["business_glossary_term", "STRING"],
+      ["description", "STRING"],
+      ["reference", "STRING"]
+    ]
+  },
+  "business_migration_columns": [
+    ["session_id", "BIGINT"],
+    ["processing_status", "STRING"],
+    ["completed_percent", "DOUBLE"],
+    ["session_started_at", "TIMESTAMP"],
+    ["last_updated_at", "TIMESTAMP"],
+    ["session_json", "STRING"],
+    ["results_json", "STRING"],
+    ["deploy_status", "STRING"]
+  ]
+}

@@ -16,6 +16,8 @@ from vibe_modeling.backend.db_models import (
 )
 from vibe_modeling.backend.deployment_verifier import DeploymentVerifier
 
+from _sql_fakes import response, ws_returning
+
 
 @pytest.fixture
 def engine():
@@ -34,19 +36,11 @@ def mock_ws():
 
 
 def _make_sql_result(rows):
-    result = MagicMock()
-    result.status = MagicMock()
-    result.status.error = None
-    result.result.data_array = rows
-    return result
+    return response(rows)
 
 
 def _make_empty_result():
-    result = MagicMock()
-    result.status = MagicMock()
-    result.status.error = None
-    result.result.data_array = []
-    return result
+    return response([])
 
 
 def _seed_model(session):
@@ -125,7 +119,27 @@ class TestCatalogCheck:
             result = v.check_catalog("test_cat")
 
         assert result["exists"] is True
+        assert result["verification_error"] is None
         assert call_count == 2
+
+    @pytest.mark.parametrize("first", [
+        response(error="[INSUFFICIENT_PERMISSIONS] User does not have USE CATALOG on test_cat"),
+        response(state="RUNNING", statement_id="s1"),
+    ], ids=["failed", "timeout"])
+    def test_unverifiable_catalog_carries_the_reason(self, engine, first):
+        """Both reads fail: the catalog is unverified and verification_error
+        says why, sanitized (an email in the error is redacted)."""
+        second = response(error="[NO_SUCH_CATALOG_EXCEPTION] reader@example.com cannot see test_cat")
+        ws = ws_returning(first, second)
+        with Session(engine) as session:
+            result = DeploymentVerifier(session, ws, "wh-123").check_catalog("test_cat")
+
+        assert result["exists"] is False
+        assert result["error"] == "Could not verify catalog"
+        assert result["verification_error"].startswith("Could not verify catalog 'test_cat': ")
+        assert "NO_SUCH_CATALOG_EXCEPTION" in result["verification_error"]
+        assert "reader@example.com" not in result["verification_error"]
+        assert len(ws.statements) == 2
 
 
 class TestUcSchema:
@@ -166,7 +180,48 @@ class TestUcSchema:
             v = DeploymentVerifier(session, mock_ws, "wh-123")
             result = v.get_uc_schema("test_cat", [])
 
-        assert result == {"tables": [], "columns": [], "primary_keys": [], "foreign_keys": []}
+        assert result == {
+            "tables": [], "columns": [], "primary_keys": [], "foreign_keys": [], "verification_error": None,
+        }
+
+
+class TestUcSchemaFailures:
+    """A failed, timed-out or missing information_schema read never reads as
+    an empty deployment: every list is empty and verification_error is set."""
+
+    @pytest.mark.parametrize("bad", [
+        response(error="[INSUFFICIENT_PERMISSIONS] no USE SCHEMA on information_schema"),
+        response(state="PENDING", statement_id="s9"),
+        response(error="[TABLE_OR_VIEW_NOT_FOUND] `test_cat`.`information_schema`.`columns`"),
+    ], ids=["failed", "timeout", "missing_table"])
+    def test_a_failed_read_sets_verification_error(self, engine, bad):
+        tables = response([["core_db", "widget", "BASE TABLE"]])
+        ws = ws_returning(tables, bad)
+        with Session(engine) as session:
+            result = DeploymentVerifier(session, ws, "wh-123").get_uc_schema("test_cat", ["core_db"])
+
+        assert result["tables"] == result["columns"] == result["primary_keys"] == result["foreign_keys"] == []
+        assert result["verification_error"].startswith(
+            "Could not read the deployed schema in catalog 'test_cat': "
+        )
+        if bad.status.state.value == "PENDING":
+            ws.statement_execution.cancel_execution.assert_called_once_with("s9")
+
+    def test_compare_with_an_unreadable_schema_lists_nothing_as_model_only(self, engine):
+        with Session(engine) as session:
+            _seed_model(session)
+            session.commit()
+        ws = ws_returning(response(error="[INSUFFICIENT_PERMISSIONS] denied"))
+        with Session(engine) as session:
+            mv = session.exec(
+                __import__("sqlmodel", fromlist=["select"]).select(ModelVersion)
+            ).first()
+            result = DeploymentVerifier(session, ws, "wh-123").compare(mv.id, "test_cat")
+
+        assert result["tables"] == {"model_only": [], "uc_only": [], "both": []}
+        assert result["summary"]["model_tables"] == 1
+        assert result["summary"]["model_only"] == 0
+        assert "INSUFFICIENT_PERMISSIONS" in result["verification_error"]
 
 
 class TestCompare:
@@ -197,6 +252,7 @@ class TestCompare:
             result = v.compare(mv.id, "test_cat")
 
         assert result["summary"]["matching"] == 1
+        assert result["verification_error"] is None
         assert result["summary"]["model_only"] == 0
         assert result["summary"]["uc_only"] == 0
         assert len(result["tables"]["both"]) == 1
@@ -328,3 +384,44 @@ class TestColumnDiff:
         )
         assert len(diffs) == 1
         assert diffs[0]["status"] == "type_mismatch"
+
+
+class TestVerificationErrorRoutes:
+    """verification_error round-trips through the three deployment routes:
+    a failed read answers 200 with the sanitized reason; a good read None."""
+
+    def _seed(self, engine):
+        with Session(engine) as session:
+            b, mv, _, _ = _seed_model(session)
+            mv.deployment_status = "deployed"
+            session.add(mv)
+            session.commit()
+            return b.id, mv.id
+
+    @pytest.mark.parametrize("path", ["catalog-check", "uc-schema", "compare"])
+    def test_a_failed_read_round_trips_verification_error(self, engine, client, mock_ws, path):
+        biz, vid = self._seed(engine)
+        failing = ws_returning(response(error="[INSUFFICIENT_PERMISSIONS] reader@example.com lacks USE CATALOG"))
+        mock_ws.statement_execution = failing.statement_execution
+
+        r = client.get(f"/api/businesses/{biz}/versions/{vid}/deployment/{path}")
+
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert "INSUFFICIENT_PERMISSIONS" in body["verification_error"]
+        assert "reader@example.com" not in body["verification_error"]
+        if path == "compare":
+            assert body["tables"]["model_only"] == []
+        if path == "uc-schema":
+            assert body["tables"] == []
+
+    @pytest.mark.parametrize("path", ["catalog-check", "uc-schema", "compare"])
+    def test_a_good_read_has_no_verification_error(self, engine, client, mock_ws, path):
+        biz, vid = self._seed(engine)
+        found = [["test_cat"]] if path == "catalog-check" else []
+        mock_ws.statement_execution = ws_returning(response(found)).statement_execution
+
+        r = client.get(f"/api/businesses/{biz}/versions/{vid}/deployment/{path}")
+
+        assert r.status_code == 200, r.text
+        assert r.json()["verification_error"] is None

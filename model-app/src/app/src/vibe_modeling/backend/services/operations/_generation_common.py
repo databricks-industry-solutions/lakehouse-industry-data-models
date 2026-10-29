@@ -31,15 +31,19 @@ from sqlmodel import select
 
 from ...core._names import agent_business_segment
 from ...core._paths import model_json_volume_candidates
+from ...core._sql import SqlStatementError, rows
 from ...db_models import AgentConfig, ModelVersion, Run, RunOperation
 from ..._query_helpers import (
     next_version_for_scope,
-    resolve_lineage_parent,
+    resolve_model_json_parent,
 )
 from ...version_resolution_parser import lookup_resolved_version
 from ...core._ids import session_id_to_bigint
+from ...error_sanitization import is_opaque_error, recorded_error_text
+from ...core._intents import AGENT_OP_ENLARGE_MVM, AGENT_OP_NEW_BASE_MODEL, AGENT_OP_SHRINK_ECM, AGENT_OP_UNINSTALL  # noqa: F401 - the first three re-exported to the primitives
 from ...core._warehouse import get_warehouse_id
 from ...core._widgets import build_widget_map
+from ...runtime_budget import runtime_budget_seconds as budget_seconds, stored_runtime_budget_hours
 from ...job_launcher import (
     build_job_tags_from_session,
     finalize_widgets_or_raise,
@@ -47,7 +51,16 @@ from ...job_launcher import (
     launch_run,
 )
 from ...model_sync import ModelSyncService, _SyncEmptyError
+from ...core._uc_privileges import SINGLE_CATALOG_STYLE
 from ._protocol import OperationDispatchHandle, OperationObservation, OperationResult
+from ._version_lifecycle import (
+    deploy_evicts_every_scope,
+    evict_deployed_siblings,
+    mark_version_deployed,
+    restore_evicted_deployments,
+    restore_superseded_priors,
+    supersede_same_scope_priors,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -56,20 +69,6 @@ logger = logging.getLogger(__name__)
 # rollback flow uses the short "ecm" / "mvm" form.
 SCOPE_LABEL_ECM = "Expanded Coverage Model - ECM"
 SCOPE_LABEL_MVM = "Minimum Viable Model - MVM"
-
-# Operation strings the agent recognises. Mirrors `MODEL_PRODUCING_OPS`
-# in `job_launcher.py` but kept locally so the primitives don't reach
-# into that frozenset (they're a layer above and shouldn't depend on the
-# launcher's bookkeeping).
-AGENT_OP_NEW_BASE_MODEL = "new base model"
-AGENT_OP_SHRINK_ECM = "shrink ecm"
-AGENT_OP_ENLARGE_MVM = "enlarge mvm"
-
-# SQL state name returned when a Delta table is missing — matches
-# progress_tracker._TABLE_NOT_FOUND. Pulled here so observe() can swallow
-# the early-poll case where the agent hasn't created its handshake row
-# yet without depending on progress_tracker.
-_TABLE_NOT_FOUND = "TABLE_OR_VIEW_NOT_FOUND"
 
 
 class _ShadowCtx:
@@ -92,69 +91,6 @@ class _ShadowCtx:
         return getattr(self._inner, name)
 
 
-def supersede_same_scope_priors(
-    session: Any,
-    business_id: str,
-    scope: str,
-    exclude_id: str,
-) -> list[str]:
-    """Flip every other ``completed`` ModelVersion of ``(business_id, scope)`` to ``superseded``.
-
-    The conceptual rule: at any point in time there is at most one
-    ``completed`` ModelVersion per ``(business_id, scope)``. Creating a
-    new ``completed`` version of a given scope implicitly retires every
-    previous ``completed`` version of the same scope. Different-scope
-    rows are untouched (an ECM and an MVM coexist as the current pair).
-
-    Returns the list of ids that were flipped — used by rollback to
-    restore them. Rows already in non-``completed`` terminal states
-    (``superseded``, ``failed``, ``cancelled``) are left alone and not
-    included in the returned list.
-
-    Raises ``ValueError`` if ``scope`` is empty/whitespace — legacy
-    unscoped rows are intentionally not swept (we don't know what
-    scope they belonged to and would risk superseding cross-scope).
-    """
-    if not scope or not scope.strip():
-        raise ValueError(
-            "supersede_same_scope_priors: scope must be a non-empty string; "
-            "refusing to sweep legacy unscoped ModelVersion rows"
-        )
-    rows = session.exec(
-        select(ModelVersion).where(
-            ModelVersion.business_id == business_id,
-            ModelVersion.scope == scope,
-            ModelVersion.id != exclude_id,
-            ModelVersion.status == "completed",
-        )
-    ).all()
-    flipped: list[str] = []
-    for row in rows:
-        row.status = "superseded"
-        session.add(row)
-        flipped.append(row.id)
-    return flipped
-
-
-def restore_superseded_priors(
-    session: Any,
-    auto_superseded_ids: list[str],
-) -> None:
-    """Reverse :func:`supersede_same_scope_priors` for rollback.
-
-    For each id in the list, if the row is still ``superseded``,
-    flip it back to ``completed``. Idempotent: rows that have since
-    been deleted, or moved to a different status, are left alone.
-    """
-    for vid in auto_superseded_ids or []:
-        if not vid:
-            continue
-        row = session.get(ModelVersion, vid)
-        if row is not None and row.status == "superseded":
-            row.status = "completed"
-            session.add(row)
-
-
 def get_agent_job_id(session: Any) -> Optional[int]:
     """Return the configured Databricks job id, or ``None`` if not configured.
 
@@ -175,11 +111,11 @@ def build_generation_widgets(
     business: Any,
     catalog: str,
     session_id: str,
+    runtime_budget_seconds: int,
     vibe_instructions: str,
     business_context_path: str,
     business_description_override: str,
     model_version: str,
-    model_folder: str,
     schema_prefix: str,
     naming_convention: str,
     primary_key_suffix: str,
@@ -198,9 +134,10 @@ def build_generation_widgets(
     classification_levels: str,
     housekeeping_columns: str,
     history_tracking_columns: str,
-    generate_samples: bool,
+    vibe_scope: str = "All Domains",
+    run_type: str = "Full Run",
 ) -> dict[str, str]:
-    """Build the ~28-widget map a generation-group agent op expects.
+    """Build the ~30-widget map a generation-group agent op expects.
 
     Thin wrapper around ``core._widgets.build_widget_map``. The signature
     accepts the agent's full ``operation`` + ``data_model_scopes`` strings
@@ -213,11 +150,11 @@ def build_generation_widgets(
         business=business,
         catalog=catalog,
         session_id=session_id,
+        runtime_budget_seconds=runtime_budget_seconds,
         vibe_instructions=vibe_instructions,
         business_context_path=business_context_path,
         business_description_override=business_description_override,
         model_version=model_version,
-        model_folder=model_folder,
         naming_convention=naming_convention,
         primary_key_suffix=primary_key_suffix,
         schema_prefix=schema_prefix,
@@ -236,7 +173,8 @@ def build_generation_widgets(
         classification_levels=classification_levels,
         housekeeping_columns=housekeeping_columns,
         history_tracking_columns=history_tracking_columns,
-        generate_samples=generate_samples,
+        vibe_scope=vibe_scope,
+        run_type=run_type,
     )
 
 
@@ -247,14 +185,15 @@ def widgets_from_params(
     params: dict,
     business: Any,
     session_id: str,
+    runtime_budget_seconds: int,
     model_version: str = "",
 ) -> dict[str, str]:
     """Project a primitive's validated ``params`` into agent widgets.
 
     All three generation primitives share the same field set apart from
     ``operation`` + ``data_model_scopes`` + ``model_version`` (which the
-    caller picks). The remaining fields come straight from the validated
-    params dict.
+    caller picks) and ``runtime_budget_seconds`` (the run's budget, not a step
+    param). The remaining fields come straight from the validated params dict.
     """
     return build_generation_widgets(
         operation=operation,
@@ -262,11 +201,11 @@ def widgets_from_params(
         business=business,
         catalog=params.get("deployment_catalog", ""),
         session_id=session_id,
+        runtime_budget_seconds=runtime_budget_seconds,
         vibe_instructions=params.get("model_vibes", ""),
         business_context_path=params.get("context_file", ""),
         business_description_override=params.get("business_description", ""),
         model_version=model_version,
-        model_folder=params.get("model_folder", ""),
         schema_prefix=params.get("schema_prefix", ""),
         naming_convention=params.get("naming_convention", "snake_case"),
         primary_key_suffix=params.get("primary_key_suffix", "_id"),
@@ -285,7 +224,6 @@ def widgets_from_params(
         classification_levels=params.get("classification_levels", ""),
         housekeeping_columns=params.get("housekeeping_columns", "No"),
         history_tracking_columns=params.get("history_tracking_columns", "No"),
-        generate_samples=bool(params.get("generate_samples", False)),
     )
 
 
@@ -305,14 +243,22 @@ def dispatch_generation_op(
 
     On a fresh launch, persist the new ``databricks_run_id`` onto the row so
     the orchestrator's resume scan can find it.
+
+    The runtime budget is the run's, stored on ``Run.parameters_json`` at
+    create and read here through ``ctx.inherited_params``, so every step of a
+    multi-step run and every retry or resume dispatches the same hours.
     """
     sid = generate_session_id()
+    agent_config = session.exec(select(AgentConfig).limit(1)).first()
     widgets = widgets_from_params(
         operation=operation,
         data_model_scopes=data_model_scopes,
         params=ctx.params,
         business=business,
         session_id=sid,
+        runtime_budget_seconds=budget_seconds(
+            stored_runtime_budget_hours(ctx.inherited_params, agent_config)
+        ),
         model_version=model_version,
     )
     widgets = finalize_widgets_or_raise(
@@ -382,6 +328,14 @@ def _persist_run_id(
     session.flush()
 
 
+# The session-row read after a finished job: a 50 s server wait, then polls
+# 2 s apart, about 110 s in total, so a warehouse waking up does not fail a
+# run whose model is already written.
+_SESSION_ROW_WAIT = "50s"
+_SESSION_ROW_TIMEOUT_S = 110.0
+_SESSION_ROW_POLL_S = 2.0
+
+
 @dataclass
 class _SessionRow:
     """Minimal projection of the agent's ``_business`` row used by
@@ -396,37 +350,16 @@ class _SessionRow:
     model_scope: str
 
 
-def _execute_sql(ws: Any, warehouse_id: str, sql: str) -> Optional[Any]:
-    """Run a SQL statement and return the response, or ``None`` if the
-    table doesn't exist yet (agent hasn't produced output)."""
-    try:
-        result = ws.statement_execution.execute_statement(
-            warehouse_id=warehouse_id,
-            statement=sql,
-            wait_timeout="30s",
-        )
-        status = getattr(result, "status", None)
-        err = getattr(status, "error", None) if status else None
-        msg = getattr(err, "message", "") if err else ""
-        if msg and _TABLE_NOT_FOUND in msg:
-            return None
-        if msg:
-            raise RuntimeError(f"SQL error: {msg}")
-        return result
-    except Exception as e:
-        if _TABLE_NOT_FOUND in str(e):
-            return None
-        raise
-
-
 def _read_session_row(
     ws: Any, warehouse_id: str, catalog: str, session_id_bigint: int,
 ) -> Optional[_SessionRow]:
     """Read the agent's session-status row for the current session.
 
     Returns ``None`` while the agent hasn't written its handshake row yet
-    (table missing or no matching row). The exact shape mirrors what
-    ``progress_tracker._poll_session_status_by_id`` returns; we don't
+    (table missing or no matching row); any other SQL failure raises
+    ``SqlStatementError``. The read runs once, after the job finished, so it
+    waits through a cold warehouse: 50 s, then polls up to about 110 s. The exact shape mirrors
+    what ``progress_tracker._poll_session_status_by_id`` returns; we don't
     import that helper because Phase 4 owns ``progress_tracker``.
     """
     sql = (
@@ -438,14 +371,14 @@ def _read_session_row(
         f"WHERE session_id = {session_id_bigint} "
         f"LIMIT 1"
     )
-    result = _execute_sql(ws, warehouse_id, sql)
-    if result is None:
+    found = rows(
+        ws, warehouse_id, sql,
+        wait_timeout=_SESSION_ROW_WAIT, timeout_s=_SESSION_ROW_TIMEOUT_S,
+        poll_interval_s=_SESSION_ROW_POLL_S, missing_table="none",
+    )
+    if not found or not found[0]:
         return None
-    data = getattr(result, "result", None)
-    arr = getattr(data, "data_array", None) if data else None
-    if not arr or not arr[0]:
-        return None
-    row = arr[0]
+    row = found[0]
     rj: Optional[dict] = None
     if row[3]:
         try:
@@ -490,6 +423,7 @@ def observe_generation_op(
     ws: Any,
     session: Any,
     scope_short: str,
+    agent_operation: str,
 ) -> OperationObservation:
     """Snapshot of an in-flight generation op.
 
@@ -592,9 +526,8 @@ def observe_generation_op(
     # 3b. Soft-failure check: the agent may have completed the Databricks
     #     job successfully but emitted a ``pipeline_error`` row in the
     #     ``_business`` Delta table (e.g. an in-job validation failure
-    #     short-circuited model production). Best-effort — wrapped in a
-    #     try/except because callers (adversarial tests, in-process
-    #     orchestrator) may not populate the SQL warehouse stub.
+    #     short-circuited model production). A row that cannot be read
+    #     fails the op too (see ``_check_pipeline_error``).
     pipeline_err = _check_pipeline_error(
         ws, session, ctx, handle.vibe_session_id,
     )
@@ -616,6 +549,7 @@ def observe_generation_op(
         scope_short=scope_short,
         model_json_payload=model_json_payload,
         drain_fn=handle.extra.get("progress_drain"),
+        agent_operation=agent_operation,
     )
 
 
@@ -625,11 +559,10 @@ def _check_pipeline_error(
     """Return the agent's pipeline_error message if one is recorded in
     the ``_business`` Delta row for this session, else ``""``.
 
-    Defensive: any exception (warehouse not configured, MagicMock-only
-    test stubs, malformed payload) returns ``""`` so the caller proceeds
-    on the happy path. Phase 3 may upgrade this to a structured pre-sync
-    health check; for now it preserves the legacy ``progress_tracker``
-    semantics that the smoke tests depend on.
+    ``""`` also when there is nothing to read: no session id, no warehouse
+    or catalog configured, no ``business`` table or no row for the session.
+    A read that fails (``SqlStatementError``) returns a failure message, so
+    the op fails instead of syncing a model the agent may have flagged.
     """
     if not vibe_session_id:
         return ""
@@ -640,8 +573,15 @@ def _check_pipeline_error(
     try:
         sid_bigint = session_id_to_bigint(vibe_session_id)
         status = _read_session_row(ws, warehouse_id, catalog, sid_bigint)
-    except Exception:
-        return ""
+    except SqlStatementError as exc:
+        logger.warning(
+            "Could not read the agent's session row for session %s: %s", vibe_session_id, exc,
+        )
+        return (
+            "The agent finished and wrote the model, but the app could not read "
+            f"the agent's run record to check it for errors ({exc.state}): {exc.message.rstrip('.')}. "
+            "Retry the run. If this happens again, ask an admin to check the SQL warehouse."
+        )
     if status is None:
         return ""
     if (
@@ -714,28 +654,19 @@ def _resolve_lineage_parent_for_success(
     """Pick the parent ``ModelVersion`` for a freshly-produced agent run.
 
     Order of preference:
-    1. Parse ``model.json``'s ``generated_from_version`` (e.g. ``"v1_ecm"``)
-       and look up the matching ``(business, version, scope)`` row. The
-       agent writes this tag durably; trust it across orchestrator
-       restarts where ``ctx.parent_version_id`` may have been rebuilt
-       without a parent.
+    1. The parent ``model.json`` names (the 5.3.3 ``lineage`` block, else
+       the ``generated_from_version`` tag), through
+       ``resolve_model_json_parent``. The agent writes it durably; trust it
+       across orchestrator restarts where ``ctx.parent_version_id`` may
+       have been rebuilt without a parent.
     2. ``ctx.parent_version_id`` — set by DAG factories at dispatch and
        carried through ``OperationContext``.
     3. ``None`` — the op has no parent (e.g. fresh ECM).
     """
     business_id = getattr(ctx, "business_id", "") or ""
-    if model_json_payload and isinstance(model_json_payload, dict):
-        # Accept either flat shape or {model: {...}} wrapper — the agent
-        # currently writes the wrapper but tests sometimes seed flat.
-        for blob in (model_json_payload, model_json_payload.get("model") or {}):
-            if not isinstance(blob, dict):
-                continue
-            tag = blob.get("generated_from_version")
-            if not tag:
-                continue
-            parent = resolve_lineage_parent(session, business_id, str(tag))
-            if parent is not None:
-                return parent
+    parent = resolve_model_json_parent(session, business_id, model_json_payload)
+    if parent is not None:
+        return parent
     parent_id = getattr(ctx, "parent_version_id", None)
     if parent_id:
         return session.get(ModelVersion, parent_id)
@@ -756,6 +687,7 @@ def _terminal_success(
     scope_short: str,
     model_json_payload: Optional[dict] = None,
     drain_fn: Any = None,
+    agent_operation: str,
 ) -> OperationObservation:
     """Create the ModelVersion, run Lakebase sync, return terminal success.
 
@@ -816,51 +748,51 @@ def _terminal_success(
         )
         new_version_num = agent_resolved
 
-    deployment_status = "deployed" if catalog else "draft"
-
-    # Capture sibling ids BEFORE flipping them so the rollback can
-    # restore the exact set.
-    superseded_ids: list[str] = []
-    if deployment_status == "deployed":
-        siblings = session.exec(
-            select(ModelVersion).where(
-                ModelVersion.business_id == ctx.business_id,
-                ModelVersion.deployment_status == "deployed",
-                ModelVersion.uc_catalog == (catalog or ""),
-                ModelVersion.id != "",  # placeholder; real check after MV created
-            )
-        ).all()
-        # Filter out any id that matches the not-yet-created MV (none yet,
-        # but keep the structure parallel to progress_tracker).
-        superseded_ids = [s.id for s in siblings]
-
     base_version_id = (
         lineage_parent.id
         if lineage_parent is not None
         else getattr(ctx, "parent_version_id", None)
     )
+    # The agent installs inline in every cataloging style, so a run with a
+    # catalog leaves the version installed there; its files and home
+    # ``_metamodel`` rows are in the same catalog.
     mv = ModelVersion(
         business_id=ctx.business_id,
         version=new_version_num,
         status="completed",
-        deployment_status=deployment_status,
         base_version_id=base_version_id,
         vibe_instructions=ctx.params.get("model_vibes", ""),
         scope=scope_short,
-        uc_catalog=catalog,
+        files_catalog=catalog or None,
         completion_date=datetime.now(timezone.utc),
     )
     session.add(mv)
     session.flush()
+    if catalog:
+        mark_version_deployed(session, mv, catalog, run_id=ctx.run_id)
+    deployment_status = mv.deployment_status
+
+    # Evict what the agent's deploy replaced in the catalog, outside the sync
+    # savepoint: the agent dropped or overwrote it whatever our sync does.
+    # Only a same-scope eviction is restorable on rollback; the other scope's
+    # schemas are gone physically (deploy_evicts_every_scope).
+    superseded_ids: list[str] = []
+    if deployment_status == "deployed":
+        every_scope = deploy_evicts_every_scope(
+            agent_operation,
+            cataloging_style=ctx.params.get("cataloging_style", SINGLE_CATALOG_STYLE),
+        )
+        evicted = evict_deployed_siblings(session, mv, same_scope=not every_scope, run_id=ctx.run_id)
+        superseded_ids = [] if every_scope else evicted
 
     # Promote-and-sync region wrapped in a SAVEPOINT. The mv was flushed
     # OUTSIDE it (above), so the row survives a rollback. Inside the savepoint:
     # flip every other ``completed`` MV in (business, scope_short) to
     # ``superseded`` (the explorer relies on at most one ``completed`` per scope
-    # as the current view; cross-scope rows are untouched), un-supersede our
-    # siblings, then sync. On any raise the savepoint reverts the supersede
-    # flips AND the partial element writes, so the prior good version stays
-    # active and un-superseded and the user keeps seeing the last good model.
+    # as the current view; cross-scope rows are untouched), then sync. On any
+    # raise the savepoint reverts the supersede flips AND the partial element
+    # writes, so the prior good version stays active and un-superseded and the
+    # user keeps seeing the last good model.
     auto_superseded_ids: list[str] = []
     sync_succeeded = True
     sync_error = ""
@@ -869,12 +801,6 @@ def _terminal_success(
             auto_superseded_ids = supersede_same_scope_priors(
                 session, ctx.business_id, scope_short, mv.id,
             )
-            # Un-supersede our siblings: flip their deployment_status to uninstalled.
-            for sib_id in superseded_ids:
-                sib = session.get(ModelVersion, sib_id)
-                if sib is not None:
-                    sib.deployment_status = "uninstalled"
-                    session.add(sib)
 
             sync = ModelSyncService(session, ws, warehouse_id)
             sync._drain_progress_fn = drain_fn
@@ -915,7 +841,7 @@ def _terminal_success(
         )
     except Exception as e:
         sync_succeeded = False
-        sync_error = repr(e)
+        sync_error = recorded_error_text(e, f"Lakebase sync of version {mv.id}", repr(e))
         # Savepoint rolled back: the supersede flips and partial writes are
         # undone, so nothing was auto-superseded. Surface the failure on the
         # (surviving) mv row so the version detail page banner fires. The op
@@ -923,7 +849,7 @@ def _terminal_success(
         # sync_state is the user signal.
         auto_superseded_ids = []
         mv.sync_state = "incomplete_metadata"
-        mv.sync_error_text = str(e)[:500]
+        mv.sync_error_text = sync_error if is_opaque_error(e) else str(e)[:500]
         session.add(mv)
         session.commit()
         logger.exception(
@@ -1031,7 +957,8 @@ def rollback_generation_op(
          guide §12); otherwise no-op.
       2. Clear Lakebase model data (Domain/Product/Attribute/FK rows).
       3. Delete the ModelVersion row itself.
-      4. Restore previously-superseded siblings to ``deployment_status="deployed"``.
+      4. Restore the same-scope versions it evicted to ``deployed`` (an
+         every-scope eviction records none: the agent dropped those schemas).
     """
     version_id = rollback_state.get("version_id", "")
     catalog = rollback_state.get("catalog", "")
@@ -1057,7 +984,7 @@ def rollback_generation_op(
             sid = generate_session_id()
             sid_bigint = session_id_to_bigint(sid)
             widgets = {
-                "operation": "uninstall model version",
+                "operation": AGENT_OP_UNINSTALL,
                 "business_name": business_name,
                 "deployment_catalog": catalog,
                 "model_version": str(model_version_int),
@@ -1068,7 +995,7 @@ def rollback_generation_op(
                     session,
                     business_name=business_name,
                     version=str(model_version_int),
-                    operation="uninstall model version",
+                    operation=AGENT_OP_UNINSTALL,
                     session_id=sid,
                 )
                 launch_run(ws, job_id, widgets, job_tags=job_tags)
@@ -1099,12 +1026,8 @@ def rollback_generation_op(
         if mv is not None:
             session.delete(mv)
 
-    # 4. Restore superseded siblings to deployed.
-    for sib_id in superseded_ids:
-        sib = session.get(ModelVersion, sib_id)
-        if sib is not None:
-            sib.deployment_status = "deployed"
-            session.add(sib)
+    # 4. Restore the same-scope versions the version evicted.
+    restore_evicted_deployments(session, superseded_ids, catalog=catalog or None)
 
     # 5. Restore status='superseded' siblings flipped by
     #    supersede_same_scope_priors back to 'completed'.

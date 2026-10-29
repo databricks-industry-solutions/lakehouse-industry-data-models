@@ -22,6 +22,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
+from ...core._intents import AGENT_OP_GENERATE_SAMPLES
 from ...db_models import AgentConfig
 from ...job_launcher import (
     build_job_tags_from_session,
@@ -29,7 +30,7 @@ from ...job_launcher import (
     launch_run,
     session_id_to_bigint,
 )
-from ._deployment_widgets import scope_label
+from ._deployment_widgets import CATALOG_NAME_PATTERN, scope_label
 from ._protocol import (
     Operation,
     OperationContext,
@@ -43,7 +44,7 @@ class GenerateSamplesParams(BaseModel):
     """Parameters for the ``generate_samples`` primitive."""
 
     business_name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]+$")
-    deployment_catalog: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]+$")
+    deployment_catalog: str = Field(min_length=1, pattern=CATALOG_NAME_PATTERN)
     schema_prefix: str = ""
     scope: Literal["ecm", "mvm"]
     model_version: int = Field(gt=0)
@@ -75,7 +76,7 @@ def _build_generate_samples_widgets(
     ``backend.job_launcher.map_run_params_to_widgets``).
     """
     return {
-        "operation": "generate sample data",
+        "operation": AGENT_OP_GENERATE_SAMPLES,
         "business_name": p.business_name,
         "deployment_catalog": p.deployment_catalog,
         "data_model_scopes": scope_label(p.scope),
@@ -118,6 +119,8 @@ class GenerateSamples(Operation):
     params_model = GenerateSamplesParams
     is_idempotent = True
     produces_version = False
+    # Rollback undoes nothing (see ``rollback``): the sample rows stand.
+    rollback_is_noop = True
 
     def dispatch(
         self,

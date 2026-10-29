@@ -370,7 +370,7 @@ class HandoffIn(BaseModel):
 
 
 class HandoffPrompt(BaseModel):
-    key: Literal["continue", "build", "gold", "validate", "document"]
+    key: Literal["continue", "build", "validate", "gold", "build_gold", "validate_gold", "document"]
     title: str
     skill: str
     prompt: str

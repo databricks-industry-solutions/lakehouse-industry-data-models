@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "a
 
 from vibe_modeling.backend.core._names import (
     agent_business_segment,
+    escape_sql_literal,
     metamodel_display_business,
     sanitize_catalog_segment,
     sanitize_tag,
@@ -250,3 +251,22 @@ class TestSyncModelWarning:
         assert not caplog.records, (
             f"empty name should not warn, got: {[r.getMessage() for r in caplog.records]}"
         )
+
+
+class TestEscapeSqlLiteralNulBytes:
+    """NUL bytes are stripped (Databricks SQL rejects them) and the loss is
+    logged with a count, never silently."""
+
+    def test_strips_and_warns_with_count(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="vibe_modeling.backend.core._names"):
+            assert escape_sql_literal("a\x00b'\x00c") == "ab''c"
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert "2 NUL" in warnings[0].getMessage()
+        # The value is not logged.
+        assert "ab" not in warnings[0].getMessage()
+
+    def test_no_warning_without_nul(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="vibe_modeling.backend.core._names"):
+            assert escape_sql_literal("it's") == "it''s"
+        assert not [r for r in caplog.records if r.levelno == logging.WARNING]

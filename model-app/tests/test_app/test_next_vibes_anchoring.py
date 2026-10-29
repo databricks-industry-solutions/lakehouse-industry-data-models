@@ -203,6 +203,24 @@ class TestMaterializeAnchoring:
             assert link.product_id == prod.id
             assert link.needs_link_review is False
 
+    def test_column_level_target_anchors_at_product(self, engine):
+        """A ``domain.product.column`` target resolves at the product; the
+        column segment is accepted and ignored (no attribute anchor)."""
+        with Session(engine) as session:
+            biz_id, vid = _seed_version(session)
+            prod = session.exec(
+                select(Product).where(Product.version_id == vid, Product.name == "purchase_order")
+            ).one()
+            payload = _payload(_finding(
+                1, "anything", target="procurement.purchase_order.id"))
+            ModelSyncService(session).materialize_next_vibe_inputs(vid, biz_id, payload)
+            session.commit()
+            link = session.exec(
+                select(VibeInputContextLink).where(VibeInputContextLink.version_id == vid)
+            ).one()
+            assert link.product_id == prod.id
+            assert link.attribute_id is None
+
     def test_bare_domain_target_resolves_domain_unflagged(self, engine):
         """A PRIORITY directive's bare (dotless) target keeps the old
         domain-level resolution and is NOT treated as prose inference."""

@@ -764,12 +764,12 @@ class TestCancelWithRollback:
     ):
         """Per §6.3: refuse rollback if the job is TERMINATED/SUCCESS.
 
-        The route should map ``CancelResult(ok=False)`` to a 409 response
-        (or include ok=False in the body) — either way the run must NOT
-        end up in 'cancelled' status.
+        The route maps a ``CancelResult`` with a ``refusal_reason`` to a 409,
+        resumes tracking, and leaves the run out of 'cancelled'.
         """
         bid = seed_business
         from vibe_modeling.backend.services.orchestrator import (
+            CANCEL_REFUSED_PHASE_SUCCEEDED,
             CancelResult,
         )
 
@@ -806,11 +806,12 @@ class TestCancelWithRollback:
                 {
                     "op": {"operation_name": "install", "step_index": 0},
                     "error": (
-                        "Refusing rollback: in-flight Databricks job has "
-                        "TERMINATED/SUCCESS"
+                        "Cancel-with-rollback refused: the Databricks job "
+                        "of step 'install' already finished successfully"
                     ),
                 }
             ],
+            refusal_reason=CANCEL_REFUSED_PHASE_SUCCEEDED,
         )
         from vibe_modeling.backend.core._tracker import _TrackerDependency
 
@@ -824,17 +825,9 @@ class TestCancelWithRollback:
 
         resp = client_with_agent.post(f"/api/businesses/{bid}/runs/{run_id}/cancel-with-rollback")
 
-        # Accept 409 or 200-with-ok-false; reject anything that pretends
-        # the cancel succeeded.
-        assert resp.status_code in (200, 409), (
-            f"safety-gate refusal must be 200(ok=False) or 409; "
-            f"got {resp.status_code}: {resp.text}"
-        )
-        if resp.status_code == 200:
-            data = resp.json()
-            assert data.get("ok") is False, (
-                f"safety-gate refusal must surface ok=False in body: {data}"
-            )
+        assert resp.status_code == 409, resp.text
+        assert "finished successfully" in resp.json()["detail"]
+        tracker.start_tracking.assert_called_with(run_id)
 
         # Run must NOT have been flipped to cancelled.
         with Session(engine) as session:

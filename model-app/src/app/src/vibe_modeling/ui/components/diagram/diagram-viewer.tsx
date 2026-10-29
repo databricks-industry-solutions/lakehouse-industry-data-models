@@ -12,6 +12,7 @@ import "./diagram.css";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { DiagramControls } from "./diagram-controls";
+import { DomainSelect } from "./domain-select";
 import { TableNode, type TableNodeData } from "./table-node";
 import { DomainGroupNode, type DomainGroupData } from "./domain-group-node";
 import { CrowsFootEdge, CrowsFootMarkerDefs } from "./crows-foot-edge";
@@ -96,9 +97,10 @@ interface DiagramViewerProps {
    *  meaningful "navigate" (e.g. it never shows the domain picker), it can
    *  omit this and domain-change interactions are simply inert. */
   onDomainNavigate?: (domain: string | null) => void;
-  /** Hide the toolbar's own domain dropdown, e.g. when a host renders an
-   *  equivalent picker elsewhere (the domain page title, item 3). Defaults
-   *  to true (unchanged toolbar). */
+  /** Hide the toolbar's own domain dropdown on surfaces that only follow a
+   *  focused input (input review, following pane). Defaults to true: the
+   *  model and domain pages keep the diagram's domain selection inside the
+   *  diagram tab. */
   showDomainSelect?: boolean;
 }
 
@@ -644,21 +646,36 @@ function DiagramCanvas({
 
   if (error) {
     const isTimeout = error.toLowerCase().includes("timed out");
+    // The domain dropdown stays reachable when a layout fails (e.g. the
+    // all-domains layout times out on a large model), so the user can still
+    // open a single domain's diagram instead of only retrying.
     return (
-      <div className="flex flex-1 items-center justify-center text-muted-foreground min-h-[400px]">
-        <div className="text-center space-y-3">
-          <p>Failed to load diagram</p>
-          <p className="text-sm text-destructive">
-            {isTimeout
-              ? "Layout computation timed out - the model may be too large for the current compute."
-              : error}
-          </p>
-          <button
-            onClick={() => setRetryCount((c) => c + 1)}
-            className="px-4 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
-          >
-            Retry
-          </button>
+      <div className="flex flex-col flex-1">
+        {showDomainSelect !== false && (
+          <div className="flex items-center gap-3 py-2">
+            <DomainSelect
+              domains={domains}
+              value={selectedDomain}
+              onChange={onDomainChange}
+              portalContainer={portalContainer}
+            />
+          </div>
+        )}
+        <div className="flex flex-1 items-center justify-center text-muted-foreground min-h-[400px]">
+          <div className="text-center space-y-3">
+            <p>Failed to load diagram</p>
+            <p className="text-sm text-destructive">
+              {isTimeout
+                ? "Layout computation timed out - the model may be too large for the current compute."
+                : error}
+            </p>
+            <button
+              onClick={() => setRetryCount((c) => c + 1)}
+              className="px-4 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              Retry
+            </button>
+          </div>
         </div>
       </div>
     );

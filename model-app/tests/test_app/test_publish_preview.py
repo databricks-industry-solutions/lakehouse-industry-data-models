@@ -22,6 +22,7 @@ import pytest
 from fastapi import HTTPException
 from sqlmodel import Session
 
+from _test_app import make_test_app
 from vibe_modeling.backend.db_models import AgentConfig, Business, ModelVersion
 from vibe_modeling.backend.models import ChangeStatus
 from vibe_modeling.backend.model_sync import ModelSyncService
@@ -86,7 +87,8 @@ def _run(engine, bid, vid, http, **kwargs):
     conn = GithubSourceConnector(http=http)
     with Session(engine) as session:
         return compute_publish_preview(
-            _cfg(), session=session, business_id=bid, version_id=vid, connector=conn, **kwargs
+            _cfg(), session=session, business_id=bid, version_id=vid,
+            app_config=None, ws=None, connector=conn, **kwargs,
         )
 
 
@@ -226,6 +228,7 @@ def test_business_404(engine):
         with Session(engine) as session:
             compute_publish_preview(
                 _cfg(), session=session, business_id="ghost", version_id=vid,
+                app_config=None, ws=None,
                 connector=GithubSourceConnector(http=_FakeHttp({})),
             )
     assert ei.value.status_code == 404
@@ -238,6 +241,7 @@ def test_version_404_or_business_mismatch(engine):
         with Session(engine) as session:
             compute_publish_preview(
                 _cfg(), session=session, business_id=other_bid, version_id=vid,
+                app_config=None, ws=None,
                 connector=GithubSourceConnector(http=_FakeHttp({})),
             )
     assert ei.value.status_code == 404
@@ -257,7 +261,8 @@ def test_never_fetches_artifacts(engine):
     )
     with Session(engine) as session:
         res = compute_publish_preview(
-            _cfg(), session=session, business_id=bid, version_id=vid, connector=conn
+            _cfg(), session=session, business_id=bid, version_id=vid,
+            app_config=None, ws=None, connector=conn,
         )
     assert res.diff is not None
     # No raw fetch should hit an artifact sub-dir (schemas/diagram/docs/...).
@@ -280,6 +285,23 @@ def test_baseline_fetch_failure_degrades_to_manual(engine):
     assert res.manual_needed is True
     assert res.diff is None
     # candidates surfaced so the user can pick another (raw SourceModelRef.id).
+    assert any(c.id == "v1_ecm" for c in res.candidates)
+
+
+@pytest.mark.parametrize(
+    "doc",
+    ["[1, 2]", '"text"', "42", "null", '{"model": [1]}', '{"model": "text"}'],
+    ids=["array", "string", "number", "null", "envelope-array", "envelope-string"],
+)
+def test_non_object_baseline_degrades_to_manual(engine, doc):
+    """A baseline model.json that parses but is not a JSON object (bare or
+    inside the ``{"model": ...}`` envelope) is unreadable: manual, never a 500."""
+    bid, vid = _seed(engine, scope="ecm")
+    http = _industry_listing_http("test_retail", {"v1": ["ecm"]}, model_doc=doc)
+    res = _run(engine, bid, vid, http)
+    assert res.manual_needed is True
+    assert res.tier == "none"
+    assert res.diff is None
     assert any(c.id == "v1_ecm" for c in res.candidates)
 
 
@@ -357,25 +379,28 @@ def test_industry_folder_one_segment_override(engine):
 # ---------------------------------------------------------------------------
 
 
-def _client_for(engine):
-    from fastapi import FastAPI
+def _client_for(engine, *, config=None, ws=None):
     from fastapi.testclient import TestClient
 
     from vibe_modeling.backend.core._config import AppConfig
-    from vibe_modeling.backend.core._defaults import _ConfigDependency
+    from vibe_modeling.backend.core._defaults import (
+        _ConfigDependency,
+        _WorkspaceClientDependency,
+    )
     from vibe_modeling.backend.core._roles import require_modeler
     from vibe_modeling.backend.core.lakebase import _LakebaseDependency
     from vibe_modeling.backend.routes.industry_models import router as im_router
 
-    app = FastAPI()
-    app.include_router(im_router)
+    app = make_test_app(im_router)
 
     def override_session():
         with Session(engine) as session:
             yield session
 
     app.dependency_overrides[_LakebaseDependency.__call__] = override_session
-    app.dependency_overrides[_ConfigDependency.__call__] = lambda: AppConfig(app_name="test")
+    app.dependency_overrides[_ConfigDependency.__call__] = lambda: config or AppConfig(app_name="test")
+    app_sp_ws = ws if ws is not None else object()
+    app.dependency_overrides[_WorkspaceClientDependency.__call__] = lambda: app_sp_ws
     app.dependency_overrides[require_modeler] = lambda: object()
     return TestClient(app)
 
@@ -386,10 +411,10 @@ def test_diff_out_is_json_serializable(engine, monkeypatch):
     bid, vid = _seed(engine, scope="ecm")
     http = _industry_listing_http("test_retail", {"v1": ["ecm"]}, model_doc=_SAMPLE_BASELINE_DOC)
 
-    def _fake_build(repo_owner="", repo_name="", **_):  # noqa: ARG001
+    def _fake_build(cfg, app_config, ws, *, repo_owner="", repo_name="", **_):  # noqa: ARG001
         return GithubSourceConnector(http=http)
 
-    monkeypatch.setattr(svc, "build_github_connector", _fake_build)
+    monkeypatch.setattr(svc, "build_source_connector", _fake_build)
 
     from vibe_modeling.backend.routes.industry_models import PublishPreviewOut
 
@@ -402,3 +427,140 @@ def test_diff_out_is_json_serializable(engine, monkeypatch):
     # Each product row must be a flat {domain, product, attribute, status} dict.
     for row in body["diff"]["products"]:
         assert set(row) >= {"domain", "product", "attribute", "status"}
+
+
+# ---------------------------------------------------------------------------
+# Read-auth: the preview uses the configured source read-auth (6hcQ6HmWwv5CXXMq)
+# ---------------------------------------------------------------------------
+
+
+def test_route_threads_config_and_app_sp_client_to_source_resolver(engine, monkeypatch):
+    """The route hands the stored AgentConfig, the AppConfig and the app-SP
+    ``ws`` to ``build_source_connector`` (the browse/download resolver), with
+    the configured repo pointers."""
+    from vibe_modeling.backend.core._config import AppConfig
+    from vibe_modeling.backend.services import publish_preview as svc
+
+    bid, vid = _seed(engine, scope="ecm")
+    with Session(engine) as session:
+        session.add(AgentConfig(
+            github_repo_owner="acme", github_repo_name="private-models",
+            source_auth_mode="token",
+            source_token_secret_scope="sc", source_token_secret_key="k",
+        ))
+        session.commit()
+    http = _industry_listing_http("test_retail", {"v1": ["ecm"]}, model_doc=_SAMPLE_BASELINE_DOC)
+    captured: dict = {}
+
+    def _spy(cfg, app_config, ws, *, repo_owner="", repo_name="", **kwargs):
+        captured.update(
+            cfg=cfg, app_config=app_config, ws=ws,
+            repo_owner=repo_owner, repo_name=repo_name, extra=kwargs,
+        )
+        return GithubSourceConnector(http=http)
+
+    monkeypatch.setattr(svc, "build_source_connector", _spy)
+    app_config = AppConfig(app_name="test")
+    app_sp_ws = object()
+
+    client = _client_for(engine, config=app_config, ws=app_sp_ws)
+    resp = client.post(f"/api/businesses/{bid}/model-versions/{vid}/publish-preview", json={})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["tier"] == "same_scope_latest"
+    assert captured["cfg"].source_auth_mode == "token"
+    assert captured["cfg"].source_token_secret_scope == "sc"
+    assert captured["app_config"] is app_config
+    assert captured["ws"] is app_sp_ws
+    assert captured["repo_owner"] == "acme"
+    assert captured["repo_name"] == "private-models"
+    assert captured["extra"] == {}
+
+
+def test_service_builds_token_authenticated_connector(engine, monkeypatch):
+    """Through the real resolver: a token-mode config with a readable secret
+    yields a connector whose read auth is ``token``, with no degrade error.
+    The secret is read through the app-SP ``ws`` handed to the service."""
+    import base64
+
+    from vibe_modeling.backend.core._config import AppConfig
+    from vibe_modeling.backend.services import publish_preview as svc
+    from vibe_modeling.backend.sources import github as gh
+
+    monkeypatch.setattr(gh, "_SECRET_CACHE", {})
+
+    class _Secret:
+        def __init__(self, value):
+            self.value = base64.b64encode(value.encode("utf-8")).decode("ascii")
+
+    class _Secrets:
+        def __init__(self):
+            self.calls: list[tuple[str, str]] = []
+
+        def get_secret(self, scope, key):
+            self.calls.append((scope, key))
+            return _Secret("pat-" + "value")
+
+    class _Ws:
+        def __init__(self):
+            self.secrets = _Secrets()
+
+    bid, vid = _seed(engine, scope="ecm")
+    http = _industry_listing_http("test_retail", {"v1": ["ecm"]}, model_doc=_SAMPLE_BASELINE_DOC)
+    built: list = []
+    real_build = svc.build_source_connector
+
+    def _wrap(*args, **kwargs):
+        conn = real_build(*args, **kwargs)
+        built.append(conn)
+        return GithubSourceConnector(http=http)
+
+    monkeypatch.setattr(svc, "build_source_connector", _wrap)
+    ws = _Ws()
+    cfg = AgentConfig(
+        github_repo_owner="acme", github_repo_name="private-models",
+        source_auth_mode="token",
+        source_token_secret_scope="sc", source_token_secret_key="k",
+    )
+    with Session(engine) as session:
+        res = compute_publish_preview(
+            cfg, session=session, business_id=bid, version_id=vid,
+            app_config=AppConfig(app_name="test"), ws=ws,
+        )
+
+    assert res.tier == "same_scope_latest"
+    assert ws.secrets.calls == [("sc", "k")]
+    caps = built[0].capabilities()
+    assert caps.auth_mode == "token"
+    assert caps.auth_error is None
+    assert isinstance(built[0]._http, gh.BearerTokenTransport)
+
+
+def test_signature_requires_app_config_and_ws():
+    """``app_config`` and ``ws`` are required keyword-only arguments, so no
+    caller can silently drop the app-SP client."""
+    import inspect
+
+    params = inspect.signature(compute_publish_preview).parameters
+    for name in ("app_config", "ws"):
+        assert params[name].kind is inspect.Parameter.KEYWORD_ONLY
+        assert params[name].default is inspect.Parameter.empty
+
+
+def test_none_ws_never_reaches_the_resolver(engine, monkeypatch):
+    """Without an injected connector a ``None`` ws is refused before the
+    resolver runs, so no negative secret read is cached for browse/download."""
+    from vibe_modeling.backend.core._config import AppConfig
+    from vibe_modeling.backend.services import publish_preview as svc
+
+    def _boom(*a, **k):  # noqa: ARG001
+        raise AssertionError("build_source_connector must not run with ws=None")
+
+    monkeypatch.setattr(svc, "build_source_connector", _boom)
+    bid, vid = _seed(engine, scope="ecm")
+    with Session(engine) as session:
+        with pytest.raises(ValueError):
+            compute_publish_preview(
+                _cfg(), session=session, business_id=bid, version_id=vid,
+                app_config=AppConfig(app_name="test"), ws=None,
+            )

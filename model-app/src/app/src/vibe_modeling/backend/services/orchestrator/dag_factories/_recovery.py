@@ -1,10 +1,12 @@
 """DAG factories for the recovery-flavoured intents.
 
-Two intents land here per ``docs/orchestrator-design.md`` §3 + §8:
+Two shapes land here per ``docs/orchestrator-design.md`` §3 + §8:
 
-* ``revert`` — 2-op DAG (``uninstall`` of the currently-deployed version,
-  then ``install`` of the prior version we're restoring).
-* ``import-from-volume`` — 1-op DAG. The ``import_from_volume`` primitive
+* :func:`uninstall_then_install` - the 2-op DAG that installs a version into
+  a catalog another version occupies (``dag_for_install``).
+* :func:`uninstalls_first` - the same uninstalls in front of any DAG, for
+  versions of another business a run replaces (a source industry).
+* ``import-from-volume`` - 1-op DAG. The ``import_from_volume`` primitive
   is synthetic (no agent job) and does the full read → ModelVersion
   insert → Lakebase sync inline; the factory just hands it the volume
   path.
@@ -18,55 +20,11 @@ calls :func:`validate_dag` before passing the DAG to
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
 from typing import Optional
 
 from ..dag import Dag, OperationStep
-
-
-@dataclass(frozen=True, slots=True)
-class RevertRequest:
-    """Inputs the revert factory needs.
-
-    The route resolves these from the current vs. target ModelVersion
-    rows (current = the version being un-installed; target = the prior
-    version being re-installed) and the agent config. Keeping them in a
-    typed payload — rather than a free-form dict — means the factory
-    signature is unambiguous and a missing field fails at construction
-    rather than buried inside an ``OperationStep.params``.
-    """
-
-    business_name: str
-    """The agent-side business slug — lowercased, snake_case."""
-
-    deployment_catalog: str
-    """UC catalog the install/uninstall ops target."""
-
-    current_model_version: int
-    """Integer version (e.g. 3) being uninstalled."""
-
-    target_model_version: int
-    """Integer version (e.g. 2) being re-installed."""
-
-    scope: str = "mvm"
-    """``ecm`` or ``mvm``. Must match how the version was originally
-    installed; both ops in the DAG use the same scope."""
-
-    schema_prefix: str = ""
-    """Schema prefix applied at install time — used by both ops to
-    locate / re-create the same schemas. ``""`` for Catalog-per-* styles
-    where the per-scope catalog already isolates ECM from MVM."""
-
-    cataloging_style: str = "One Catalog"
-    """One of ``One Catalog`` / ``Catalog per Division`` / ``Catalog per
-    Domain``. Drives how install lays out schemas; uninstall re-derives
-    from this same value to find them."""
-
-    target_import_source_path: Optional[str] = None
-    """``ModelVersion.import_source_path`` of the version being re-installed.
-    Set for imported and reference-seeded versions whose model.json lives
-    somewhere other than the agent-output convention path. Threaded through
-    to the install step's ``context_file_override``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,61 +49,45 @@ class ImportFromVolumeRequest:
     """Optional override; primitive resolves from
     :attr:`OperationContext.business_id` when blank."""
 
+    scope: Optional[str] = None
+    """The admin's ECM / MVM choice; the primitive settles the scope with
+    ``import_model.import_scope``."""
 
-def dag_for_revert(req: RevertRequest) -> Dag:
-    """Build the 2-op revert DAG.
 
-    Step 0: ``uninstall`` of the currently-deployed version. Strips the
-    UC schemas the install laid down so the install on step 1 can lay
-    them down freshly without colliding (especially in One Catalog mode
-    where ECM and MVM share a catalog and only the schema prefix
-    distinguishes them).
+def uninstall_then_install(intent: str, uninstall: dict, install: dict) -> Dag:
+    """The 2-op DAG that uninstalls one version, then installs another.
 
-    Step 1: ``install`` of the prior version. Re-creates the same
-    catalog/schema shape against the saved model.json for the target
-    version. ``model_version`` here is the integer version being
-    restored — the orchestrator does not pull it from a prior step
-    because no prior step produced the version (the version exists
-    already; we're re-deploying it).
-
-    Per spec §3, the DAG carries no inter-step ``needs_version_from``:
-    both ops operate on existing versions whose ids the route already
-    knows. The :class:`Dag` is linear and the orchestrator runs the
-    install only after the uninstall succeeds.
+    Step 0 strips the UC schemas the old install laid down, so step 1 finds
+    none of its schemas and installs the whole file fresh (in One Catalog
+    mode ECM and MVM share a catalog and only the schema prefix tells them
+    apart). Both ops act on versions that already exist, so the DAG carries
+    no ``needs_version_from``; the orchestrator runs the install only after
+    the uninstall succeeds. If the install fails, the orchestrator rolls
+    back only the steps that succeeded (the uninstall's rollback is a no-op)
+    and never the failed install: the old version stays uninstalled, the new
+    one is not deployed, the head is unchanged, and any schemas the agent
+    created before it failed stay in the catalog (only a cancel mid-step
+    reaches ``Install.rollback``).
     """
     return Dag(
-        intent="revert",
+        intent=intent,
         steps=(
-            OperationStep(
-                name="uninstall",
-                params={
-                    "business_name": req.business_name,
-                    "deployment_catalog": req.deployment_catalog,
-                    "scope": req.scope,
-                    "model_version": req.current_model_version,
-                    "schema_prefix": req.schema_prefix,
-                    "cataloging_style": req.cataloging_style,
-                },
-            ),
-            OperationStep(
-                name="install",
-                params={
-                    "business_name": req.business_name,
-                    "deployment_catalog": req.deployment_catalog,
-                    "scope": req.scope,
-                    "model_version": req.target_model_version,
-                    "schema_prefix": req.schema_prefix,
-                    "cataloging_style": req.cataloging_style,
-                    # Imported / reference-seeded versions live outside the
-                    # agent-output convention path — route the actual
-                    # model.json location to the install widget builder.
-                    "context_file_override": req.target_import_source_path,
-                },
-                # Version is known up-front — not produced by step 0.
-                needs_version_from=None,
-            ),
+            OperationStep(name="uninstall", params=uninstall),
+            OperationStep(name="install", params=install, needs_version_from=None),
         ),
     )
+
+
+def uninstalls_first(dag: Dag, uninstalls: Iterable[dict]) -> Dag:
+    """``dag`` with an ``uninstall`` step per ``uninstalls`` params in front:
+    the :func:`uninstall_then_install` shape for versions of another
+    business the run replaces (a source industry,
+    ``orchestrator.source_industry``). Each uninstall names its version
+    (``version_id``), so its row acts on that one; the later steps are
+    unchanged. A failure of a later step leaves those versions
+    uninstalled."""
+    steps = tuple(OperationStep(name="uninstall", params=params) for params in uninstalls)
+    return replace(dag, steps=steps + dag.steps) if steps else dag
 
 
 def dag_for_import_from_volume(req: ImportFromVolumeRequest) -> Dag:
@@ -167,6 +109,8 @@ def dag_for_import_from_volume(req: ImportFromVolumeRequest) -> Dag:
         params["deployment_catalog"] = req.deployment_catalog
     if req.business_name:
         params["business_name"] = req.business_name
+    if req.scope:
+        params["scope"] = req.scope
 
     return Dag(
         intent="import-from-volume",

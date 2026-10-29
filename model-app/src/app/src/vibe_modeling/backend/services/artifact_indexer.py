@@ -28,6 +28,7 @@ from typing import Optional
 from sqlalchemy import insert as sa_insert
 from sqlmodel import Session, select
 
+from ..core._paths import is_app_backup
 from ._bulk_model_io import _row_values
 
 logger = logging.getLogger(__name__)
@@ -175,7 +176,8 @@ def index_artifacts_at_path(
     if not ws or not volume_root_path:
         return 0
     try:
-        files = walk_volume_dir(ws, volume_root_path)
+        # The app's backups (``model.json.pre090``) are not artifacts of the version.
+        files = [f for f in walk_volume_dir(ws, volume_root_path) if not is_app_backup(f)]
         if not files:
             logger.info(
                 "artifact_indexer: no files under %s for version %s",

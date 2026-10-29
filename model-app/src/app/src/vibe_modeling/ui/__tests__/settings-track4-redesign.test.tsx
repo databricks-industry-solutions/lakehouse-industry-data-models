@@ -33,7 +33,8 @@ import {
   AgentConfigSection,
   DiagramSettingsSection,
 } from "@/routes/_sidebar/settings";
-import { firstRunFetcher } from "./helpers/first-run";
+import { firstRunFetcher, jsonResponse } from "./helpers/first-run";
+import { renderWithRouter } from "./helpers/router-wrapper";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -66,6 +67,7 @@ describe("Settings tab IA (Track 4)", () => {
     expect(parseTab("diagram")).toBe("preferences");
     expect(parseTab("warehouse")).toBe("platform");
     expect(parseTab("github")).toBe("sources");
+    expect(parseTab("assessment")).toBe("platform");
   });
 
   it("falls back to agent for unknown tab values", () => {
@@ -106,8 +108,9 @@ describe("Settings sections render (five tabs)", () => {
     );
     const qc = makeClient();
 
-    render(
-      <QueryClientProvider client={qc}>
+    // The Platform tab's Optional features cards carry help links, so this needs a router.
+    renderWithRouter(
+      <>
         <AgentConfigSection />
         <PlatformSection />
         <Suspense fallback={<div>loading</div>}>
@@ -117,7 +120,8 @@ describe("Settings sections render (five tabs)", () => {
           <SectorsSection />
         </Suspense>
         <DiagramSettingsSection />
-      </QueryClientProvider>,
+      </>,
+      { queryClient: qc },
     );
 
     await waitFor(() => {
@@ -125,6 +129,10 @@ describe("Settings sections render (five tabs)", () => {
     });
     // Platform: metamodel catalog card.
     expect(screen.getByLabelText(/Metamodel catalog/i)).toBeInTheDocument();
+    // Platform: the Optional features section, one card per feature.
+    expect(screen.getByRole("heading", { name: "Optional features" })).toBeInTheDocument();
+    expect(screen.getByTestId("feature-card-taxonomy")).toBeInTheDocument();
+    expect(screen.getByTestId("feature-card-assessment")).toBeInTheDocument();
     // Sources: GitHub publishing card + the unauthenticated banner.
     await waitFor(() =>
       expect(
@@ -180,20 +188,12 @@ describe("MetamodelCatalogCard (Platform)", () => {
         "/api/config/metamodel-catalog": (url: string, init?: RequestInit) => {
           if (init && init.method === "PUT") {
             putSpy(url, init);
-            return Promise.resolve({
-              ok: true,
-              status: 200,
-              json: async () => ({
+            return Promise.resolve(jsonResponse(200, {
                 metamodel_catalog: "vibe_meta",
                 is_configured: true,
-              }),
-            });
+              }));
           }
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({ metamodel_catalog: "", is_configured: false }),
-          });
+          return Promise.resolve(jsonResponse(200, { metamodel_catalog: "", is_configured: false }));
         },
       }),
     );
@@ -283,11 +283,7 @@ describe("DiagramSettingsSection - Reset to defaults (Track 4)", () => {
     const writes: Array<{ url: string; body: unknown }> = [];
     const writeHandler = (url: string, init?: RequestInit) => {
       writes.push({ url, body: JSON.parse((init?.body as string) ?? "{}") });
-      return Promise.resolve({
-        ok: true,
-        status: 200,
-        json: async () => ({ key: url, value: "x", updated_at: "" }),
-      });
+      return Promise.resolve(jsonResponse(200, { key: url, value: "x", updated_at: "" }));
     };
     vi.stubGlobal(
       "fetch",

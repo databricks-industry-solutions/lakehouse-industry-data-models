@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactNode } from "react";
 import type { ModelSummaryOut } from "@/lib/api";
 import { StatisticsTab } from "@/components/statistics/statistics-tab";
+import { findLoadedByTestId } from "./helpers/settled";
 
 // The review-state control and feedback paths render <Link>; stub the router.
 vi.mock("@tanstack/react-router", async (orig) => {
@@ -202,8 +203,8 @@ describe("StatisticsTab shell", () => {
 
   it("defaults to the full-model view with model-only sections", async () => {
     renderTab();
-    expect(await screen.findByTestId("stats-section-where-to-focus")).toBeInTheDocument();
-    expect(screen.getByTestId("stats-section-effort")).toBeInTheDocument();
+    expect(await findLoadedByTestId("stats-section-where-to-focus")).toBeInTheDocument();
+    expect(await findLoadedByTestId("stats-section-effort")).toBeInTheDocument();
     expect(screen.queryByTestId("stats-section-domain-breakdown")).not.toBeInTheDocument();
   });
 
@@ -226,7 +227,7 @@ describe("StatisticsTab — bound model sections", () => {
 
   it("binds the Quality section to next_vibes + evolution data", async () => {
     renderTab();
-    const q = await screen.findByTestId("stats-section-quality");
+    const q = await findLoadedByTestId("stats-section-quality");
     // Quality score 66, confidence 82, errors 2 / warnings 5.
     expect(within(q).getByText("66")).toBeInTheDocument();
     expect(within(q).getByText("82")).toBeInTheDocument();
@@ -245,7 +246,7 @@ describe("StatisticsTab — bound model sections", () => {
 
   it("binds Work ahead to next_vibes category counts", async () => {
     renderTab();
-    const w = await screen.findByTestId("stats-section-work-ahead");
+    const w = await findLoadedByTestId("stats-section-work-ahead");
     expect(within(w).getByTestId("work-ahead-priority_remediation")).toHaveTextContent("3");
     expect(within(w).getByTestId("work-ahead-static_analysis")).toHaveTextContent("6");
     expect(within(w).getByTestId("work-ahead-other")).toHaveTextContent("2");
@@ -253,9 +254,9 @@ describe("StatisticsTab — bound model sections", () => {
 
   it("binds Size + Effort to evolution metrics", async () => {
     renderTab();
-    const size = await screen.findByTestId("stats-section-size");
+    const size = await findLoadedByTestId("stats-section-size");
     expect(within(size).getByText("12")).toBeInTheDocument(); // products
-    const effort = screen.getByTestId("stats-section-effort");
+    const effort = await findLoadedByTestId("stats-section-effort");
     expect(within(effort).getByText("42")).toBeInTheDocument(); // AI calls
   });
 
@@ -274,7 +275,7 @@ describe("StatisticsTab — bound model sections", () => {
       return routeFor(url);
     });
     renderTab();
-    const size = await screen.findByTestId("stats-section-size");
+    const size = await findLoadedByTestId("stats-section-size");
     expect(within(size).getByText(/41\.2 avg attributes \/ product/)).toBeInTheDocument();
     expect(within(size).queryByText(/41\.161/)).not.toBeInTheDocument();
   });
@@ -386,16 +387,16 @@ describe("StatisticsTab — degradation", () => {
         : routeFor(url),
     );
     renderTab({ scope: "ecm" });
-    await screen.findByTestId("stats-section-quality");
+    await findLoadedByTestId("stats-section-quality");
     expect(screen.getAllByTestId("no-data").length).toBeGreaterThan(0);
   });
 
   it("MVM with confidence: no NoData token in Quality", async () => {
     installFetch();
     renderTab();
-    await screen.findByTestId("stats-section-quality");
+    const q = await findLoadedByTestId("stats-section-quality");
     // The model Quality section confidence is present (82), so no n/a there.
-    const q = screen.getByTestId("stats-section-quality");
+    expect(within(q).getByText("82")).toBeInTheDocument();
     expect(within(q).queryByTestId("no-data")).not.toBeInTheDocument();
   });
 
@@ -408,7 +409,7 @@ describe("StatisticsTab — degradation", () => {
     renderTab();
     expect(await screen.findByTestId("base-version-note")).toBeInTheDocument();
     // 'Changed' header is dropped from the focus table on a base version.
-    const table = screen.getByTestId("focus-table");
+    const table = await findLoadedByTestId("focus-table");
     expect(within(table).queryByText("Changed")).not.toBeInTheDocument();
   });
 });

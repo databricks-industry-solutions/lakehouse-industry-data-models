@@ -1,0 +1,225 @@
+{
+  "agent_version": "4.9.9",
+  "release_version": "0.8.0",
+  "model_requirements": {
+    "business_name": "Acme_Co",
+    "description": "Acme Co sells goods to consumers.",
+    "operation": "new base model",
+    "data_model_scopes": "Minimum Viable Model - MVM",
+    "deployment_catalog": "drift_cat",
+    "cataloging_style": "one_catalog",
+    "vibe_session_id": "5862025805566066695"
+  },
+  "vreq_adherence_pct": null,
+  "native_quality_pct": 82.5,
+  "vov_quality_pct": null,
+  "_vibe_session_metadata": {
+    "generated_from_version": "v1_mvm",
+    "target_model_version": "1",
+    "start_time": "2026-05-08T00:30:01.869131",
+    "end_time": "2026-05-08T02:27:55.896591",
+    "duration_hours": 1.97,
+    "status": "unknown",
+    "confidence_score": 78,
+    "summary": "",
+    "issues_addressed": [],
+    "issues_not_addressed": [],
+    "data_modeler_notes": "",
+    "issue_counts": {
+      "error": 0,
+      "warning": 2,
+      "info": 0,
+      "total": 2
+    },
+    "version_history": []
+  },
+  "model": {
+    "type": "business",
+    "name": "Acme_Co",
+    "version": "v1_mvm",
+    "description": "Acme Co sells goods to consumers.",
+    "industry_alignment": "Retail",
+    "location": "/Volumes/drift_cat/_metamodel/vol_root/business/acme_co/v1/mvm",
+    "core_business_processes": "Order to cash",
+    "orgnaization_divisions": "Operations, Business and Corporate",
+    "data_domains": "Customer, Sales",
+    "common_business_jargons": "SKU",
+    "operational_systems_of_records": "ERP",
+    "industry_governing_body": "None",
+    "model_conventions": {
+      "data_asset_naming_convention": "snake_case"
+    },
+    "domains": [
+      {
+        "name": "Customer",
+        "division": "business",
+        "description": "Customers and their addresses.",
+        "database_name": "customer",
+        "references": "",
+        "tags": "",
+        "products": [
+          {
+            "name": "Customer Master",
+            "table_name": "customer_master",
+            "primary_key": "customer_id",
+            "subdomain": "core",
+            "description": "One row per customer.",
+            "type": "master",
+            "division": "business",
+            "function": "",
+            "data_type": "",
+            "source_domains": "",
+            "association_edges": "",
+            "reference": "",
+            "tags": "",
+            "attributes": [
+              {
+                "name": "customer_id",
+                "column_name": "customer_id",
+                "type": "bigint",
+                "business_glossary_term": "",
+                "description": "Key.",
+                "value_regex": "",
+                "tags": "primary_key",
+                "foreign_key_to": "",
+                "references": ""
+              },
+              {
+                "name": "full_name",
+                "column_name": "full_name",
+                "type": "string",
+                "business_glossary_term": "",
+                "description": "Name.",
+                "value_regex": "",
+                "tags": "",
+                "foreign_key_to": "",
+                "references": ""
+              },
+              {
+                "name": "email",
+                "column_name": "email",
+                "type": "string",
+                "business_glossary_term": "",
+                "description": "Email address.",
+                "value_regex": "",
+                "tags": "",
+                "foreign_key_to": "",
+                "references": ""
+              }
+            ]
+          },
+          {
+            "name": "Customer Address",
+            "table_name": "customer_address",
+            "primary_key": "address_id",
+            "subdomain": "core",
+            "description": "One row per address.",
+            "type": "master",
+            "division": "business",
+            "function": "",
+            "data_type": "",
+            "source_domains": "",
+            "association_edges": "",
+            "reference": "",
+            "tags": "",
+            "attributes": [
+              {
+                "name": "address_id",
+                "column_name": "address_id",
+                "type": "bigint",
+                "business_glossary_term": "",
+                "description": "Key.",
+                "value_regex": "",
+                "tags": "primary_key",
+                "foreign_key_to": "",
+                "references": ""
+              },
+              {
+                "name": "customer_id",
+                "column_name": "customer_id",
+                "type": "bigint",
+                "business_glossary_term": "",
+                "description": "Owner.",
+                "value_regex": "",
+                "tags": "",
+                "foreign_key_to": "customer.customer_master.customer_id",
+                "references": ""
+              },
+              {
+                "name": "city",
+                "column_name": "city",
+                "type": "string",
+                "business_glossary_term": "",
+                "description": "City.",
+                "value_regex": "",
+                "tags": "",
+                "foreign_key_to": "",
+                "references": ""
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "Sales",
+        "division": "business",
+        "description": "Orders.",
+        "database_name": "sales",
+        "references": "",
+        "tags": "",
+        "products": [
+          {
+            "name": "Sales Order",
+            "table_name": "sales_order",
+            "primary_key": "order_id",
+            "subdomain": "core",
+            "description": "One row per order.",
+            "type": "master",
+            "division": "business",
+            "function": "",
+            "data_type": "",
+            "source_domains": "",
+            "association_edges": "",
+            "reference": "",
+            "tags": "",
+            "attributes": [
+              {
+                "name": "order_id",
+                "column_name": "order_id",
+                "type": "bigint",
+                "business_glossary_term": "",
+                "description": "Key.",
+                "value_regex": "",
+                "tags": "primary_key",
+                "foreign_key_to": "",
+                "references": ""
+              },
+              {
+                "name": "customer_id",
+                "column_name": "customer_id",
+                "type": "bigint",
+                "business_glossary_term": "",
+                "description": "Buyer.",
+                "value_regex": "",
+                "tags": "",
+                "foreign_key_to": "customer.customer_master.customer_id",
+                "references": ""
+              },
+              {
+                "name": "total_amount",
+                "column_name": "total_amount",
+                "type": "decimal(18,2)",
+                "business_glossary_term": "",
+                "description": "Order total.",
+                "value_regex": "",
+                "tags": "",
+                "foreign_key_to": "",
+                "references": ""
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

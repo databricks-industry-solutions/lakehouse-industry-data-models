@@ -148,10 +148,22 @@ def test_docs_missing_folder_is_empty(client, mock_ws, ingested):
     assert r.status_code == 200 and r.json()["docs"] == []
 
 
-def test_docs_databricks_error_is_502_sanitized(client, mock_ws, ingested):
-    mock_ws.files.list_directory_contents.side_effect = PermissionDenied("denied dapi" + "a" * 32)
+def test_docs_databricks_error_is_409_admin_help_sanitized(client, mock_ws, engine, ingested):
+    with Session(engine) as s:
+        dr = s.get(AssessDomainRun, ingested.dr_id)
+        dr.job_id, dr.databricks_run_id, dr.job_reader = 99, 1000, "reader-1"
+        s.add(dr); s.commit()
+    token = "dapi" + "a" * 32
+    mock_ws.files.list_directory_contents.side_effect = PermissionDenied(f"denied for dana@example.com {token}")
     r = client.get(f"/api/assessment-domain-runs/{ingested.dr_id}/docs")
-    assert r.status_code == 502 and "dapi" + "a" * 32 not in r.text
+    assert r.status_code == 409
+    assert token not in r.text and "dana@example.com" not in r.text
+    host = "https://test-workspace.databricks.com"
+    detail = r.json()["detail"]
+    assert detail.pop("message").startswith("Could not list run docs: denied for [REDACTED]")
+    assert detail == {"error": "admin_help",
+                      "job_url": f"{host}/jobs/99", "run_url": f"{host}/jobs/99/runs/1000",
+                      "runs_path": OUT, "job_reader": "reader-1"}
 
 
 # --- results-readability: summary, computed letters, decision detail, urgency ---

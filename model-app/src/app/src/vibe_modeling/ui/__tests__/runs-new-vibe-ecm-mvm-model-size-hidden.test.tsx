@@ -18,6 +18,7 @@
  * combined intent.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -76,6 +77,8 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    // No base-model pre-fill: the form keeps its own values.
+    useGetRunDefaults: () => ({ data: undefined, isLoading: false, isError: false }),
     useGetBusinessSuspense: () => businessHook(),
     useListVersionsSuspense: () => versionsHook(),
     createRun: (...args: unknown[]) =>
@@ -193,6 +196,8 @@ function findModelSizeSection(): HTMLElement | null {
   }
   return cur ?? label;
 }
+
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.runs.new"));
 
 describe("runs.new — Model Size combobox is hidden for vibe-new-ecm-mvm", () => {
   it("renders the Model Size widget for the legacy vibe-iterate intent (control)", async () => {

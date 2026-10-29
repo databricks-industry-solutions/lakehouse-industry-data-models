@@ -5,6 +5,7 @@ from types import SimpleNamespace as NS
 from unittest.mock import MagicMock
 
 from databricks.sdk.errors.platform import NotFound
+from sqlalchemy import event
 from sqlmodel import Session, select
 
 from vibe_modeling.backend.assessment.ingest import flag_duplicate_sources, ingest_domain_run, read_volume_json
@@ -117,6 +118,37 @@ def test_ingest_resolves_by_table_name_and_column_name(engine):
         assert ent.product_id == pid
         col = s.exec(select(AssessColumnMapping).where(AssessColumnMapping.entity_id == ent.id,
                                                        AssessColumnMapping.target == "ORDER_NUMBER")).one()
+        assert col.attribute_id == aid
+
+
+def test_ingest_reads_attributes_once_per_matched_entity(engine):
+    """Both attribute name maps (column_name and name) come from one query per matched entity."""
+    dr_id, _, _ = _seed_run(engine)
+    selects: list[str] = []
+
+    def count(_conn, _cursor, statement, *_args):
+        if statement.lstrip().upper().startswith("SELECT") and "FROM attributes" in statement:
+            selects.append(statement)
+
+    event.listen(engine, "before_cursor_execute", count)
+    try:
+        with Session(engine) as s:
+            assert ingest_domain_run(s, _ws_with(_fixture_files()), s.get(AssessDomainRun, dr_id)).results_valid
+    finally:
+        event.remove(engine, "before_cursor_execute", count)
+    # The fixture has two entities; only "order" matches a product, so one attribute query.
+    assert len(selects) == 1, selects
+
+
+def test_ingest_name_match_wins_over_column_name_match(engine):
+    """A target equal to one attribute's name and another's column_name maps to the name match."""
+    dr_id, pid, aid = _seed_run(engine)
+    with Session(engine) as s:
+        other = Attribute(product_id=pid, name="order_ref", column_name="number")
+        s.add(other); s.commit()
+    with Session(engine) as s:
+        ingest_domain_run(s, _ws_with(_fixture_files()), s.get(AssessDomainRun, dr_id))
+        col = s.exec(select(AssessColumnMapping).where(AssessColumnMapping.target == "number")).one()
         assert col.attribute_id == aid
 
 

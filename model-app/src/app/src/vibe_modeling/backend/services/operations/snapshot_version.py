@@ -169,8 +169,8 @@ class SnapshotVersion(Operation):
             )
 
         # Resolve catalog: params-first (the run's dispatched truth), else the
-        # per-version Volume catalog (mv.uc_catalog, else the installation
-        # metamodel catalog via a session-only read).
+        # catalog the version's files are in (resolve_version_volume_catalog,
+        # a session-only read).
         deployment_catalog = (
             params.deployment_catalog
             or resolve_version_volume_catalog(mv, session)

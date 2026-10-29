@@ -15,6 +15,9 @@ agent's file ownership; flagging here so the next pass picks it up.
 
 from __future__ import annotations
 
+import importlib
+import re
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -289,3 +292,43 @@ def test_partial_upgrade_runs_only_post_installed_migrations(
         ).first()
     assert row is not None
     assert row.version == "0.2.0"
+
+
+# --- Naming invariant (docs/conventions.md section 8) -------------------------
+
+_MIGRATIONS_DIR = Path(migrations.__file__).parent
+_NAME = re.compile(r"^v_(\d+)_(\d+)_(\d+)(?:_(\d+))?$")
+
+
+def _migration_modules() -> dict[str, str]:
+    """Module name -> MIGRATION.version for every v_*.py file on disk."""
+    found = {}
+    for path in sorted(_MIGRATIONS_DIR.glob("v_*.py")):
+        module = importlib.import_module(f"{migrations.__name__}.{path.stem}")
+        found[path.stem] = module.MIGRATION.version
+    return found
+
+
+def test_migration_names_match_their_versions():
+    for name, version in _migration_modules().items():
+        m = _NAME.match(name)
+        assert m, f"{name}.py: name must be v_X_Y_Z or v_X_Y_Z_N"
+        expected = ".".join(g for g in m.groups() if g is not None)
+        assert version == expected, f"{name}.py declares version {version!r}"
+
+
+def test_every_migration_file_is_registered_in_order():
+    on_disk = sorted(_migration_modules().values(), key=reg._vkey)
+    assert [m.version for m in migrations.MIGRATIONS] == on_disk
+
+
+def test_micro_levels_follow_a_release_migration_contiguously():
+    by_release: dict[tuple[int, ...], list[int]] = {}
+    for version in _migration_modules().values():
+        levels = reg._vkey(version)
+        by_release.setdefault(levels[:3], []).append(levels[3] if len(levels) > 3 else 0)
+    for release, micros in by_release.items():
+        assert sorted(micros) == list(range(len(micros))), (
+            f"migrations for {'.'.join(map(str, release))} must be v_X_Y_Z then _1, _2, ...: "
+            f"found micro levels {sorted(micros)}"
+        )

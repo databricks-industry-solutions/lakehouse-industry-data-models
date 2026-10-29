@@ -4,6 +4,8 @@ import { Construction } from "lucide-react";
 import { HelpPage } from "@/components/help/help-page";
 import { WorkflowDiagram } from "@/components/flow/workflow-diagram";
 import { getHelpTopic } from "@/components/help/help-topics";
+import { OL, P, Section, TopicLink, UL } from "@/components/help/help-prose";
+import { BUSY_RETRY_SCHEDULE_S } from "@/lib/taxonomy/busy-retry";
 
 /** A single key cap, styled as a physical key. */
 export function Kbd({ children }: { children: React.ReactNode }) {
@@ -67,7 +69,7 @@ export function ShortcutsContent() {
   return (
     <HelpPage
       title="Keyboard shortcuts"
-      intro="Move faster with the keyboard. Shortcuts are context-sensitive — some only fire in a particular view."
+      intro="Move faster with the keyboard. Shortcuts are context-sensitive: some only fire in a particular view."
       related={["flow"]}
     >
       <div className="space-y-8">
@@ -106,19 +108,6 @@ export function FlowContent() {
   );
 }
 
-function Section({ heading, children }: { heading: string; children: React.ReactNode }) {
-  return (
-    <section className="space-y-2">
-      <h2 className="text-base font-semibold">{heading}</h2>
-      {children}
-    </section>
-  );
-}
-
-const P = "text-sm leading-relaxed text-muted-foreground";
-const UL = "list-disc space-y-1 pl-5 text-sm leading-relaxed text-muted-foreground";
-const OL = "list-decimal space-y-1 pl-5 text-sm leading-relaxed text-muted-foreground";
-
 export function AssessmentContent() {
   return (
     <HelpPage
@@ -150,7 +139,10 @@ export function AssessmentContent() {
             </li>
             <li>suggests next vibes - model changes for your next modeling iteration.</li>
           </ul>
-          <p className={P}>For hybrid output it also derives a gold layer.</p>
+          <p className={P}>
+            For hybrid output it maps the sources to the silver layer only. The gold layer is
+            derived later, in the hand-off, once silver is built.
+          </p>
         </Section>
 
         <Section heading="Before you start">
@@ -158,8 +150,8 @@ export function AssessmentContent() {
             <li>The model version is installed into a catalog.</li>
             <li>
               A workspace admin has set up the reader service principal in{" "}
-              <Link to="/settings" search={{ tab: "assessment" }} className="text-primary hover:underline">
-                Settings → Assessment
+              <Link to="/settings" search={{ tab: "platform" }} hash="feature-assessment" className="text-primary hover:underline">
+                Settings → Platform, Optional features
               </Link>
               , which has copy-paste steps.
             </li>
@@ -220,28 +212,26 @@ export function AssessmentContent() {
             documents, and it is read-only, so building happens in Genie Code. After you have
             answered the pending decisions, Hand off to Genie Code copies the project
             (conventions.yml, the docs and your decisions) to a workspace folder with copy-paste
-            prompts, to run in order:
+            prompts, to run in order. The Hand-off tab lists the exact prompts for your run.
           </p>
-          <ol className={OL}>
-            <li>Continue the assessment (Phase 5 and Phase 6, using your decisions).</li>
-            <li>
-              Build, with <code>etl-development-framework</code>.
-            </li>
-            <li>
-              Validate, with <code>domain-model-validation</code>.
-            </li>
-            <li>
-              Document, with <code>domain-documentation</code>.
-            </li>
-          </ol>
+          <p className={P}>
+            Normalized and dimensional output has four: continue the assessment (Phase 5 and Phase
+            6, using your decisions), build with <code>etl-development-framework</code>, validate
+            with <code>domain-model-validation</code>, and document with{" "}
+            <code>domain-documentation</code>. Hybrid output has seven: build and validate silver,
+            then derive, build and validate the gold layer, then document.
+          </p>
         </Section>
 
         <Section heading="Time and cost">
           <p className={P}>
             Expect 30-60 minutes per domain. If the model hits rate limits it can take longer -
             the job waits and resumes automatically. Assessments use workspace foundation-model
-            tokens. By default two domain runs go at once; an admin can change this in Settings →
-            Assessment.
+            tokens. By default two domain runs go at once; an admin can change this in{" "}
+            <Link to="/settings" search={{ tab: "platform" }} hash="feature-assessment" className="text-primary hover:underline">
+              Settings → Platform, Optional features
+            </Link>
+            .
           </p>
           <p className={P}>
             Calls to {ASSESS_MODEL} count against your workspace's pay-per-token rate limit for that
@@ -251,6 +241,154 @@ export function AssessmentContent() {
             limit, but if you want them to run faster, ask your Databricks account team to request
             a higher rate limit for {ASSESS_MODEL} on this workspace.
           </p>
+        </Section>
+      </div>
+    </HelpPage>
+  );
+}
+
+/** Example vibes: one per common kind of change. */
+export const VIBE_EXAMPLES: readonly string[] = [
+  "Add a product for customer complaints to the service domain, with the complaint date, channel and status.",
+  "Rename the attribute cust_no of customer to customer_number.",
+  "Move the product invoice_line from sales to billing.",
+  "Split the operations domain into logistics and maintenance.",
+  "Add a relationship from orders.customer_id to customer.",
+  "Rewrite the descriptions of the billing products for business readers.",
+  "Tag every attribute of customer that holds personal data as confidential.",
+  "Change the type of amount to DECIMAL(18,2) in every product of billing.",
+  "Remove the products of marketing that repeat products of sales.",
+  "Slim the model down to the products the order-to-cash process needs.",
+];
+
+export function TaxonomyBuilderContent() {
+  return (
+    <HelpPage
+      title="Building a business from your domains"
+      intro="The Domain Taxonomy Builder drafts a new business with a model: you describe the company, a model service drafts its domains and the context the agent needs, and you correct the draft before you create the business."
+      related={["flow", "run-new-base-model"]}
+    >
+      <div className="space-y-8">
+        <Section heading="Before you start">
+          <ul className={UL}>
+            <li>The builder is turned on when the app is installed. It is off by default.</li>
+            <li>
+              An admin chooses the model service in{" "}
+              <Link to="/settings" search={{ tab: "platform" }} hash="feature-taxonomy" className="text-primary hover:underline">
+                Settings → Platform, Optional features
+              </Link>
+              . The app's service principal needs USE CATALOG, USE SCHEMA and EXECUTE on it. Every
+              save runs a test call, and a refused service is not saved.
+            </li>
+            <li>Open it from the home page: Build from your domains.</li>
+          </ul>
+        </Section>
+
+        <Section heading="The four steps">
+          <ol className={OL}>
+            <li>
+              Tell us about you. Company name and industry are required. Domains you already use,
+              key systems, regulators and a pasted document make the draft closer to your company.
+            </li>
+            <li>
+              Domains. The model drafts the domains and subdomains. Edit, add or remove them, and
+              pick the organization divisions.
+            </li>
+            <li>
+              Everything else. The model drafts company and segments, channels, core processes,
+              terminology, systems of record and regulatory context. Edit each one. You confirm the
+              systems of record before you move on.
+            </li>
+            <li>
+              Review and create. The model writes a business description of at most 2,000
+              characters. Edit it or ask for a rewrite, then create the business. The app opens the
+              New Run form for a{" "}
+              <TopicLink slug="run-new-base-model">New Base Model</TopicLink> run, filled in from the
+              business.
+            </li>
+          </ol>
+        </Section>
+
+        <Section heading="When the model is busy">
+          <p className={P}>
+            A draft part that cannot get the model right now shows "The model is busy" and a
+            countdown to the next try. The app tries again by itself up to{" "}
+            {BUSY_RETRY_SCHEDULE_S.length} times, waiting about{" "}
+            {BUSY_RETRY_SCHEDULE_S.map((s) => (s < 60 ? `${s} s` : `${s / 60} min`)).join(", ")}{" "}
+            between tries. Retry now tries at once. Cancel stops the draft; what you already edited
+            stays.
+          </p>
+          <p className={P}>
+            If the model service is refused, the message says why and links to the setting. Only an
+            admin can change it.
+          </p>
+        </Section>
+
+        <Section heading="Your progress is saved">
+          <p className={P}>
+            The wizard saves your work as you go, per user. When you open it again it offers to
+            resume where you left off, or to start over. Parts that were still drafting are not
+            saved; Resume offers to draft them again. Creating the business deletes the saved work.
+          </p>
+        </Section>
+      </div>
+    </HelpPage>
+  );
+}
+
+export function VibesContent() {
+  return (
+    <HelpPage
+      title="What you can ask in a vibe"
+      intro="A vibe is a change to the model, asked in plain words. You add it as feedback on the part of the model it is about. A Vibe Modeling run sends the feedback you selected to the agent."
+      related={["run-vibe", "flow", "runs"]}
+    >
+      <div className="space-y-8">
+        <Section heading="Examples">
+          <p className={P}>
+            You can ask for any change to the model. There is no fixed list. Some examples:
+          </p>
+          <ul className={UL}>
+            {VIBE_EXAMPLES.map((e) => (
+              <li key={e}>{e}</li>
+            ))}
+          </ul>
+        </Section>
+
+        <Section heading="How to write a good request">
+          <ul className={UL}>
+            <li>Name the element as the model names it: the domain, product or attribute.</li>
+            <li>Say what to change and why. The reason helps the agent make the change that fits.</li>
+            <li>Ask for one change per feedback item, so the run report can say what happened to each.</li>
+            <li>
+              Add the feedback on the element it is about: open the element and press <Kbd>f</Kbd>.
+              Feedback about the whole model goes on the model.
+            </li>
+          </ul>
+        </Section>
+
+        <Section heading="How the agent uses your feedback">
+          <ul className={UL}>
+            <li>
+              Each feedback item is anchored on a domain, subdomain, product, attribute,
+              relationship, or the whole model. The anchor tells the agent where the change
+              applies.
+            </li>
+            <li>A run sends only the items you selected for it on the compose surface.</li>
+            <li>
+              A run on Some domains sends only the items anchored in those domains. Items about the
+              whole model are not sent; run on All domains to include them.
+            </li>
+            <li>
+              An item is marked done only when the agent reports it as applied in a Full Run that
+              finishes. A Dry Run marks nothing done; its applied items are marked done when you
+              install the draft.
+            </li>
+            <li>
+              The run report lists what the agent did with each item and why. Items it did not
+              apply stay open for the next run.
+            </li>
+          </ul>
         </Section>
       </div>
     </HelpPage>

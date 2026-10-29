@@ -22,9 +22,16 @@ A. Metamodel      The UC catalog holding the agent's ``_metamodel`` Delta
 B. Install        Physical DDL target of an installed model version (real
    catalog         schemas/tables). Per model version, in
                    ``model_versions.uc_catalog``. ``""`` is a VALID state
-                   meaning draft/never-installed - never a value to "fall
-                   back" from. NO resolver by design: read ``mv.uc_catalog``
-                   directly and treat ``""`` as draft.
+                   meaning draft/never-installed. Read ``mv.uc_catalog``
+                   directly; :func:`resolve_install_target_catalog` picks the
+                   catalog an install run targets,
+                   :func:`resolve_uninstall_target_catalog` an uninstall's, and
+                   :func:`resolve_version_install_catalog` the catalog the
+                   deployment checks probe.
+   Files catalog   Where the agent wrote a version's files and home
+                   ``_metamodel`` rows, in ``model_versions.files_catalog``,
+                   set once at creation. Resolver:
+                   :func:`resolve_version_volume_catalog`.
 C. Run metamodel  The ``deployment_catalog`` widget a specific run
    -target catalog dispatches. By agent contract this SELECTS where that
                    run's ``_metamodel`` lands (and, in One Catalog style
@@ -57,7 +64,10 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 def resolve_metamodel_catalog(session: Any, config: Any = None) -> str:
     """Concern A: the installation-wide metamodel catalog.
 
-    Reads ``AgentConfig.deployment_catalog``. Returns ``""`` when
+    Reads ``AgentConfig.deployment_catalog``. It is also the registry the
+    agent writes for the app's runs, so initial sync (``/config/initial-sync``)
+    and the out-of-band summary, check and imports read the agent's
+    ``_metamodel`` here: one resolver, one cache key for the out-of-band check. Returns ``""`` when
     unconfigured; callers that must not proceed on an empty value use
     :func:`routes._helpers.require_config` instead of inventing a fallback.
 
@@ -106,12 +116,51 @@ def resolve_run_target_catalog(
     and the inline ``data.catalog or agent_config.deployment_catalog`` chains
     at the run-dispatch / validate sites.
     """
-    explicit = (getattr(data, "deployment_catalog", "") or "").strip()
-    if not explicit:
-        explicit = (getattr(data, "catalog", "") or "").strip()
+    explicit = _explicit_run_catalog(data)
     if explicit:
         return explicit
     return (getattr(agent_config, "deployment_catalog", "") or "").strip()
+
+
+def _explicit_run_catalog(data: Any) -> str:
+    """The run form's catalog (``deployment_catalog``, then its legacy
+    ``catalog`` alias), or ``""``."""
+    explicit = (getattr(data, "deployment_catalog", "") or "").strip()
+    return explicit or (getattr(data, "catalog", "") or "").strip()
+
+
+def resolve_install_target_catalog(
+    data: Any, mv: Optional["ModelVersion"], agent_config: Optional["AgentConfig"]
+) -> str:
+    """The catalog an install run of ``mv`` targets.
+
+    The request's explicit catalog wins. Otherwise the version's install
+    catalog when it is installed, else its files catalog, else the run
+    default (:func:`resolve_run_target_catalog`).
+    """
+    explicit = _explicit_run_catalog(data)
+    if explicit:
+        return explicit
+    installed = (getattr(mv, "uc_catalog", "") or "").strip()
+    if installed and getattr(mv, "deployment_status", "") == "deployed":
+        return installed
+    files = (getattr(mv, "files_catalog", "") or "").strip()
+    if files:
+        return files
+    return resolve_run_target_catalog(data, agent_config)
+
+
+def resolve_uninstall_target_catalog(
+    data: Any, mv: Optional["ModelVersion"], agent_config: Optional["AgentConfig"]
+) -> str:
+    """The catalog an uninstall run of ``mv`` targets: the request's explicit
+    catalog, else where the version was last installed (``uc_catalog``),
+    else the run default (:func:`resolve_run_target_catalog`)."""
+    explicit = _explicit_run_catalog(data)
+    if explicit:
+        return explicit
+    installed = (getattr(mv, "uc_catalog", "") or "").strip()
+    return installed or resolve_run_target_catalog(data, agent_config)
 
 
 def resolve_version_volume_catalog(
@@ -119,19 +168,52 @@ def resolve_version_volume_catalog(
 ) -> str:
     """The catalog a version's ``_metamodel`` Volume tree lives under.
 
-    ``mv.uc_catalog`` when the version records a producing run's catalog,
-    else the installation metamodel catalog (concern A). Documented meaning:
-    "where this version's ``_metamodel`` artifacts (model.json, docs, vibe
-    files) actually live". Used by artifact reads, resync, export/bundle
-    roots, and the explorer docs directory.
+    ``mv.files_catalog`` (where the agent wrote the version), else
+    ``mv.uc_catalog`` for rows that predate it, else the installation
+    metamodel catalog (concern A). Documented meaning: "where this version's
+    ``_metamodel`` artifacts (model.json, docs, vibe files) and home registry
+    rows actually live". Used by artifact reads, resync, export/bundle roots,
+    the explorer docs directory, the install context file and the delete
+    cleanup.
 
-    This promotes the previously-inline ``mv.uc_catalog or cfg.deployment_catalog``
-    rule (formerly at ``versions.py``) to the one canonical site. Drafts whose
-    ``uc_catalog`` is ``""`` correctly fall through to the installation catalog
-    so their artifacts are still reachable - fixing the kickstart-class bug
-    where an empty ``uc_catalog`` silently yielded no path.
+    An install never changes ``files_catalog``, so a version installed into
+    another catalog (or a Catalog per Division/Domain install catalog) still
+    resolves to its files. A draft with neither column falls through to the
+    installation catalog so its artifacts stay reachable.
     """
+    files = (getattr(mv, "files_catalog", "") or "").strip()
+    if files:
+        return files
     own = (getattr(mv, "uc_catalog", "") or "").strip()
     if own:
         return own
     return resolve_metamodel_catalog(session, config)
+
+
+def resolve_import_registry_catalog(session: Any) -> str:
+    """The catalog whose ``_metamodel`` an import from a Volume path seeds
+    with the imported version's registry rows: the installation metamodel
+    catalog (A), not the catalog of the path the files were read from. The
+    import routes seed there, and a delete of an imported version cleans
+    there. The seed catalog is not stored on the version, so an import made
+    before the metamodel catalog changed resolves to the new one."""
+    return resolve_metamodel_catalog(session)
+
+
+def resolve_version_install_catalog(mv: Optional["ModelVersion"], session: Any) -> str:
+    """The catalog the deployment checks probe for ``mv``: its install
+    catalog ``uc_catalog``, else the installation metamodel catalog for a
+    version never installed."""
+    own = (getattr(mv, "uc_catalog", "") or "").strip()
+    if own:
+        return own
+    return resolve_metamodel_catalog(session)
+
+
+def volume_path_catalog(volume_path: Optional[str]) -> Optional[str]:
+    """The catalog segment of a ``/Volumes/<catalog>/...`` path (an imported
+    file's files catalog), or None for any other path."""
+    parts = (volume_path or "").split("/")
+    if len(parts) > 2 and parts[0] == "" and parts[1] == "Volumes" and parts[2]:
+        return parts[2]
+    return None

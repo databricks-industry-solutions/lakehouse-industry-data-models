@@ -97,14 +97,35 @@ class AppConfig(BaseSettings):
         ),
     )
 
+    # Settings -> Agent -> "Annotate jobs with run tags", written into app.yml
+    # by install/install.sh (--no-run-tags renders "false"). A SEED only: it
+    # fills AgentConfig.collect_vibe_run_statistics when the row is created,
+    # and migration v_0_9_0_2 applies it once to existing rows (its own frozen
+    # copy of this bool parse); after that Settings own the value.
+    run_tags_default: bool = Field(
+        default=True,
+        description=(
+            "Seed for Settings -> Agent -> 'Annotate jobs with run tags' "
+            "(VIBE_MODELING_RUN_TAGS_DEFAULT)"
+        ),
+    )
+
     # Headless Domain-Model Assessment install-time switches, written into
     # app.yml by install/install.sh --enable-assessment. Off by default: the
     # routes answer 404 and the poller does not start. The reader SP is a SEED
     # only: it fills AssessConfig.reader_application_id while that column is
-    # empty, after which Settings -> Assessment owns the value.
+    # empty, after which Settings -> Platform (Optional features) owns the value.
     assessment_enabled: bool = Field(
         default=False,
         description="Whether the bronze assessment skill is installed (VIBE_MODELING_ASSESSMENT_ENABLED)",
+    )
+    # Run change review (per-change Accept / Reject on a vibe run, Add rejected
+    # as feedback, the version Overview summary). Hidden until its redesign:
+    # off by default, no install flag; maintainers set the env var. While off,
+    # its routes answer 404 and the UI shows none of it.
+    run_change_review_enabled: bool = Field(
+        default=False,
+        description="Whether the run change review is shown (VIBE_MODELING_RUN_CHANGE_REVIEW_ENABLED)",
     )
     assess_reader_sp: str = Field(
         default="",

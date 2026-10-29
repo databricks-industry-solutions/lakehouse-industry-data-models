@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const api = vi.hoisted(() => ({ useGetAssessmentDocContent: vi.fn(), useListAssessmentDocs: vi.fn() }));
@@ -138,6 +138,53 @@ describe("DocsPane", () => {
     const { container } = mount();
     fireEvent.click(screen.getByText("skill_feedback.md"));
     expect(container.querySelector("details")!.open).toBe(true);
+  });
+  it("shows the admin-help block, not the empty message, when listing the docs fails, without retrying", async () => {
+    const { ApiError } = await import("@/lib/api");
+    api.useListAssessmentDocs.mockReturnValue({
+      data: undefined, isLoading: false,
+      error: new ApiError(409, "Conflict", {
+        detail: {
+          error: "admin_help", message: "Could not list run docs: denied for [REDACTED]",
+          job_url: "https://ws/jobs/7", run_url: "https://ws/jobs/7/runs/9", runs_path: "/Volumes/c/_metamodel/assess_runs/b1/d1",
+        },
+      }),
+    });
+    mount();
+    const block = within(screen.getByTestId("docs-admin-help"));
+    expect(block.getByText("Could not list run docs: denied for [REDACTED]")).toBeTruthy();
+    expect(block.getByText(/The run's documents couldn't be read\./)).toBeTruthy();
+    expect(block.getByRole("link", { name: /Open job run/ }).getAttribute("href")).toBe("https://ws/jobs/7/runs/9");
+    expect(block.getByText("/Volumes/c/_metamodel/assess_runs/b1/d1")).toBeTruthy();
+    expect(screen.queryByText("No docs were produced.")).toBeNull();
+    expect(api.useListAssessmentDocs).toHaveBeenCalledWith(
+      expect.objectContaining({ query: expect.objectContaining({ retry: false }) }),
+    );
+  });
+  it("shows a plain error line for a non-admin-help listing failure", async () => {
+    const { ApiError } = await import("@/lib/api");
+    api.useListAssessmentDocs.mockReturnValue({
+      data: undefined, isLoading: false, error: new ApiError(404, "Not Found", { detail: "Assessment domain run not found." }),
+    });
+    mount();
+    expect(screen.getByText("Assessment domain run not found.")).toBeTruthy();
+    expect(screen.queryByTestId("docs-admin-help")).toBeNull();
+    expect(screen.queryByText("No docs were produced.")).toBeNull();
+  });
+  it("keeps the empty message for a run with no docs", () => {
+    api.useListAssessmentDocs.mockReturnValue({ data: { folder_url: "", docs: [] }, isLoading: false, error: null });
+    mount();
+    expect(screen.getByText("No docs were produced.")).toBeTruthy();
+  });
+  it("shows the admin-help block when reading one doc fails", async () => {
+    const { ApiError } = await import("@/lib/api");
+    api.useGetAssessmentDocContent.mockReturnValue({
+      data: undefined, isLoading: false, isError: true,
+      error: new ApiError(409, "Conflict", { detail: { error: "admin_help", message: "Could not read doc: denied" } }),
+    });
+    mount();
+    expect(within(screen.getByTestId("doc-admin-help")).getByText("Could not read doc: denied")).toBeTruthy();
+    expect(screen.queryByText("This document could not be loaded.")).toBeNull();
   });
   it("has no anchors to file-level paths", () => {
     const { container } = mount();

@@ -21,8 +21,8 @@ const VIBE_INPUT_KEY_MARKERS = [
 export function invalidateVibeInputQueries(
   queryClient: QueryClient,
   _businessId: string,
-): void {
-  queryClient.invalidateQueries({
+): Promise<void> {
+  return queryClient.invalidateQueries({
     predicate: (q) => {
       const head = Array.isArray(q.queryKey) ? q.queryKey[0] : q.queryKey;
       if (typeof head !== "string") return false;

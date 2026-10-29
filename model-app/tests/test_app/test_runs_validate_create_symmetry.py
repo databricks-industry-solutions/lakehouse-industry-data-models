@@ -23,7 +23,7 @@ from uuid import uuid4
 import pytest
 from sqlmodel import Session
 
-import vibe_modeling.backend.router
+from vibe_modeling.backend.services import metamodel_setup
 from vibe_modeling.backend.db_models import (
     AgentConfig,
     Business,
@@ -304,7 +304,8 @@ def test_active_run_lock_is_a_validate_blocker(client, engine, biz_id):
 
 _NEW_BASE_MODEL_NEEDS_EMPTY_BUSINESS = (
     "New Base Model needs a business with no model versions. "
-    "Create a new business to start a fresh base model."
+    "Delete its versions one by one from their pages (uninstall installed ones first), "
+    "or create a new business."
 )
 _NEW_BASE_MODEL_BODY = {
     "intent": "new-base-model",
@@ -332,7 +333,7 @@ def test_new_base_model_rejected_when_business_has_versions(
         s.commit()
     stub_no_metamodel(mock_ws)
     spy = MagicMock()
-    monkeypatch.setattr(vibe_modeling.backend.router, "ensure_metamodel_schema_and_volume", spy)
+    monkeypatch.setattr(metamodel_setup, "ensure_metamodel_schema_and_volume", spy)
 
     v_resp = client.post(f"/api/businesses/{biz_id}/runs/validate", json=_NEW_BASE_MODEL_BODY)
     assert v_resp.status_code == 200, v_resp.text
@@ -396,3 +397,61 @@ def test_new_base_model_allowed_after_failed_run_without_versions(
 
     c_resp = client.post(f"/api/businesses/{biz_id}/runs", json=_NEW_BASE_MODEL_BODY)
     assert c_resp.status_code == 200, c_resp.text
+
+
+# --- Registry ownership: M3, Rule 1, Rule 2 (orchestrator.source_industry) ---
+
+
+def _ownership_state(name, engine, mock_ws):
+    """``(business_id, body)`` of a request in one ownership state, from the
+    world of ``test_source_industry_rules``."""
+    from vibe_modeling.backend.services.operations._version_lifecycle import mark_version_deployed
+
+    from .test_source_industry_rules import CAT, THIRD, TestSameBusinessOtherScope, _install_body, _listing, _world
+    from .test_version_lifecycle_routes import _ws_with_run_now
+
+    _ws_with_run_now(mock_ws)
+    if name == "same_business_other_scope":
+        _listing(mock_ws, "crop")
+        biz, ecm = TestSameBusinessOtherScope()._bare(engine)
+        return biz, _install_body(ecm)
+    w = _world(engine)
+    _listing(mock_ws, "ecm_crop", "ecm_land", "mvm_crop", "mvm_land", "ecm_sales")
+    if name == "industry_where_its_business_is_installed":
+        with Session(engine) as s:
+            mark_version_deployed(s, s.get(ModelVersion, w.b_ecm), THIRD)
+            s.commit()
+        return w.industry, _install_body(w.i_ecm, THIRD)
+    if name == "industry_run_in_progress":
+        with Session(engine) as s:
+            s.add(Run(business_id=w.industry, intent="vibe-iterate", status="running"))
+            s.commit()
+        return w.kick, _install_body(w.b_ecm)
+    assert name == "business_over_its_industry"
+    return w.kick, _install_body(w.b_ecm, CAT)
+
+
+@pytest.mark.parametrize("state", [
+    "same_business_other_scope", "industry_where_its_business_is_installed", "industry_run_in_progress",
+])
+def test_ownership_blockers_are_the_same_on_both_endpoints(client_with_agent, engine, mock_ws, state):
+    biz, body = _ownership_state(state, engine, mock_ws)
+    v_resp = client_with_agent.post(f"/api/businesses/{biz}/runs/validate", json=body)
+    assert v_resp.status_code == 200, v_resp.text
+    c_resp = client_with_agent.post(f"/api/businesses/{biz}/runs", json=body)
+    assert c_resp.status_code == 400, c_resp.text
+    assert c_resp.json()["detail"] in [b["message"] for b in v_resp.json()["blockers"]]
+
+
+def test_the_business_over_industry_warning_is_the_same_on_both_endpoints(client_with_agent, engine, mock_ws):
+    biz, body = _ownership_state("business_over_its_industry", engine, mock_ws)
+    v_resp = client_with_agent.post(f"/api/businesses/{biz}/runs/validate", json=body)
+    assert v_resp.status_code == 200, v_resp.text
+    c_resp = client_with_agent.post(f"/api/businesses/{biz}/runs", json=body)
+    assert c_resp.status_code == 200, c_resp.text
+
+    def uninstalls_first(warnings):
+        return [w["message"] for w in warnings if "This run uninstalls it first" in w["message"]]
+
+    assert uninstalls_first(v_resp.json()["warnings"]) == uninstalls_first(c_resp.json()["warnings"])
+    assert len(uninstalls_first(c_resp.json()["warnings"])) == 1

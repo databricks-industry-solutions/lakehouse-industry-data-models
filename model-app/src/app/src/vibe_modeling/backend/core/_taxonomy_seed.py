@@ -3,8 +3,9 @@
 ``_get_or_create_agent_config`` seeds ``AgentConfig.taxonomy_model_service``
 from the install default when it creates the row. An install that already
 has a row (an upgrade, or enabling the feature later) never reaches that
-path, so boot runs one atomic UPDATE that fills the column only while it is
-still empty. A value saved in Settings is non-empty and is never touched.
+path, so boot fills the column only while it is still blank
+(``core/_settings_seed.seed_blank``). A value saved in Settings is never
+touched.
 
 No-op when the feature is not installed or has no install default. Runs at
 boot, not on read, keeping the rule that reads never update the singleton
@@ -21,7 +22,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
-from sqlalchemy import or_, select, update
+from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlmodel import col
 
@@ -31,21 +32,14 @@ from ..taxonomy.llm import make_taxonomy_llm
 from ..taxonomy.slots import TAXONOMY_SLOTS
 from ._base import LifespanDependency
 from ._config import AppConfig, logger
+from ._settings_seed import seed_blank
 
 
 def seed_taxonomy_model_service(engine: Engine, config: AppConfig) -> int:
-    """Fill an empty ``taxonomy_model_service`` from the install default.
+    """Fill a blank ``taxonomy_model_service`` from the install default.
     Returns the number of rows updated."""
-    service = config.taxonomy_install_default_model_service
-    if not service:
-        return 0
-    stmt = (
-        update(AgentConfig)
-        .where(or_(col(AgentConfig.taxonomy_model_service) == "", col(AgentConfig.taxonomy_model_service).is_(None)))
-        .values(taxonomy_model_service=service)
-    )
     with engine.begin() as conn:
-        return conn.execute(stmt).rowcount or 0
+        return seed_blank(conn, AgentConfig.taxonomy_model_service, config.taxonomy_install_default_model_service)
 
 
 def start_boot_probe(engine: Engine, config: AppConfig) -> bool:

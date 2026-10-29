@@ -82,13 +82,13 @@ def create_app(
 
     from ..error_sanitization import register_error_handlers
 
-    register_error_handlers(app)
-
     if dist_dir.exists():
-        from ._static import CachedStaticFiles, add_not_found_handler
+        from ._static import CachedStaticFiles, spa_fallback
 
         app.mount("/", CachedStaticFiles(directory=dist_dir, html=True))
-        add_not_found_handler(app)
+        register_error_handlers(app, spa_fallback=spa_fallback)
+    else:
+        register_error_handlers(app)
 
     return app
 

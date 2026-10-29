@@ -91,6 +91,27 @@ describe("BusinessTree", () => {
     expect(screen.getByText("Base")).toBeInTheDocument();
   });
 
+  it("labels a shrink output whose parent was deleted", async () => {
+    versionsHook = () => ({
+      data: {
+        data: [
+          {
+            id: "v-5",
+            version: 5,
+            scope: "mvm",
+            status: "ready",
+            is_base: false,
+            parent_deleted: true,
+          },
+        ],
+      },
+      isLoading: false,
+    });
+    renderWithRouter(<BusinessTree businessId="biz-1" />);
+
+    expect(await screen.findByText("Vibed (parent deleted)")).toBeInTheDocument();
+  });
+
   it("survives a 4xx on getDomainDetail when the user expands a domain", async () => {
     versionsHook = () => ({
       data: {

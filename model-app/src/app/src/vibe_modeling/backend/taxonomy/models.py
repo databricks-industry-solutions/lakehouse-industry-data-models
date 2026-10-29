@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..models import BUSINESS_NAME_PATTERN, OrgDivisions
 from .slots import DEFAULT_CAPACITY, MAX_CAPACITY, MIN_CAPACITY
@@ -87,6 +87,31 @@ class TaxonomySection(BaseModel):
     claims: list[TaxonomyClaim] = Field(min_length=1)
 
 
+def _known_sections(value: dict[str, "TaxonomySection"]) -> dict[str, "TaxonomySection"]:
+    unknown = sorted(set(value) - set(SECTION_KEYS))
+    if unknown:
+        raise ValueError(f"unknown section keys: {', '.join(unknown)}")
+    return value
+
+
+class TaxonomyDraftCreateIn(TaxonomyIntake):
+    """A draft request. ``seed_tree`` and ``seed_sections`` are parts the user
+    already has (Draft again after a lost draft, or a resumed wizard): they
+    start ``done`` without a model call, and only the missing parts are
+    drafted."""
+
+    seed_tree: TaxonomyTree | None = None
+    seed_sections: dict[str, TaxonomySection] = Field(default_factory=dict)
+
+    _check_seed_sections = field_validator("seed_sections")(_known_sections)
+
+    def fully_seeded(self) -> bool:
+        return self.seed_tree is not None and set(SECTION_KEYS) <= set(self.seed_sections)
+
+    def intake(self) -> TaxonomyIntake:
+        return TaxonomyIntake.model_validate(self.model_dump(include=set(TaxonomyIntake.model_fields)))
+
+
 class TaxonomyDraftPartOut(BaseModel):
     status: PartStatus
     error: str | None = None
@@ -143,6 +168,52 @@ class TaxonomyExampleOut(BaseModel):
     description: str
 
 
+# --- Saved wizard: /taxonomy/saved ----------------------------------------
+
+WIZARD_LAST_STEP = 3
+
+
+class TaxonomyWizardStateIn(BaseModel):
+    """The whole wizard document, saved on every change. ``revision`` is the
+    revision this tab last loaded or saved (0 when nothing is saved yet); a
+    save from an older revision answers 409 ``stale_revision``. ``tree`` and
+    ``sections`` hold only finished parts: the client sends the sanitized
+    editor state, and nothing for a part still drafting."""
+
+    revision: int = Field(ge=0)
+    step: int = Field(ge=0, le=WIZARD_LAST_STEP)
+    sector_id: Optional[str] = None
+    strictness: Strictness = "strict"
+    intake: TaxonomyIntake
+    tree: TaxonomyTree | None = None
+    sections: dict[str, TaxonomySection] = Field(default_factory=dict)
+
+    _check_sections = field_validator("sections")(_known_sections)
+
+
+class TaxonomyWizardStateOut(BaseModel):
+    revision: int
+    step: int
+    sector_id: Optional[str] = None
+    strictness: Strictness
+    intake: TaxonomyIntake
+    tree: TaxonomyTree | None = None
+    sections: dict[str, TaxonomySection]
+    updated_at: datetime
+    expires_at: datetime
+
+
+class TaxonomySavedWizardOut(BaseModel):
+    """GET /taxonomy/saved: the caller's saved wizard, or ``saved = null``."""
+
+    saved: TaxonomyWizardStateOut | None = None
+
+
+class TaxonomyWizardDiscardOut(BaseModel):
+    # False when there was nothing saved.
+    discarded: bool
+
+
 # --- Settings: /config/taxonomy -------------------------------------------
 
 
@@ -166,6 +237,9 @@ class TaxonomyConfigOut(BaseModel):
     ready: bool
     # Most recent test call for ``model_service`` in this app process.
     last_check: Optional[TaxonomyCheckOut] = None
+    # Who last saved these settings and when (UTC); None until the first save.
+    updated_by: Optional[str] = None
+    updated_at: Optional[datetime] = None
 
 
 class TaxonomyConfigIn(BaseModel):

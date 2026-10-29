@@ -48,7 +48,9 @@ function ResultsTabs({
   }, [tab, jumpTo]);
   const openCount = results.pending_decisions.filter((d) => d.answer_status === "open").length;
   return (
-    <Tabs value={tab} onValueChange={setTab}>
+    // Inline-size containment keeps wide tab content (the gap table, long prompt blocks) from widening the
+    // page: the panel takes the page's width and those blocks scroll inside it.
+    <Tabs value={tab} onValueChange={setTab} className="[contain:inline-size]" data-testid="results-tabs">
       <TabsList>
         <TabsTrigger value="scorecard">Scorecard</TabsTrigger>
         <TabsTrigger value="entities">Entities</TabsTrigger>

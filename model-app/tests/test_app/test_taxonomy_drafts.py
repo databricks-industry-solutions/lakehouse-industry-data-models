@@ -846,3 +846,107 @@ async def test_a_refusal_from_a_call_abandoned_before_a_retry_is_stale():
     out = _got(store, did, "a")
     assert out.status == "done", {k: (p.status, p.error) for k, p in out.parts.items()}
     assert new.calls[0] == "tree"
+
+
+# ---- seeded drafts (Draft again and resume reuse the user's parts) --------
+
+
+@pytest.mark.asyncio
+async def test_seeded_tree_makes_no_tree_call_and_drafts_every_section():
+    store, llm = _store(), FakeLLM()
+    did = store.create("a", INTAKE, llm, seed_tree=EX.tree)
+    await store.wait(did)
+    out = _got(store, did, "a")
+    assert out.status == "done"
+    assert out.parts["tree"].tree == EX.tree
+    assert "tree" not in llm.calls
+    assert sorted(llm.calls) == sorted(SECTION_KEYS)
+
+
+@pytest.mark.asyncio
+async def test_seeded_sections_are_done_and_not_drafted():
+    store, llm = _store(), FakeLLM()
+    seeded = {"company": EX.sections["company"], "regulatory": EX.sections["regulatory"]}
+    did = store.create("a", INTAKE, llm, seed_tree=EX.tree, seed_sections=seeded)
+    await store.wait(did)
+    out = _got(store, did, "a")
+    assert out.status == "done"
+    assert out.parts["company"].section == EX.sections["company"]
+    assert sorted(llm.calls) == sorted(set(SECTION_KEYS) - set(seeded))
+
+
+@pytest.mark.asyncio
+async def test_fully_seeded_draft_runs_nothing():
+    store, llm = _store(), FakeLLM()
+    did = store.create("a", INTAKE, llm, seed_tree=EX.tree, seed_sections=dict(EX.sections))
+    assert store._active == {}
+    out = _got(store, did, "a")
+    assert out.status == "done" and llm.calls == []
+
+
+@pytest.mark.asyncio
+async def test_seeded_sections_without_a_tree_draft_the_tree_and_the_rest():
+    store, llm = _store(), FakeLLM()
+    did = store.create("a", INTAKE, llm, seed_sections={"company": EX.sections["company"]})
+    await store.wait(did)
+    out = _got(store, did, "a")
+    assert out.status == "done"
+    assert llm.calls[0] == "tree" and "company" not in llm.calls
+    assert sorted(llm.calls[1:]) == sorted(set(SECTION_KEYS) - {"company"})
+
+
+@pytest.mark.asyncio
+async def test_seeded_tree_while_busy_marks_only_the_missing_sections_busy():
+    store, llm = _store(), FakeLLM()
+    did = store.create("a", INTAKE, llm, busy=True, seed_tree=EX.tree, seed_sections={"company": EX.sections["company"]})
+    out = _got(store, did, "a")
+    assert out.parts["tree"].status == "done"
+    assert out.parts["company"].status == "done"
+    missing = set(SECTION_KEYS) - {"company"}
+    assert all(out.parts[k].status == "busy" and out.parts[k].error == BUSY_ERROR for k in missing)
+    assert llm.calls == []
+    assert store.retry_part(did, "a", "terminology", llm) == "ok"
+    await store.wait(did)
+    assert _got(store, did, "a").parts["terminology"].status == "done"
+    assert llm.calls == ["terminology"]
+
+
+# ---- TTL from last activity -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ttl_counts_from_last_poll_not_from_creation():
+    now = [0.0]
+    store = _store(ttl_seconds=10, clock=lambda: now[0])
+    did = store.create("a", INTAKE, FakeLLM())
+    await store.wait(did)
+    for t in (8.0, 16.0, 24.0):  # each poll is within the TTL of the previous one
+        now[0] = t
+        assert store.get(did, "a") is not None
+    now[0] = 35.0
+    assert store.get(did, "a") is None
+
+
+@pytest.mark.asyncio
+async def test_retry_counts_as_activity():
+    now = [0.0]
+    store = _store(ttl_seconds=10, clock=lambda: now[0])
+    did = store.create("a", INTAKE, FakeLLM(fail_parts={"terminology"}))
+    await store.wait(did)
+    now[0] = 9.0
+    assert store.retry_part(did, "a", "terminology", FakeLLM()) == "ok"
+    await store.wait(did)
+    now[0] = 18.0
+    assert store.get(did, "a") is not None
+
+
+@pytest.mark.asyncio
+async def test_another_owners_poll_does_not_keep_a_draft_alive():
+    now = [0.0]
+    store = _store(ttl_seconds=10, clock=lambda: now[0])
+    did = store.create("a", INTAKE, FakeLLM())
+    await store.wait(did)
+    now[0] = 8.0
+    assert store.get(did, "b") is None
+    now[0] = 12.0
+    assert store.get(did, "a") is None

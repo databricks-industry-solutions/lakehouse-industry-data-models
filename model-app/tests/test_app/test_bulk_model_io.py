@@ -33,6 +33,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "a
 
 from datetime import datetime, timezone
 
+import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 from sqlmodel import Session, select
 
@@ -73,7 +74,12 @@ def _make_business_and_versions(session: Session) -> tuple[str, str]:
 
 def _sentinel_value(column, tag: str):
     """A non-default sentinel for a column's Python type, tagged so two
-    calls never collide (guards against a false-positive column match)."""
+    calls never collide (guards against a false-positive column match).
+
+    Datetime columns are recognized by their SQL type: newer sqlmodel wraps
+    them in a ``TypeDecorator`` whose ``python_type`` is not implemented."""
+    if isinstance(getattr(column.type, "impl", column.type), sa.DateTime):
+        return datetime(2020, 1, 1, tzinfo=timezone.utc)
     try:
         py_type = column.type.python_type
     except (AttributeError, NotImplementedError):
@@ -82,8 +88,6 @@ def _sentinel_value(column, tag: str):
         return True
     if py_type in (int, float):
         return 42
-    if py_type is datetime:
-        return datetime(2020, 1, 1, tzinfo=timezone.utc)
     return f"sentinel-{tag}"
 
 

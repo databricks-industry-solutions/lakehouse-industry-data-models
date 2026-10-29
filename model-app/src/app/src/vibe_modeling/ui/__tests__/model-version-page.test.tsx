@@ -56,6 +56,10 @@ vi.mock("@/lib/api", async () => {
     useGetModelSummarySuspense: () => modelHook(),
     useListVibeInputsSuspense: () => feedbackHook(),
     useListVibeInputs: () => feedbackHook(),
+    // The band reads these once they resolve; the fetch stub below answers [] for every URL, so left real they would
+    // swap the band's figures after the first paint and the assertions would depend on which paint they land in.
+    useGetEvolutionMetrics: () => ({ data: undefined }),
+    useGetNextVibeMetrics: () => ({ data: undefined }),
     createRun: vi.fn(),
     deleteVersion: vi.fn(),
     getRun: vi.fn(),

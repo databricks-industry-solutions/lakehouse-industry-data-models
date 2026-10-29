@@ -13,6 +13,8 @@ removed (Pydantic + SQLModel guarantee these). What remains targets:
 import sys
 import os
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "app", "src"))
 
 from sqlmodel import select
@@ -34,6 +36,39 @@ class TestRunDefaults:
         big = 2**40  # well above 2_147_483_647
         r = Run(business_id="fake-id", vibe_session_id="sid", vibe_session_id_bigint=big)
         assert r.vibe_session_id_bigint == big
+
+
+class TestRunRejectsUnknownFields:
+    """``Run`` declares ``extra="forbid"``, but a SQLModel table model skips
+    validation on construction, so ``Run.__init__`` checks the keys itself."""
+
+    def test_unknown_kwarg_raises(self):
+        with pytest.raises(TypeError, match="bogus"):
+            Run(business_id="fake-id", bogus=1)
+
+    def test_retired_column_name_raises(self):
+        with pytest.raises(TypeError, match="run_type"):
+            Run(business_id="fake-id", run_type="install model")
+
+    def test_relationship_kwarg_accepted(self):
+        r = Run(business_id="fake-id", artifacts=[])
+        assert r.artifacts == []
+
+    def test_row_loaded_from_db_round_trips(self, engine):
+        from sqlmodel import Session
+
+        with Session(engine) as s:
+            biz = db.Business(name="Acme")
+            s.add(biz)
+            s.commit()
+            run = Run(business_id=biz.id, intent="install", status="completed")
+            s.add(run)
+            s.commit()
+            run_id = run.id
+        with Session(engine) as s:
+            loaded = s.get(Run, run_id)
+            assert loaded.intent == "install"
+            assert Run.model_validate(loaded.model_dump()).id == run_id
 
 
 class TestDatabaseSchema:
@@ -58,6 +93,11 @@ class TestDatabaseSchema:
             # Assessment results readability
             "assess_summary", "assess_summary_item", "assess_decision_option_point",
             "assess_decision_affected", "assess_next_vibe_entity",
+            # Version lifecycle + run report (migration 0.9.0)
+            "run_agent_reports", "run_post_install_deletes",
+            # Install locations, cleanups, change review, wizard state (migration 0.9.0.1)
+            "model_version_installs", "metamodel_cleanups", "run_schema_drops",
+            "run_change_decisions", "taxonomy_wizard_states",
         ]
         for table in expected:
             assert table in tables, f"Table '{table}' not created"
@@ -349,3 +389,280 @@ class TestAssessReadabilitySchema:
         assert nv.urgency == "high"
         profile = session.exec(select(AssessColumnSourceProfile)).first()
         assert profile.system == "src1" and profile.row_count == 100 and profile.null_pct == 2.5
+
+
+class TestVersionLifecycleSchema:
+    """v_0_9_0: lifecycle columns on model_versions, outcome columns on
+    run_input_links, consumed_by_run_id on vibe_inputs, the installed-identity
+    cache on agent_config, and the two new tables."""
+
+    def test_model_version_defaults(self):
+        mv = db.ModelVersion(business_id="fake-id")
+        assert mv.dry_run is False
+        for name in ("promoted_at", "promoted_by_run_id", "replaced_by_version_id", "replaced_at",
+                     "files_catalog", "scope_fence_mode", "scope_base_version", "scope_base_scope"):
+            assert getattr(mv, name) is None, name
+
+    def test_set_null_foreign_keys(self, engine):
+        from sqlalchemy import inspect as sa_inspect
+        insp = sa_inspect(engine)
+        expected = {
+            ("model_versions", "promoted_by_run_id"): "runs",
+            ("model_versions", "replaced_by_version_id"): "model_versions",
+            ("vibe_inputs", "consumed_by_run_id"): "runs",
+        }
+        for (table, column), parent in expected.items():
+            fks = [fk for fk in insp.get_foreign_keys(table) if fk["constrained_columns"] == [column]]
+            assert len(fks) == 1, (table, column)
+            assert fks[0]["referred_table"] == parent
+            assert fks[0]["options"].get("ondelete") == "SET NULL"
+
+    def test_promoted_by_run_id_breaks_the_runs_cycle(self):
+        (fk,) = db.ModelVersion.__table__.columns["promoted_by_run_id"].foreign_keys
+        assert fk.use_alter and fk.name == "model_versions_promoted_by_run_id_fkey"
+
+    def test_run_input_link_outcome_columns_nullable(self):
+        cols = db.RunInputLink.__table__.columns
+        for name in ("outcome_status", "outcome_reason", "outcome_target"):
+            assert cols[name].nullable, name
+
+    def test_agent_config_identity_cache_defaults_null(self):
+        cfg = db.AgentConfig()
+        for name in ("installed_release_version", "installed_agent_version", "installed_checked_at",
+                     "installed_checked_path", "installed_check_error"):
+            assert getattr(cfg, name) is None, name
+
+    def test_new_table_keys(self):
+        assert {c.name for c in db.RunAgentReport.__table__.primary_key.columns} == {"run_id"}
+        assert {c.name for c in db.RunPostInstallDelete.__table__.primary_key.columns} == {"run_id", "version_id"}
+        assert not db.RunPostInstallDelete.__table__.columns["version_id"].foreign_keys
+
+    def test_round_trip_and_cascade(self, fk_engine):
+        from sqlmodel import Session
+
+        with Session(fk_engine) as session:
+            biz = db.Business(name="lifecycle-biz")
+            session.add(biz)
+            session.flush()
+            run = db.Run(business_id=biz.id, intent="install model")
+            replacer = db.ModelVersion(business_id=biz.id, version=3, scope="ecm")
+            session.add_all([run, replacer])
+            session.flush()
+            mv = db.ModelVersion(business_id=biz.id, version=5, scope="ecm", dry_run=True,
+                                 promoted_by_run_id=run.id, replaced_by_version_id=replacer.id,
+                                 files_catalog="cat_a", scope_fence_mode="some_domains",
+                                 scope_base_version=4, scope_base_scope="ecm")
+            vi = db.VibeInput(business_id=biz.id, consumed=True, consumed_by_run_id=run.id)
+            session.add_all([mv, vi])
+            session.flush()
+            session.add_all([
+                db.RunInputLink(run_id=run.id, input_id=vi.id, outcome_status="applied",
+                                outcome_reason="done", outcome_target="sales.orders"),
+                db.RunAgentReport(run_id=run.id, has_input_outcomes=True, expected_version=5,
+                                  fetched_version=5, lineage_stale=False),
+                db.RunPostInstallDelete(run_id=run.id, version_id="v-old", version=4, scope="ecm"),
+            ])
+            session.commit()
+            run_id, mv_id, vi_id = run.id, mv.id, vi.id
+
+        with Session(fk_engine) as session:
+            got = session.get(db.ModelVersion, mv_id)
+            assert (got.dry_run, got.files_catalog, got.scope_base_version) == (True, "cat_a", 4)
+            report = session.get(db.RunAgentReport, run_id)
+            assert report.has_input_outcomes and report.unmatched_outcome_count == 0
+            pending = session.get(db.RunPostInstallDelete, (run_id, "v-old"))
+            assert pending.status == "pending" and pending.completed_at is None
+            session.delete(session.get(db.Run, run_id))
+            session.commit()
+
+        with Session(fk_engine) as session:
+            assert session.get(db.ModelVersion, mv_id).promoted_by_run_id is None
+            assert session.get(db.VibeInput, vi_id).consumed_by_run_id is None
+            assert session.get(db.RunAgentReport, run_id) is None
+            assert session.get(db.RunPostInstallDelete, (run_id, "v-old")) is None
+
+
+class TestAddendumSchema:
+    """v_0_9_0_1: install locations, metamodel cleanups, schema drops, change
+    decisions, the saved taxonomy wizard, and the new run / agent_config columns."""
+
+    def test_run_and_agent_config_columns_default_null(self):
+        run = db.Run(business_id="fake-id")
+        assert run.linked_at is None and run.link_evidence is None
+        cfg = db.AgentConfig()
+        assert cfg.taxonomy_updated_by is None and cfg.taxonomy_updated_at is None
+
+    def test_foreign_keys(self, engine):
+        from sqlalchemy import inspect as sa_inspect
+
+        insp = sa_inspect(engine)
+        expected = {
+            ("model_version_installs", "version_id"): ("model_versions", "CASCADE"),
+            ("model_version_installs", "installed_by_run_id"): ("runs", "SET NULL"),
+            ("model_version_installs", "uninstalled_by_run_id"): ("runs", "SET NULL"),
+            ("run_schema_drops", "run_id"): ("runs", "CASCADE"),
+            ("run_change_decisions", "run_id"): ("runs", "CASCADE"),
+            ("run_change_decisions", "version_id"): ("model_versions", "CASCADE"),
+            ("run_change_decisions", "feedback_input_id"): ("vibe_inputs", "SET NULL"),
+            ("taxonomy_wizard_states", "sector_id"): ("sectors", "SET NULL"),
+        }
+        for (table, column), (parent, action) in expected.items():
+            fks = [fk for fk in insp.get_foreign_keys(table) if fk["constrained_columns"] == [column]]
+            assert len(fks) == 1, (table, column)
+            assert (fks[0]["referred_table"], fks[0]["options"].get("ondelete")) == (parent, action)
+        assert not insp.get_foreign_keys("metamodel_cleanups")
+
+    def test_keys_and_indexes(self, engine):
+        from sqlalchemy import inspect as sa_inspect
+
+        insp = sa_inspect(engine)
+        assert set(db.RunSchemaDrop.__table__.primary_key.columns.keys()) == {"run_id", "catalog", "schema_name"}
+        installs = {i["name"]: i for i in insp.get_indexes("model_version_installs")}
+        open_ix = installs["uq_model_version_installs_open"]
+        assert open_ix["unique"] and open_ix["column_names"] == ["version_id", "catalog"]
+        lookup = {i["name"]: i for i in insp.get_indexes("metamodel_cleanups")}["ix_metamodel_cleanups_lookup"]
+        assert lookup["column_names"] == ["business_segment", "scope", "catalog", "status"]
+        uniques = {u["name"]: u["column_names"] for u in insp.get_unique_constraints("run_change_decisions")}
+        assert uniques["uq_run_change_decisions_element"] == ["run_id", "element_kind", "element_path"]
+        assert db.TaxonomyWizardState.__table__.columns["owner"].unique
+        assert not db.TaxonomyWizardState.__table__.columns["intake_json"].nullable
+
+    def test_one_open_install_row_per_version_and_catalog(self, engine):
+        from datetime import datetime, timezone
+
+        import pytest
+        from sqlalchemy.exc import IntegrityError
+        from sqlmodel import Session
+
+        now = datetime(2026, 10, 22, tzinfo=timezone.utc)
+        with Session(engine) as session:
+            biz = db.Business(name="installs-biz")
+            session.add(biz)
+            session.flush()
+            mv = db.ModelVersion(business_id=biz.id, version=1, scope="ecm")
+            session.add(mv)
+            session.flush()
+            session.add_all([
+                db.ModelVersionInstall(version_id=mv.id, catalog="cat_a", uninstalled_at=now),
+                db.ModelVersionInstall(version_id=mv.id, catalog="cat_a", uninstalled_at=now),
+                db.ModelVersionInstall(version_id=mv.id, catalog="cat_a"),
+                db.ModelVersionInstall(version_id=mv.id, catalog="cat_b"),
+            ])
+            session.commit()
+            session.add(db.ModelVersionInstall(version_id=mv.id, catalog="cat_a"))
+            with pytest.raises(IntegrityError):
+                session.commit()
+
+    def test_round_trip_and_on_delete(self, fk_engine):
+        from datetime import datetime, timedelta, timezone
+
+        from sqlmodel import Session
+
+        now = datetime(2026, 10, 22, tzinfo=timezone.utc)
+        with Session(fk_engine) as session:
+            sector = db.Sector(name="Retail")
+            biz = db.Business(name="addendum-biz")
+            session.add_all([sector, biz])
+            session.flush()
+            run = db.Run(business_id=biz.id, intent="vibe-iterate", linked_at=now, link_evidence="tier 1")
+            mv = db.ModelVersion(business_id=biz.id, version=2, scope="ecm")
+            session.add_all([run, mv])
+            session.flush()
+            vi = db.VibeInput(business_id=biz.id, origin="change_rejection", text="put it back")
+            session.add(vi)
+            session.flush()
+            session.add_all([
+                db.ModelVersionInstall(version_id=mv.id, catalog="cat_a", installed_by_run_id=run.id),
+                db.MetamodelCleanup(business_segment="addendum_biz", version=1, scope="ecm", catalog="cat_a",
+                                    reason="version_delete"),
+                db.RunSchemaDrop(run_id=run.id, catalog="cat_a", schema_name="ecm_sales", table_count=3),
+                db.RunChangeDecision(run_id=run.id, version_id=mv.id, element_kind="product",
+                                     element_path="sales.orders", change_kind="removed", decision="rejected",
+                                     decided_by="a@b.c", feedback_input_id=vi.id),
+                db.TaxonomyWizardState(owner="a@b.c", sector_id=sector.id, intake_json="{}",
+                                       expires_at=now + timedelta(days=7)),
+            ])
+            session.commit()
+            ids = (run.id, mv.id, vi.id, sector.id)
+
+        run_id, mv_id, vi_id, sector_id = ids
+        with Session(fk_engine) as session:
+            got = session.get(db.Run, run_id)
+            assert (got.link_evidence, got.linked_at is not None) == ("tier 1", True)
+            cleanup = session.exec(select(db.MetamodelCleanup)).one()
+            assert (cleanup.status, cleanup.attempts, cleanup.last_error) == ("pending", 0, None)
+            drop = session.get(db.RunSchemaDrop, (run_id, "cat_a", "ecm_sales"))
+            assert (drop.status, drop.error) == ("pending", None)
+            state = session.exec(select(db.TaxonomyWizardState)).one()
+            assert (state.step, state.revision, state.strictness, state.tree_json) == (0, 0, "strict", None)
+            session.delete(session.get(db.VibeInput, vi_id))
+            session.delete(session.get(db.Sector, sector_id))
+            session.commit()
+            assert session.exec(select(db.RunChangeDecision)).one().feedback_input_id is None
+            assert session.exec(select(db.TaxonomyWizardState)).one().sector_id is None
+            session.delete(session.get(db.Run, run_id))
+            session.commit()
+            assert session.exec(select(db.ModelVersionInstall)).one().installed_by_run_id is None
+            assert session.exec(select(db.RunSchemaDrop)).all() == []
+            assert session.exec(select(db.RunChangeDecision)).all() == []
+            session.delete(session.get(db.ModelVersion, mv_id))
+            session.commit()
+            assert session.exec(select(db.ModelVersionInstall)).all() == []
+            assert len(session.exec(select(db.MetamodelCleanup)).all()) == 1
+
+
+class TestBooleanServerDefaults:
+    """``server_default=false()`` / ``true()`` render ``0`` / ``1`` on SQLite and
+    ``false`` / ``true`` on Postgres. A quoted ``'false'`` would store the text on
+    SQLite, which reads back as True."""
+
+    # (table, column) -> (SQLite rendering, Postgres rendering)
+    COLUMNS = {
+        ("model_versions", "dry_run"): ("0", "false"),
+        ("agent_config", "collect_vibe_run_statistics"): ("1", "true"),
+    }
+
+    @staticmethod
+    def _raw_insert_omitting(conn, table_name: str, omit: str, row_id: str, **values) -> None:
+        """Insert with every other NOT NULL column filled, so only ``omit`` takes its server default."""
+        from datetime import datetime, timezone
+
+        from sqlalchemy import Boolean, DateTime, Integer, insert
+
+        table = db.SQLModel.metadata.tables[table_name]
+        row = {"id": row_id, **values}
+        for col in table.columns:
+            if col.name in row or col.name == omit or col.nullable or col.server_default is not None:
+                continue
+            if isinstance(col.type, DateTime):
+                row[col.name] = datetime(2026, 10, 22, tzinfo=timezone.utc)
+            elif isinstance(col.type, (Integer, Boolean)):
+                row[col.name] = 0
+            else:
+                row[col.name] = ""
+        conn.execute(insert(table).values(**row))
+
+    def test_raw_insert_without_the_column_reads_its_default(self, engine):
+        from sqlmodel import Session
+
+        with Session(engine) as session:
+            session.add(db.Business(id="b-raw", name="Raw"))
+            session.commit()
+        with engine.begin() as conn:
+            self._raw_insert_omitting(conn, "model_versions", "dry_run", "mv-raw", business_id="b-raw")
+            self._raw_insert_omitting(conn, "agent_config", "collect_vibe_run_statistics", "cfg-raw")
+        with Session(engine) as session:
+            assert session.get(db.ModelVersion, "mv-raw").dry_run is False
+            assert session.get(db.AgentConfig, "cfg-raw").collect_vibe_run_statistics is True
+
+    def test_defaults_compile_per_dialect(self):
+        from sqlalchemy.dialects import postgresql, sqlite
+
+        for (table, column), (on_sqlite, on_pg) in self.COLUMNS.items():
+            default = db.SQLModel.metadata.tables[table].columns[column].server_default.arg
+            assert str(default.compile(dialect=sqlite.dialect())) == on_sqlite
+            assert str(default.compile(dialect=postgresql.dialect())) == on_pg
+
+    def test_python_defaults_match_the_server_defaults(self):
+        assert db.ModelVersion(business_id="b").dry_run is False
+        assert db.AgentConfig().collect_vibe_run_statistics is True

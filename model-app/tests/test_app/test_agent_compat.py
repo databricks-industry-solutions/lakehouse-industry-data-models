@@ -7,6 +7,7 @@ Covers:
 - The `build_report` / `render_body` helpers used by the CI workflow
 """
 
+import json
 import sys
 import os
 
@@ -149,7 +150,7 @@ class TestAgentCompatEndpoint:
     fetch is always monkeypatched — no test makes a live GitHub call."""
 
     def test_endpoint_shape(self, client, monkeypatch):
-        _patch_upstream(monkeypatch, release="v0.8.0", marker="4.9.9")
+        _patch_upstream(monkeypatch, release="v0.8.0", marker="5.3.3")
         response = client.get("/api/config/agent-compat")
         assert response.status_code == 200
         data = response.json()
@@ -170,12 +171,12 @@ class TestAgentCompatEndpoint:
 
     def test_verdict_up_to_date_when_equal(self, client, monkeypatch):
         """Upstream == pinned release + marker → up_to_date, nothing to do."""
-        _patch_upstream(monkeypatch, release="v0.8.0", marker="4.9.9")
+        _patch_upstream(monkeypatch, release="v0.8.0", marker="5.3.3")
         data = client.get("/api/config/agent-compat").json()
         assert data["pinned_release"] == "v0.8.0"
-        assert data["pinned_agent_marker"] == "4.9.9"
+        assert data["pinned_agent_marker"] == "5.3.3"
         assert data["latest_upstream_release"] == "v0.8.0"
-        assert data["latest_upstream_marker"] == "4.9.9"
+        assert data["latest_upstream_marker"] == "5.3.3"
         assert data["verdict"] == "up_to_date"
         assert data["newer_available"] is False
         assert data["update_app_required"] is False
@@ -185,13 +186,13 @@ class TestAgentCompatEndpoint:
     def test_verdict_build_update_available(self, client, monkeypatch):
         """Same release, newer build marker → build_update_available (info only,
         no app update required, no install offered)."""
-        _patch_upstream(monkeypatch, release="v0.8.0", marker="4.9.10")
+        _patch_upstream(monkeypatch, release="v0.8.0", marker="5.3.4")
         data = client.get("/api/config/agent-compat").json()
         assert data["verdict"] == "build_update_available"
         assert data["newer_available"] is True
         assert data["update_app_required"] is False
         assert data["install_offered"] is False
-        assert data["latest_upstream_marker"] == "4.9.10"
+        assert data["latest_upstream_marker"] == "5.3.4"
 
     def test_verdict_release_incompatible(self, client, monkeypatch):
         """Newer upstream RELEASE → release_incompatible: the app must be
@@ -215,7 +216,7 @@ class TestAgentCompatEndpoint:
         _seed_agent_config(
             engine,
             upstream_release_version="v0.8.0",
-            upstream_agent_version="4.9.9",
+            upstream_agent_version="5.3.3",
             upstream_checked_at=datetime.now(timezone.utc),
         )
         calls = _patch_upstream(monkeypatch, release="v9.9.9", marker="9.9.9")
@@ -232,13 +233,13 @@ class TestAgentCompatEndpoint:
         _seed_agent_config(
             engine,
             upstream_release_version="v0.8.0",
-            upstream_agent_version="4.9.9",
+            upstream_agent_version="5.3.3",
             upstream_checked_at=datetime.now(timezone.utc) - timedelta(days=8),
         )
-        calls = _patch_upstream(monkeypatch, release="v0.8.0", marker="4.9.11")
+        calls = _patch_upstream(monkeypatch, release="v0.8.0", marker="5.3.4")
         data = client.get("/api/config/agent-compat").json()
         assert calls["n"] == 1, "stale cache must trigger a fetch"
-        assert data["latest_upstream_marker"] == "4.9.11"
+        assert data["latest_upstream_marker"] == "5.3.4"
         assert data["verdict"] == "build_update_available"
 
     def test_fetch_error_keeps_cache_and_records_error(self, client, engine, monkeypatch):
@@ -369,9 +370,9 @@ class TestUpstreamIdentityFetch:
 
     def test_fetch_upstream_agent_identity_uses_connector(self):
         h = self._helpers()
-        blob = _ipynb([("code", '__AGENT_VERSION__ = "4.9.9"\n__RELEASE_VERSION__ = "0.8.0"\n')])
+        blob = _ipynb([("code", '__AGENT_VERSION__ = "5.3.3"\n__RELEASE_VERSION__ = "0.8.0"\n')])
         conn = _FakeConnector(text=blob)
-        assert h.fetch_upstream_agent_identity(conn) == ("v0.8.0", "4.9.9")
+        assert h.fetch_upstream_agent_identity(conn) == ("v0.8.0", "5.3.3")
         assert conn.requested_path == h.UPSTREAM_AGENT_NOTEBOOK_REPO_PATH
 
     def test_fetch_upstream_agent_identity_propagates_error(self):

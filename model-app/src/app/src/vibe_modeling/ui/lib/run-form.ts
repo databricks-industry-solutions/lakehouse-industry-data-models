@@ -12,6 +12,10 @@
  * correct inline reason.
  */
 
+import type { ModelVersionOut } from "@/lib/api";
+import { isModelVersion, replacedBadgeLabel } from "@/lib/version-lifecycle";
+import { versionScopeLabel } from "@/lib/version-label";
+
 export interface RunFormState {
   isBase: boolean;
   isVibe: boolean;
@@ -59,4 +63,101 @@ export function deriveRunFormBlockers(state: RunFormState): RunFormBlockers {
     vibeContentMissing,
     hasBlocker: baseContextMissing || vibeContentMissing,
   };
+}
+
+/** The version fields the Base Version picker reads. */
+export type BaseVersionRow = Pick<
+  ModelVersionOut,
+  "id" | "version" | "scope" | "status" | "replaced_at" | "replaced_by_version_id"
+>;
+
+/**
+ * The versions a Vibe Modeling run can use as its base: every finished,
+ * non-draft model, superseded ones included. The server takes the explicit
+ * parent whatever its status and warns when newer versions follow it
+ * (`validate.py` `dry_run` warning), so the picker does not hide them.
+ * Input order is kept.
+ */
+export function baseVersionCandidates<T extends BaseVersionRow>(versions: readonly T[]): T[] {
+  return versions.filter(isModelVersion);
+}
+
+/** True when a version was superseded by a newer one. */
+export function isSupersededBase(v: Pick<BaseVersionRow, "status">): boolean {
+  return v.status === "superseded";
+}
+
+/**
+ * The picker label: "v2 MVM", " (vibed)" only when `isBase` says a vibe
+ * produced it (the explorer's brand, `VersionTreeOut.is_base`; unknown reads
+ * as no text), " (superseded)" from the status, and the explorer's own
+ * " (Replaced by v3)" when the version was replaced (`replacedBadgeLabel`).
+ */
+export function baseVersionLabel(
+  v: BaseVersionRow,
+  versions: readonly BaseVersionRow[],
+  isBase: boolean | undefined,
+): string {
+  const parts = [versionScopeLabel(v.version, v.scope || "mvm")];
+  if (isBase === false) parts.push("(vibed)");
+  if (isSupersededBase(v)) parts.push("(superseded)");
+  const replaced = replacedBadgeLabel(v, versions);
+  if (replaced) parts.push(`(${replaced})`);
+  return parts.join(" ");
+}
+
+/**
+ * Said under the Base Version picker when a deep link names a version the
+ * picker does not offer for this run: `null` when the named version is
+ * offered (or the link names none), else why not and which version the form
+ * selected instead.
+ */
+export function baseDeepLinkNotice(args: {
+  sourceVersion: number | null | undefined;
+  sourceScope: string | null | undefined;
+  versions: readonly BaseVersionRow[];
+  eligible: readonly BaseVersionRow[];
+  selected: BaseVersionRow | undefined;
+  needsEcm: boolean;
+}): string | null {
+  const { sourceVersion, versions, eligible, selected, needsEcm } = args;
+  if (sourceVersion == null) return null;
+  const wantedScope = args.sourceScope ? args.sourceScope.toLowerCase() : null;
+  const scopeOf = (v: BaseVersionRow) => (v.scope || "mvm").toLowerCase();
+  const matches = (v: BaseVersionRow) =>
+    v.version === sourceVersion && (wantedScope == null || scopeOf(v) === wantedScope);
+  if (eligible.some(matches)) return null;
+  const named = versions.find(matches);
+  const label = named
+    ? versionScopeLabel(named.version, scopeOf(named))
+    : versionScopeLabel(sourceVersion, wantedScope);
+  let why: string;
+  if (!named) why = "does not exist";
+  else if (named.status === "draft") why = "is a Dry Run draft";
+  else if (named.status === "generating") why = "is still generating";
+  else if (named.status === "failed") why = "failed";
+  else if (needsEcm && scopeOf(named) !== "ecm") why = "is not an ECM; this run needs an ECM as its base";
+  else why = "cannot be used as a base";
+  const instead = selected
+    ? `${versionScopeLabel(selected.version, scopeOf(selected))} is selected instead.`
+    : "No other version is available to select.";
+  return `The link points to ${label}, which ${why}. ${instead}`;
+}
+
+/**
+ * True when the agent tears down this business's schemas in the run's catalog
+ * at the start of the run (`_staging_catalog_teardown` in the vendored agent):
+ * a Vibe Modeling Full Run (not a Dry Run, and not a Some domains run, which
+ * skip it) and the shrink step of Vibe ECM + MVM. New Base Model's shrink
+ * drops only its own new ECM's schemas: the business has no versions, so
+ * there is nothing else to warn about.
+ */
+export function runDropsOwnSchemas(state: {
+  isVibeIterate: boolean;
+  isVibeCombined: boolean;
+  dryRun: boolean;
+  scoped: boolean;
+}): boolean {
+  if (state.isVibeCombined) return true;
+  return state.isVibeIterate && !state.dryRun && !state.scoped;
 }

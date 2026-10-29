@@ -168,9 +168,9 @@ function DeleteAction({ onConfirm }: { onConfirm: () => void }) {
         <AlertDialogHeader>
           <AlertDialogTitle>Delete this feedback?</AlertDialogTitle>
           <AlertDialogDescription>
-            The feedback will be marked deleted and hidden from the list. It can
-            be restored from the inputs surface; links to prior runs are
-            preserved for audit.
+            The feedback will be marked deleted and hidden from the list. You can
+            restore it from the Deprecated list on the inputs surface; links to
+            prior runs are preserved for audit.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

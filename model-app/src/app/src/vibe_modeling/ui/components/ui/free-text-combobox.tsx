@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Check as CheckIcon, ChevronsUpDown, Plus as PlusIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,10 @@ export type FreeTextComboboxProps = {
   fallbackPlaceholder: string;
   /** Prefix for the fallback / loading / use-custom test ids. */
   testIdPrefix: string;
+  /** Short muted note shown next to an option (e.g. why it is unverified). */
+  optionHint?: (option: string) => string | undefined;
+  /** Called with the filter text as the user types. */
+  onSearchChange?: (search: string) => void;
 };
 
 /**
@@ -51,9 +55,15 @@ export function FreeTextCombobox({
   loadingText,
   fallbackPlaceholder,
   testIdPrefix,
+  optionHint,
+  onSearchChange,
 }: FreeTextComboboxProps) {
   const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
+  const [search, setSearchState] = useState("");
+  const setSearch = (s: string) => {
+    setSearchState(s);
+    onSearchChange?.(s);
+  };
   const reactId = useId();
   const triggerId = `${reactId}-${testIdPrefix}-trigger`;
 
@@ -70,6 +80,19 @@ export function FreeTextCombobox({
     [options, searchLower, trimmedSearch],
   );
   const showCustomOption = Boolean(trimmedSearch) && !exactMatch;
+  const customValue = `__use_custom__::${trimmedSearch}`;
+
+  // The highlighted item, controlled so that when the list changes under it
+  // (an option drops out) the highlight moves to the first item left and
+  // Enter still picks something.
+  const [highlighted, setHighlighted] = useState("");
+  const itemValues = useMemo(
+    () => [...filtered, ...(showCustomOption ? [customValue] : [])],
+    [filtered, showCustomOption, customValue],
+  );
+  useEffect(() => {
+    if (!itemValues.includes(highlighted)) setHighlighted(itemValues[0] ?? "");
+  }, [itemValues, highlighted]);
 
   if (error) {
     return (
@@ -123,26 +146,32 @@ export function FreeTextCombobox({
         </Button>
       </PopoverTrigger>
       <PopoverContent className="p-0 w-[var(--radix-popover-trigger-width)]" align="start">
-        <Command shouldFilter={false} label={ariaLabel}>
+        <Command shouldFilter={false} label={ariaLabel} value={highlighted} onValueChange={setHighlighted}>
           <CommandInput placeholder={searchPlaceholder} value={search} onValueChange={setSearch} />
           <CommandList>
             {filtered.length === 0 && !showCustomOption && <CommandEmpty>{emptyText}</CommandEmpty>}
-            {filtered.map((o) => (
-              <CommandItem
-                key={o}
-                value={o}
-                onSelect={() => choose(o)}
-                className="flex items-center justify-between"
-              >
-                <span className="truncate">{o}</span>
-                {value === o && <CheckIcon className="h-4 w-4 shrink-0 ml-2" />}
-              </CommandItem>
-            ))}
+            {filtered.map((o) => {
+              const hint = optionHint?.(o);
+              return (
+                <CommandItem
+                  key={o}
+                  value={o}
+                  onSelect={() => choose(o)}
+                  className="flex items-center justify-between"
+                >
+                  <span className="truncate">{o}</span>
+                  <span className="flex items-center shrink-0 ml-2 gap-2">
+                    {hint && <span className="text-xs text-muted-foreground">{hint}</span>}
+                    {value === o && <CheckIcon className="h-4 w-4 shrink-0" />}
+                  </span>
+                </CommandItem>
+              );
+            })}
             {showCustomOption && (
               <CommandItem
                 // Unique value so cmdk doesn't conflate it with a real option
                 // when the typed text is a prefix of one.
-                value={`__use_custom__::${trimmedSearch}`}
+                value={customValue}
                 onSelect={() => choose(trimmedSearch)}
                 className="flex items-center gap-2"
                 data-testid={`${testIdPrefix}-use-custom`}

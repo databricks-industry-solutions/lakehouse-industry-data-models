@@ -57,45 +57,40 @@ afterEach(() => {
 
 
 /**
- * Render the AgentReleaseCard with controlled fetcher data and assert no
- * DOM-nesting warnings fire. This is the static test for bug 3
- * (the Badge inside <p> issue).
+ * Render the agent status line with each verdict and assert no DOM-nesting
+ * warnings fire (bug 3: a Badge inside <p>).
  */
 describe("DOM nesting (Phase 4.5 bug 3 guard)", () => {
-  it("AgentReleaseCard with newer-available info nests cleanly", async () => {
-    const { AgentReleaseCard } = await import(
-      "@/components/settings/agent-release-card"
-    );
-    const fetcher = vi.fn(async () => ({
-      pinned_version: "v0.5.8",
-      latest_known_upstream: "v0.6.0",
-      newer_available: true,
-      has_breaking_change: false,
-      known_breaking_changes: [],
-      repo_compare_url: "https://example.com/compare",
-    }));
-    render(<AgentReleaseCard fetcher={fetcher} />);
-    await waitFor(() => expect(fetcher).toHaveBeenCalled());
-
-    expect(domErrorMessages).toEqual([]);
-  });
-
-  it("AgentReleaseCard up-to-date variant nests cleanly", async () => {
-    const { AgentReleaseCard } = await import(
-      "@/components/settings/agent-release-card"
-    );
-    const fetcher = vi.fn(async () => ({
-      pinned_version: "v0.5.8",
-      latest_known_upstream: "v0.5.8",
-      newer_available: false,
-      has_breaking_change: false,
-      known_breaking_changes: [],
-    }));
-    render(<AgentReleaseCard fetcher={fetcher} />);
-    await waitFor(() => expect(fetcher).toHaveBeenCalled());
-
-    expect(domErrorMessages).toEqual([]);
-  });
+  it.each(["up_to_date", "build_update_available", "release_incompatible"])(
+    "AgentStatusRow (%s) nests cleanly",
+    async (verdict) => {
+      const { AgentStatusRow } = await import("@/components/settings/agent-status-row");
+      const fetchMock = vi.fn(async () =>
+        new Response(
+          JSON.stringify({
+            pinned_version: "v0.9.0",
+            latest_known_upstream: "v1.0.0",
+            newer_available: verdict !== "up_to_date",
+            has_breaking_change: false,
+            known_breaking_changes: [{ tag: "v1.0.0", severity: "breaking", area: "a", summary: "s" }],
+            verdict,
+            agent_owner: "admin",
+            installed_vs_bundled: "older",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+      (globalThis as unknown as { fetch: typeof fetch }).fetch = fetchMock as unknown as typeof fetch;
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+      render(
+        <QueryClientProvider client={qc}>
+          <AgentStatusRow hasNotebook />
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+      expect(domErrorMessages).toEqual([]);
+    },
+  );
 });
 
 
@@ -160,6 +155,8 @@ describe("Render stability under 4xx (Phase 4.5 bug 2 guard)", () => {
     // ≤ 4 renders × 2 subscribers × 2 (strict double-mount) = 16.
     // The buggy pre-#151 build produced 100+ renders/sec for as long
     // as the page was mounted.
+    // The explicit 1 s is an upper bound on purpose, not a load allowance: more than a second to reach the first
+    // render means the render path regressed.
     await waitFor(() => {
       // At least one render past the error must have happened.
       expect(renderCount).toBeGreaterThan(0);

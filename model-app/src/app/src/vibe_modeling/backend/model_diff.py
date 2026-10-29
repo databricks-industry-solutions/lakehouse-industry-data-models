@@ -20,8 +20,20 @@ def _attr_key(a: dict) -> str:
     return a.get("name") or a.get("attribute") or ""
 
 
-def compute_model_diff(old_model: dict | None, new_model: dict) -> dict:
+def _same_type(a, b, case_sensitive: bool) -> bool:
+    if case_sensitive or not isinstance(a, str) or not isinstance(b, str):
+        return a == b
+    return a.casefold() == b.casefold()
+
+
+def compute_model_diff(
+    old_model: dict | None, new_model: dict, *, type_case_sensitive: bool = True,
+) -> dict:
     """Compare two model versions and return change status maps.
+
+    An attribute is modified when its type, ``foreign_key_to`` or the first
+    100 characters of its description differ. ``type_case_sensitive=False``
+    ignores a case-only type change (``string`` vs ``STRING``).
 
     Returns a dict with:
       - domains: {name: ChangeStatus}
@@ -73,7 +85,7 @@ def compute_model_diff(old_model: dict | None, new_model: dict) -> dict:
             attr_status[key] = ChangeStatus.NEW
         else:
             old_a = old_attrs[key]
-            if (a.get("type") != old_a.get("type") or
+            if (not _same_type(a.get("type"), old_a.get("type"), type_case_sensitive) or
                 a.get("foreign_key_to") != old_a.get("foreign_key_to") or
                 a.get("description", "")[:100] != old_a.get("description", "")[:100]):
                 attr_status[key] = ChangeStatus.MODIFIED

@@ -1,14 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
-import { HELP_TOPICS, type HelpTopic } from "@/components/help/help-topics";
+import { HELP_GROUPS, HELP_TOPICS, helpTopicFeatureReady, type HelpTopic } from "@/components/help/help-topics";
 import { Badge } from "@/components/ui/badge";
-import { useAssessReady } from "@/lib/assessment";
+import { useFeaturesReady } from "@/lib/features";
 
 export const Route = createFileRoute("/_sidebar/help/")({
   component: HelpIndexPage,
 });
-
-const GROUP_ORDER: HelpTopic["group"][] = ["Getting started", "Reference"];
 
 function TopicCard({ topic }: { topic: HelpTopic }) {
   const isSoon = topic.status === "soon";
@@ -40,21 +38,21 @@ function TopicCard({ topic }: { topic: HelpTopic }) {
 }
 
 export function HelpIndexPage() {
-  const { ready: assessReady } = useAssessReady();
+  const featureReady = useFeaturesReady();
   return (
-    <div className="mx-auto w-full max-w-3xl px-6 py-8">
+    <div data-testid="help-page" className="p-6">
       <header className="mb-8">
         <h1 className="text-2xl font-semibold tracking-tight">Help</h1>
-        <p className="mt-2 max-w-[68ch] text-sm leading-relaxed text-muted-foreground">
+        <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           How Model Foundry works, and how to move quickly in it. Start with the
-          modeling flow if you're new; use the reference pages to look things up.
+          modeling flow if you're new. The Runs pages say what each run does and changes.
         </p>
       </header>
 
       <div className="space-y-8">
-        {GROUP_ORDER.map((group) => {
+        {HELP_GROUPS.map((group) => {
           const topics = HELP_TOPICS.filter(
-            (t) => t.group === group && (t.feature !== "assessment" || assessReady),
+            (t) => t.group === group && helpTopicFeatureReady(t, featureReady),
           );
           if (topics.length === 0) return null;
           return (

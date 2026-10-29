@@ -1,7 +1,7 @@
 {
   "pinned_release": "v0.8.0",
-  "pinned_agent_version": "4.9.9",
-  "notebook_file": "vibe_modelling_agent_v4.9.9.ipynb",
+  "pinned_agent_version": "5.3.3",
+  "notebook_file": "vibe_modelling_agent_v5.3.3.ipynb",
   "supported_releases": [
     "v0.7.0",
     "v0.7.1",
@@ -27,11 +27,11 @@
   ],
   "agent_source": {
     "repo": "databricks-industry-solutions/lakehouse-industry-data-models",
-    "commit": "511078e68fb8b88ff2a7bd9498f3a52351991bfe",
+    "commit": "a50067f486b69e1e09603fa39ae5feac031cd702",
     "notebook_path": "model-agent/agent/dbx_vibe_modelling_agent.ipynb",
-    "notebook_sha256": "90595dda8a4c7cb793bcfcf800d74851e825cca6276473c32fc5951236a3d7f3",
+    "notebook_sha256": "002c2753fb9e0b278ee3da175ae7ec0f37e89666e98ffc33429acdd1f155f792",
     "rules_path": "model-agent/rules/vibe-data-modelling-rules.csv",
     "rules_file": "vibe-data-modelling-rules.csv",
-    "rules_sha256": "fc7fca89c151a23d0e4d03327667c45b38fb82b9a90853366de23d5f9c5c5867"
+    "rules_sha256": "7099f45740b033d3c4f3b5bd03001e4ecfa2902c8f90d42ca8b707a6bdb99681"
   }
 }

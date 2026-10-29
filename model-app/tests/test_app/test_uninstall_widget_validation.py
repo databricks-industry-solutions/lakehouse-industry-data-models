@@ -53,6 +53,7 @@ def test_build_widget_map_raises_when_required_model_version_empty(operation):
             business=_biz(),
             catalog="vibe_modeling_test",
             session_id="abc-123",
+            runtime_budget_seconds=21600,
             model_version="",
         )
 
@@ -67,6 +68,7 @@ def test_build_widget_map_raises_when_required_model_version_omitted(operation):
             business=_biz(),
             catalog="vibe_modeling_test",
             session_id="abc-123",
+            runtime_budget_seconds=21600,
         )
 
 
@@ -78,6 +80,7 @@ def test_build_widget_map_happy_path_for_version_bound_op():
         business=_biz(),
         catalog="vibe_modeling_test",
         session_id="abc-123",
+        runtime_budget_seconds=21600,
         model_version="4",
     )
     assert widgets["model_version"] == "4"
@@ -96,6 +99,7 @@ def test_build_widget_map_allows_empty_model_version_for_unbound_op():
         business=_biz(),
         catalog="vibe_modeling_test",
         session_id="abc-123",
+        runtime_budget_seconds=21600,
         model_version="",
     )
     # Empty model_version is still dropped from the widget dict for unbound
@@ -111,7 +115,7 @@ def test_build_widget_map_allows_empty_model_version_for_unbound_op():
 
 @pytest.mark.parametrize(
     "intent",
-    ["uninstall", "install", "generate-samples", "vibe-iterate"],
+    ["uninstall", "install", "vibe-iterate"],
 )
 def test_create_run_version_bound_intent_with_no_model_version_returns_422(
     intent, client_with_agent, mock_ws, seed_business,

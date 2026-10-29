@@ -14,7 +14,8 @@ import SidebarUserFooter from "@/components/apx/sidebar-user-footer";
 import { ModeToggle } from "@/components/apx/mode-toggle";
 import Logo from "@/components/apx/logo";
 import { BreadcrumbProvider, useBreadcrumbItems } from "@/components/explorer/breadcrumb-context";
-import { ChevronRight, HelpCircle, Settings } from "lucide-react";
+import { HeaderHelpLink } from "@/components/help/header-help-link";
+import { ChevronRight, Settings } from "lucide-react";
 
 interface SidebarLayoutProps {
   children?: ReactNode;
@@ -24,21 +25,22 @@ function HeaderBreadcrumbs() {
   const items = useBreadcrumbItems();
   if (items.length === 0) return null;
   return (
-    <nav className="flex items-center gap-1 text-sm text-muted-foreground">
+    <nav className="flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
       {items.map((item, i) => (
-        <span key={i} className="flex items-center gap-1">
-          {i > 0 && <ChevronRight className="h-3 w-3" />}
+        <span key={i} className="flex min-w-0 items-center gap-1">
+          {i > 0 && <ChevronRight className="h-3 w-3 shrink-0" />}
           {item.to ? (
             <Link
               to={item.to}
               params={item.params}
               search={item.search as any}
-              className="hover:text-foreground transition-colors"
+              title={item.label}
+              className="truncate hover:text-foreground transition-colors"
             >
               {item.label}
             </Link>
           ) : (
-            <span className="text-foreground font-medium">{item.label}</span>
+            <span className="truncate text-foreground font-medium" title={item.label}>{item.label}</span>
           )}
         </span>
       ))}
@@ -67,14 +69,7 @@ function SidebarLayout({ children }: SidebarLayoutProps) {
             <SidebarTrigger className="-ml-1 cursor-pointer" />
             <HeaderBreadcrumbs />
             <div className="flex-1" />
-            <Link
-              to="/help"
-              title="Help"
-              aria-label="Help"
-              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            >
-              <HelpCircle className="h-4 w-4" />
-            </Link>
+            <HeaderHelpLink />
             <Link
               to="/settings"
               search={{ tab: "agent" }}

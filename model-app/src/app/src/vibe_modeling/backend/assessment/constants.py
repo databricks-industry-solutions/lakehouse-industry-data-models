@@ -5,6 +5,10 @@ import re
 from datetime import timedelta
 from enum import Enum
 
+# ADMIN_HELP: the ``error`` discriminator of a failure the admin must act on, and the readiness
+# ``fix_action`` of a check the app sets up itself. The UI renders both as the admin-help block.
+from ..core._errors import ADMIN_HELP as ADMIN_HELP
+
 JOB_NAME = "vibe-assess"
 TASK_KEY = "assess_domain"
 RUNS_VOLUME = "assess_runs"
@@ -12,9 +16,6 @@ POLL_INTERVAL_S = 20
 TASK_TIMEOUT_S = 3 * 60 * 60
 JOB_FOLDER = "vibe-assess"  # under the app SP home: /Users/<app-sp>/vibe-assess/<app version>/
 SKILLS_WORKSPACE_DIR = "/Workspace/.assistant/skills"
-# The admin-help marker: the ``error`` discriminator of a failure the admin must act on, and the
-# readiness ``fix_action`` of a check the app sets up itself. The UI renders both as the admin-help block.
-ADMIN_HELP = "admin_help"
 
 # Ingest attempt window: a failed ingest is retried after each of these waits, and the attempt after
 # the last wait is final (5 attempts over about 81 minutes, then results_invalid).

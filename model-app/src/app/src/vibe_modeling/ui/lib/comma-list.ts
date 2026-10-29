@@ -16,3 +16,9 @@ export function splitCommaList(s: string | null | undefined): string[] {
 export function joinCommaList(items: readonly string[]): string {
   return items.join(", ");
 }
+
+/** Items as prose: "a", "a and b", "a, b and c". */
+export function andList(items: readonly string[]): string {
+  if (items.length <= 1) return items.join("");
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}

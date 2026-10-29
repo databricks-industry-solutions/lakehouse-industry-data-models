@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
+from _test_app import make_test_app
 from vibe_modeling.backend.core._config import AppConfig
 from vibe_modeling.backend.core._defaults import _ConfigDependency, _WorkspaceClientDependency
 from vibe_modeling.backend.core._roles import UserRole, resolve_user_role
@@ -22,9 +23,9 @@ from vibe_modeling.backend.db_models import AgentConfig
 from vibe_modeling.backend.routes import config as config_routes
 from vibe_modeling.backend.routes import taxonomy as taxonomy_routes
 from vibe_modeling.backend.taxonomy import llm as llm_module
+from vibe_modeling.backend.core._errors import config_missing_error
 from vibe_modeling.backend.routes._helpers import (
     _get_or_create_agent_config,
-    config_missing_error,
     require_config,
 )
 from vibe_modeling.backend.taxonomy.access import MODEL_SERVICE_ACCESS, ModelServiceAccess
@@ -83,9 +84,7 @@ def llm_ws(monkeypatch):
 
 
 def _client(engine, *, installed=True, default="", role=UserRole.APP_ADMIN, app_ws=None) -> TestClient:
-    app = FastAPI()
-    app.include_router(config_routes.router)
-    app.include_router(taxonomy_routes.router)
+    app = make_test_app(config_routes.router, taxonomy_routes.router)
     config = AppConfig(taxonomy_builder_enabled=installed, taxonomy_model_service=default)
 
     def _session():
@@ -117,7 +116,7 @@ def test_get_not_installed(engine):
     body = _client(engine, installed=False).get("/api/config/taxonomy").json()
     assert body == {
         "installed": False, "model_service": "", "install_default_model_service": "",
-        "max_concurrency": 6, "ready": False, "last_check": None,
+        "max_concurrency": 6, "ready": False, "last_check": None, "updated_by": None, "updated_at": None,
     }
 
 
@@ -137,7 +136,7 @@ def test_get_installed_with_default_seeds_new_row(engine):
     body = _client(engine, default=DEFAULT).get("/api/config/taxonomy").json()
     assert body == {
         "installed": True, "model_service": DEFAULT, "install_default_model_service": DEFAULT,
-        "max_concurrency": 6, "ready": True, "last_check": None,
+        "max_concurrency": 6, "ready": True, "last_check": None, "updated_by": None, "updated_at": None,
     }
 
 
@@ -201,7 +200,7 @@ def test_draft_time_refusal_records_last_check_and_hides_the_wizard(engine, llm_
     with _client(engine, role=UserRole.BUSINESS_ADMIN) as c:
         assert _ready(c) is True
         r = c.post("/api/taxonomy/drafts", json={"company_name": "Acme", "industry": "Utility"})
-        assert r.status_code == 422 and r.json()["detail"]["error"] == "config_missing"
+        assert r.status_code == 400 and r.json()["detail"]["error"] == "model_service_refused"
         assert _ready(c) is False
         assert c.get("/api/config/taxonomy").json()["last_check"]["status"] == "denied"
 
@@ -217,6 +216,29 @@ def test_put_ok_saves_and_records_last_check(engine, llm_ws):
     assert body["last_check"]["status"] == "ok"
     assert _stored(engine).taxonomy_model_service == SERVICE
     assert MODEL_SERVICE_ACCESS.is_cached(SERVICE)
+
+
+def test_put_records_who_saved_and_when_like_assess_config(engine, llm_ws):
+    """Audit parity: a taxonomy save writes ``taxonomy_updated_by`` / ``_at``
+    (the caller's ``actor_label``, UTC now), and GET returns them as
+    ``updated_by`` / ``updated_at``, as ``/assess/config`` does."""
+    _seed_row(engine, service="old.svc.name")
+    c = _client(engine)
+    r = c.put("/api/config/taxonomy", json={"model_service": SERVICE}, headers={"X-Forwarded-Email": "ann@x.com"})
+    assert r.status_code == 200
+    row = _stored(engine)
+    assert row.taxonomy_updated_by == "ann@x.com" and row.taxonomy_updated_at is not None
+    body = c.get("/api/config/taxonomy").json()
+    assert body["updated_by"] == "ann@x.com"
+    assert body["updated_at"].endswith(("+00:00", "Z"))
+    assert r.json()["updated_by"] == "ann@x.com"
+
+
+def test_put_clear_records_the_audit_pair_too(engine, llm_ws):
+    _seed_row(engine, service=SERVICE)
+    r = _client(engine).put("/api/config/taxonomy", json={"model_service": ""}, headers={"X-Forwarded-Email": "bo@x.com"})
+    assert r.status_code == 200
+    assert _stored(engine).taxonomy_updated_by == "bo@x.com"
 
 
 def test_saved_concurrency_applies_at_the_next_draft(engine, llm_ws):
@@ -246,8 +268,10 @@ def test_put_refusal_saves_nothing(engine, llm_ws, exc, status, needle):
     r = _client(engine).put("/api/config/taxonomy", json={"model_service": SERVICE})
     assert r.status_code == 400
     detail = r.json()["detail"]
+    assert detail["error"] == "model_service_refused" and detail["key"] == "taxonomy_llm"
     assert detail["status"] == status and needle in detail["message"]
     assert _stored(engine).taxonomy_model_service == "old.svc.name"
+    assert _stored(engine).taxonomy_updated_by is None and _stored(engine).taxonomy_updated_at is None
     assert MODEL_SERVICE_ACCESS.last_check(SERVICE).status == status
     assert not MODEL_SERVICE_ACCESS.is_cached(SERVICE)
 
@@ -358,21 +382,29 @@ def test_test_non_admin_is_403(engine, llm_ws):
 # --- GET /config/taxonomy/model-services -------------------------------------
 
 
-def _list_ws(pages):
-    ws = MagicMock()
-    ws.api_client.do.side_effect = pages
-    return ws
+@pytest.fixture
+def list_ws(monkeypatch):
+    """Install the listing pages on the LLM client (taxonomy/llm._LLM_WS), the
+    bounded client the list route uses."""
+
+    def install(pages):
+        ws = MagicMock()
+        ws.api_client.do.side_effect = pages
+        monkeypatch.setattr(llm_module, "_LLM_WS", ws)
+        return ws
+
+    return install
 
 
-def test_model_services_paginates_strips_prefix_and_sorts_system_ai_last(engine):
-    ws = _list_ws([
+def test_model_services_paginates_strips_prefix_and_sorts_system_ai_last(engine, list_ws):
+    ws = list_ws([
         {"model_services": [{"name": "model-services/system.ai.gpt-5"}, {"name": "model-services/main.ai.zeta"}],
          "next_page_token": "abc+/="},
         {"model_services": [], "next_page_token": "def"},
         {"model_services": [{"name": "model-services/main.ai.Alpha"}, {"name": "model-services/system.ai.claude"},
                             {"name": "model-services/main.ai.zeta"}, {"name": "garbage"}]},
     ])
-    r = _client(engine, app_ws=ws).get("/api/config/taxonomy/model-services")
+    r = _client(engine).get("/api/config/taxonomy/model-services")
     assert r.status_code == 200
     assert r.json() == {
         "services": ["main.ai.Alpha", "main.ai.zeta", "system.ai.claude", "system.ai.gpt-5"],
@@ -384,32 +416,71 @@ def test_model_services_paginates_strips_prefix_and_sorts_system_ai_last(engine)
     assert calls[1].kwargs["query"] == {"page_size": 200, "page_token": "abc+/="}
 
 
-def test_model_services_skips_services_without_chat_completions(engine):
-    ws = _list_ws([{"model_services": [
+def test_model_services_skips_services_without_chat_completions(engine, list_ws):
+    list_ws([{"model_services": [
         {"name": "model-services/system.ai.bge-large-en", "supported_api_types": ["mlflow/v1/embeddings"]},
         {"name": "model-services/system.ai.claude", "supported_api_types": ["mlflow/v1/chat/completions", "anthropic/v1/messages"]},
         {"name": "model-services/main.ai.custom"},
     ]}])
-    body = _client(engine, app_ws=ws).get("/api/config/taxonomy/model-services").json()
+    body = _client(engine).get("/api/config/taxonomy/model-services").json()
     assert body["services"] == ["main.ai.custom", "system.ai.claude"]
 
 
-def test_model_services_page_cap(engine, monkeypatch):
+def test_model_services_page_cap(engine, monkeypatch, list_ws):
     monkeypatch.setattr(config_routes, "MODEL_SERVICES_MAX_PAGES", 2)
-    ws = _list_ws([
+    ws = list_ws([
         {"model_services": [{"name": "model-services/a.b.c"}], "next_page_token": "1"},
         {"model_services": [{"name": "model-services/a.b.d"}], "next_page_token": "2"},
     ])
-    body = _client(engine, app_ws=ws).get("/api/config/taxonomy/model-services").json()
+    body = _client(engine).get("/api/config/taxonomy/model-services").json()
     assert body["services"] == ["a.b.c", "a.b.d"]
     assert "Type the full name" in body["message"]
     assert ws.api_client.do.call_count == 2
 
 
-def test_model_services_error_returns_empty_and_message(engine):
-    ws = _list_ws(PermissionDenied("no list for you"))
-    body = _client(engine, app_ws=ws).get("/api/config/taxonomy/model-services").json()
+def test_model_services_error_returns_empty_and_message(engine, list_ws):
+    list_ws(PermissionDenied("no list for you"))
+    body = _client(engine).get("/api/config/taxonomy/model-services").json()
     assert body["services"] == [] and "no list for you" in body["message"]
+
+
+def test_model_services_use_the_bounded_llm_client_not_the_app_client(engine, list_ws):
+    bounded = list_ws([{"model_services": [{"name": "model-services/main.ai.x"}]}])
+    app_ws = MagicMock()
+    r = _client(engine, app_ws=app_ws).get("/api/config/taxonomy/model-services")
+    assert r.status_code == 200 and r.json()["services"] == ["main.ai.x"]
+    assert bounded.api_client.do.call_count == 1
+    app_ws.api_client.do.assert_not_called()
+
+
+def test_model_services_client_construction_failure_returns_the_fallback(engine, monkeypatch):
+    def broken():
+        raise ValueError("no auth configured")
+
+    monkeypatch.setattr(config_routes, "llm_workspace_client", broken)
+    r = _client(engine).get("/api/config/taxonomy/model-services")
+    assert r.status_code == 200
+    assert r.json()["services"] == [] and "no auth configured" in r.json()["message"]
+
+
+def test_model_services_stop_at_the_overall_deadline(engine, monkeypatch, list_ws):
+    monkeypatch.setattr(config_routes, "MODEL_SERVICES_DEADLINE_SECONDS", 0)
+    ws = list_ws([
+        {"model_services": [{"name": "model-services/a.b.c"}], "next_page_token": "1"},
+        {"model_services": [{"name": "model-services/a.b.d"}]},
+    ])
+    body = _client(engine).get("/api/config/taxonomy/model-services").json()
+    assert body["services"] == ["a.b.c"]
+    assert "Type the full name" in body["message"]
+    assert ws.api_client.do.call_count == 1
+
+
+def test_the_llm_client_has_the_90s_timeout_and_1s_retry_budget(monkeypatch):
+    monkeypatch.setattr(llm_module, "_LLM_WS", None)
+    builder = MagicMock()
+    monkeypatch.setattr(llm_module, "short_budget_workspace_client", builder)
+    assert llm_module.llm_workspace_client() is builder.return_value
+    builder.assert_called_once_with(90, 1)
 
 
 def test_model_services_not_installed_is_404(engine):
@@ -737,9 +808,9 @@ def test_refused_put_leaves_capacity_unchanged(engine, llm_ws):
     assert TAXONOMY_SLOTS.capacity == 6
 
 
-def test_model_services_error_drops_the_sdk_config_suffix(engine):
-    ws = _list_ws(PermissionDenied("You can't list these. Config: host=https://x, auth_type=oauth-m2m"))
-    body = _client(engine, app_ws=ws).get("/api/config/taxonomy/model-services").json()
+def test_model_services_error_drops_the_sdk_config_suffix(engine, list_ws):
+    list_ws(PermissionDenied("You can't list these. Config: host=https://x, auth_type=oauth-m2m"))
+    body = _client(engine).get("/api/config/taxonomy/model-services").json()
     assert body["message"] == "Couldn't list model services: You can't list these"
 
 

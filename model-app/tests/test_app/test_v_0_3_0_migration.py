@@ -46,6 +46,8 @@ from vibe_modeling.backend import migrations
 from vibe_modeling.backend.migrations import registry as reg
 from vibe_modeling.backend.db_models import LakebaseSchemaVersion
 
+from ._source_scan import BACKEND, is_comment, iter_files
+
 
 # --- Constants ----------------------------------------------------------------
 
@@ -461,36 +463,50 @@ def test_no_production_reads_of_dropped_columns():
     ``#``-prefixed lines so the historical-context comments don't trip
     the regex.
     """
-    backend = (
-        pathlib.Path(__file__).resolve().parents[2]
-        / "src" / "app" / "src" / "vibe_modeling" / "backend"
-    )
-    assert backend.is_dir(), f"backend directory not found: {backend}"
+    assert BACKEND.is_dir(), f"backend directory not found: {BACKEND}"
 
-    # Allow attribute reads / strings inside the migration file itself.
-    allowed_files = {backend / "migrations" / "v_0_3_0.py"}
+    # Files that may contain the widget key "run_type" (agent widget 03a for
+    # Dry Run toggle). This is unrelated to the dropped DB column runs.run_type;
+    # it's a parameter sent to the notebook. Allowed pattern: the string literal
+    # in _WIDGET_UI_LABELS or widget dict assignments (not attribute access).
+    widget_key_files = {
+        "job_launcher.py",  # _WIDGET_UI_LABELS["run_type"]
+        "core/_widgets.py",  # widget dict key
+    }
 
     # Match an attribute access (``.run_type`` or ``.rollback_plan``) or
     # a quoted column name as a string literal. Excludes word-boundary
     # matches inside other identifiers like ``run_type_thing``.
+    attr_pattern = re.compile(r"\.run_type\b")
     patterns = [
-        re.compile(r"\.run_type\b"),
+        attr_pattern,
         re.compile(r"\.rollback_plan\b"),
         re.compile(r"['\"]run_type['\"]"),
         re.compile(r"['\"]rollback_plan['\"]"),
     ]
+    # Widget key pattern: "run_type" as a dict key in assignments like
+    # "run_type": ... or { "run_type": ... (excludes attribute access .run_type).
+    widget_key_pattern = re.compile(r'["\']run_type["\']\s*:')
 
     hits: list[tuple[str, int, str]] = []
-    for path in backend.rglob("*.py"):
-        if path in allowed_files:
-            continue
+    # The migration file itself may name the retired columns.
+    for path, rel in iter_files(BACKEND, exempt={"migrations/v_0_3_0.py"}):
         text_ = path.read_text()
         for lineno, line in enumerate(text_.splitlines(), start=1):
-            stripped = line.lstrip()
-            if stripped.startswith("#"):
+            if is_comment(line):
                 continue  # pure comment; legacy context allowed
             for pat in patterns:
                 if pat.search(line):
+                    # The widget-key exception: only in the allowed files,
+                    # only for the dict-key form, and never on a line that
+                    # also reads the retired ``.run_type`` attribute.
+                    if (
+                        rel in widget_key_files
+                        and pat.pattern == r"['\"]run_type['\"]"
+                        and widget_key_pattern.search(line)
+                        and not attr_pattern.search(line)
+                    ):
+                        break  # This hit is allowed; skip to next line.
                     hits.append((str(path), lineno, line.strip()))
                     break
 

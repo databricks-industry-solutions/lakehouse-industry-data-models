@@ -9,6 +9,7 @@
  *    (toast) rather than the raw `String(err)` inline banner.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -27,6 +28,7 @@ vi.mock("sonner", () => ({
 
 let versionsData: unknown[] = [];
 const createRunMock = vi.fn();
+const deleteVersionMock = vi.fn();
 const validateRunMock = vi.fn(
   async (): Promise<{ data: { blockers: unknown[]; warnings: unknown[] } }> => ({
     data: { blockers: [], warnings: [] },
@@ -37,6 +39,8 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    // No base-model pre-fill: the form keeps its own values.
+    useGetRunDefaults: () => ({ data: undefined, isLoading: false, isError: false }),
     useGetBusinessSuspense: () => ({
       data: { id: "biz-1", name: "Acme Corp", description: "An example business" },
     }),
@@ -44,6 +48,7 @@ vi.mock("@/lib/api", async () => {
     useListVibeInputs: () => ({ data: [] }),
     createRun: (...args: unknown[]) => (createRunMock as any)(...args),
     validateRun: (...args: unknown[]) => (validateRunMock as any)(...args),
+    deleteVersion: (...args: unknown[]) => (deleteVersionMock as any)(...args),
   };
 });
 
@@ -153,6 +158,8 @@ async function renderRunsNew(searchString: string) {
   );
 }
 
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.runs.new"));
+
 describe("Runs/new validate banners (findings #1, #4)", () => {
   it("surfaces validate blockers AND warnings for the vibe-iterate intent", async () => {
     versionsData = COMPLETED_VERSIONS;
@@ -180,6 +187,25 @@ describe("Runs/new validate banners (findings #1, #4)", () => {
     // validateRun was actually invoked for the vibe intent (broadened gate).
     expect(validateRunMock).toHaveBeenCalled();
   });
+
+  it("shows prepare items as a neutral note, not as warnings", async () => {
+    versionsData = COMPLETED_VERSIONS;
+    const prepare = "`_metamodel` will be set up in 'fresh_cat' when you start the run.";
+    validateRunMock.mockImplementation(async () => ({
+      data: {
+        blockers: [],
+        warnings: [{ field_path: "catalog", step_index: -1, message: prepare, severity: "prepare" }],
+      },
+    }));
+
+    await renderRunsNew("?businessId=biz-1&operationType=vibe-iterate");
+
+    const note = await screen.findByTestId("validate-prepares");
+    expect(note).toHaveAttribute("role", "note");
+    expect(note).toHaveTextContent(prepare);
+    expect(note.className).toContain("bg-muted");
+    expect(screen.queryByTestId("validate-warnings")).not.toBeInTheDocument();
+  });
 });
 
 describe("Runs/new hard-submit config_missing (finding #2, run-submit path)", () => {
@@ -205,5 +231,48 @@ describe("Runs/new hard-submit config_missing (finding #2, run-submit path)", ()
     // Shared renderer fires instead of `String(err)` inline text.
     await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
     expect(screen.queryByText(/ApiError|HTTP 422/i)).toBeNull();
+  });
+});
+
+describe("Runs/new B10 blocker: Delete v2 (C3 review M2)", () => {
+  it("validates again after the deletes, so the blocker clears", async () => {
+    versionsData = [
+      ...COMPLETED_VERSIONS,
+      {
+        id: "v-2-mvm", version: 2, scope: "mvm", status: "draft", dry_run: true, draft_state: "ready",
+        is_base: false, confidence_score: null, vibe_instructions: "", created_at: "2026-04-21T12:00:00Z",
+        uc_catalog: "", deployment_status: "draft",
+      },
+    ];
+    let deleted = false;
+    validateRunMock.mockImplementation(async () => ({
+      data: {
+        blockers: deleted
+          ? []
+          : [{
+              field_path: "vibe_scope_base", step_index: -1, severity: "blocker", versions: [2],
+              message: "The agent refuses scoped runs on v1 while v2 is in its registry in vibe_modeling. Delete it (Dry Run draft), then retry.",
+            }],
+        warnings: [],
+      },
+    }));
+    deleteVersionMock.mockImplementation(async () => {
+      deleted = true;
+      return { data: { deleted_version: 2, message: "ok" } };
+    });
+
+    await renderRunsNew("?businessId=biz-1&operationType=vibe-iterate");
+    const action = await screen.findByTestId("delete-blocking-versions");
+    expect(action).toHaveTextContent("Delete v2");
+    const before = validateRunMock.mock.calls.length;
+    await act(async () => {
+      fireEvent.click(action);
+    });
+    await act(async () => {
+      fireEvent.click(await screen.findByRole("button", { name: /^Delete$/ }));
+    });
+    await waitFor(() => expect(deleteVersionMock).toHaveBeenCalledWith({ business_id: "biz-1", version_id: "v-2-mvm" }));
+    await waitFor(() => expect(validateRunMock.mock.calls.length).toBeGreaterThan(before));
+    await waitFor(() => expect(screen.queryByTestId("validate-blockers")).toBeNull());
   });
 });

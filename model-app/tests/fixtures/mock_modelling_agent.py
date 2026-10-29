@@ -28,7 +28,6 @@ WIDGET_DEFAULTS = {
     "context_file": "",
     "deployment_catalog": "test_catalog",
     "data_model_scopes": "Minimum Viable Model - MVM",
-    "generate_samples": "0",
     "model_vibes": "",
     "vibe_session_id": "",
     "naming_convention": "snake_case",

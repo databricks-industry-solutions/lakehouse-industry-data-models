@@ -1,7 +1,7 @@
 """Adversarial tests for the Phase-4 *wire-simple-runs* slice.
 
-Covers the four single-step intents (``vibe-iterate``, ``install``,
-``uninstall``, ``generate-samples``) — each maps to a one-step DAG. See
+Covers the single-step intents (``vibe-iterate``, ``install``,
+``uninstall``) — each maps to a one-step DAG. See
 ``docs/orchestrator-design.md`` §3 (DAG description), §6 (failure
 semantics) and §8 (POST /runs / RunOut API contract).
 
@@ -17,7 +17,7 @@ Tests target *observable* behaviour:
 
 The DAG-factory imports are guarded:  the integrator's branch lands
 ``dag_for_vibe_iterate`` / ``dag_for_install`` / ``dag_for_uninstall``
-/ ``dag_for_generate_samples`` somewhere under
+somewhere under
 ``services.orchestrator.*`` (the design doc §3 cites
 ``services/orchestrator/routes.py`` and gives ``dag_for_new_base_model``
 as the naming convention).  We resolve them through a tolerant lookup
@@ -47,6 +47,7 @@ from vibe_modeling.backend.db_models import (
     Run,
     RunOperation,
 )
+from vibe_modeling.backend.services.uninstall_impact import uninstall_confirm_subject
 from vibe_modeling.backend.services.operations import _registry as _registry_module
 from vibe_modeling.backend.services.operations.generate_samples import GenerateSamples
 from vibe_modeling.backend.services.operations.install import Install
@@ -269,12 +270,19 @@ class TestPostRunsHappyPaths:
                     "first will fail the agent's clash check."
                 ),
                 "severity": "warning",
+                "subject": None,
+                "versions": [],
             }
         ]
 
         ops = _runops_for(engine, body["id"])
         assert len(ops) == 1
         assert ops[0].operation_name == "install"
+        # The request set schema_prefix explicitly, so it is recorded as
+        # explicit; params_json keeps the request-time resolution.
+        params = json.loads(ops[0].params_json)
+        assert params["explicit_convention_keys"] == ["schema_prefix"]
+        assert params["schema_prefix"] == "ecm_"
 
     def test_uninstall_creates_run_and_run_operation(
         self, client_with_agent, mock_ws, deployed_version, engine
@@ -293,6 +301,7 @@ class TestPostRunsHappyPaths:
                 "catalog": "test_catalog",
                 "deployment_catalog": "test_catalog",
                 "cataloging_style": "One Catalog",
+                "confirmed_issues": [uninstall_confirm_subject(vid, "test_catalog")],
             },
         )
         assert resp.status_code == 200, resp.text
@@ -328,6 +337,7 @@ class TestPostRunsHappyPaths:
                 "catalog": "test_catalog",
                 "deployment_catalog": "test_catalog",
                 "cataloging_style": "One Catalog",
+                "confirmed_issues": [uninstall_confirm_subject(vid, "test_catalog")],
             },
         )
         assert resp.status_code == 200, resp.text
@@ -345,23 +355,23 @@ class TestPostRunsHappyPaths:
         )
         assert widgets.get("operation") == "uninstall model version"
 
-    def test_install_without_schema_prefix_derives_from_parent_scope(
+    def test_install_without_schema_prefix_takes_the_files(
         self, client_with_agent, mock_ws, deployed_version, engine
     ):
-        """Phase 4.5 walkthrough bug: the frontend's simple-op forms
-        don't expose a schema_prefix input (intentional — the prefix
-        is conventional in One Catalog mode). Without a default, the
-        primitive's cross-field validator 422'd. The DAG factory now
-        derives ``ecm_`` / ``mvm_`` from the parent ModelVersion's
-        scope when the request omits ``schema_prefix`` entirely.
+        """The install forms don't expose a schema_prefix input. With none in
+        the request the step takes the version's own (``prefix_from_version``)
+        and dispatch sends the prefix of its model.json.
 
         Distinct from the explicit-empty case (covered by
         ``test_install_one_catalog_without_schema_prefix_returns_blocker``):
         explicit empty string is still rejected so curl callers that
         deliberately say "empty" hit the validator.
         """
+        from ._lifecycle_fixtures import model_json_readable
+
         biz_id, vid, vint = deployed_version  # scope="ecm" in fixture
         _ws_with_run_now(mock_ws, run_id=20203)
+        model_json_readable(mock_ws, "ecm_")
 
         resp = _post_runs(
             client_with_agent,
@@ -389,40 +399,11 @@ class TestPostRunsHappyPaths:
 
         ops = _runops_for(engine, body["id"])
         assert len(ops) == 1
-        # The factory derived ``ecm_`` from the parent's scope.
         params = json.loads(ops[0].params_json)
-        assert params["schema_prefix"] == "ecm_", (
-            f"expected derived ecm_ prefix, got {params['schema_prefix']!r}"
-        )
-
-    def test_generate_samples_creates_run_and_run_operation(
-        self, client_with_agent, mock_ws, deployed_version, engine
-    ):
-        biz_id, vid, vint = deployed_version
-        _ws_with_run_now(mock_ws, run_id=40404)
-
-        resp = _post_runs(
-            client_with_agent,
-            biz_id,
-            {
-                "intent": "generate-samples",
-                "version_id": vid,
-                "scope": "ecm",
-                "version_int": vint,
-                "catalog": "test_catalog",
-                "deployment_catalog": "test_catalog",
-                "sample_count": 10,
-                "cataloging_style": "One Catalog",
-            },
-        )
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["warnings"] == []
-
-        ops = _runops_for(engine, body["id"])
-        assert len(ops) == 1
-        assert ops[0].operation_name == "generate_samples"
-
+        assert params["prefix_from_version"] is True
+        assert json.loads(ops[0].dispatched_widgets_json)["schema_prefix"] == "ecm_"
+        # No convention key was set on the request.
+        assert params["explicit_convention_keys"] == []
 
 # ---------------------------------------------------------------------------
 # 5. Bad business_id → 404 (or 400 with blocker telling the user).
@@ -518,29 +499,6 @@ class TestBadInputs:
                 "deployment_catalog": "test_catalog",
                 "schema_prefix": "ecm_",  # set — invalid for Catalog per Division
                 "cataloging_style": "Catalog per Division",
-            },
-        )
-        assert resp.status_code == 400, resp.text
-
-    def test_generate_samples_count_too_high_returns_blocker(
-        self, client_with_agent, mock_ws, deployed_version
-    ):
-        """``GenerateSamplesParams.sample_count`` is capped at 1000."""
-        biz_id, vid, vint = deployed_version
-        _ws_with_run_now(mock_ws)
-
-        resp = _post_runs(
-            client_with_agent,
-            biz_id,
-            {
-                "intent": "generate-samples",
-                "version_id": vid,
-                "scope": "ecm",
-                "version_int": vint,
-                "catalog": "test_catalog",
-                "deployment_catalog": "test_catalog",
-                "sample_count": 10_000_001,  # way over the 1000 cap
-                "cataloging_style": "One Catalog",
             },
         )
         assert resp.status_code == 400, resp.text
@@ -725,6 +683,96 @@ class TestDagFactories:
         # the install primitive learns ECM vs MVM.
         assert dag.steps[0].params.get("scope") == "ecm"
 
+    def test_dag_for_install_ui_request_has_no_explicit_convention_keys(
+        self, engine, deployed_version
+    ):
+        """The UI sends only ``{intent, version_id}``: no convention key
+        is explicit, so a ``_vibe_scope`` file's values win at dispatch.
+        The factory's own resolution is unchanged."""
+        biz_id, vid, vint = deployed_version
+        with Session(engine) as session:
+            business = session.get(Business, biz_id)
+            dag = _safe_call_factory(
+                _resolve_factory("dag_for_install"),
+                {"intent": "install", "version_id": vid},
+                business=business,
+                session=session,
+            )
+        params = dag.steps[0].params
+        assert params["explicit_convention_keys"] == []
+        assert params["naming_convention"] == "snake_case"
+        assert params["primary_key_suffix"] == "_id"
+        assert params["table_id_type"] == "BIGINT"
+        assert "schema_suffix" not in params
+        assert "tag_prefix" not in params
+
+    def test_dag_for_install_lists_explicit_convention_keys(
+        self, engine, deployed_version
+    ):
+        biz_id, vid, vint = deployed_version
+        with Session(engine) as session:
+            business = session.get(Business, biz_id)
+            dag = _safe_call_factory(
+                _resolve_factory("dag_for_install"),
+                {
+                    "intent": "install",
+                    "version_id": vid,
+                    "schema_prefix": "ecm_",
+                    "naming_convention": "camelCase",
+                    "table_id_type": "INT",
+                    "tag_prefix": "acme_",
+                    "schema_suffix": None,
+                    "tag_suffix": "_t",
+                },
+                business=business,
+                session=session,
+            )
+        params = dag.steps[0].params
+        assert sorted(params["explicit_convention_keys"]) == [
+            "naming_convention",
+            "schema_prefix",
+            "table_id_type",
+            "tag_prefix",
+        ]
+        # An explicit tag_prefix rides along in the params so it beats a
+        # scoped file's value at dispatch; ordinary installs drop it there
+        # (test_primitives_install::
+        # test_ordinary_file_drops_explicit_suffix_and_tag_prefix).
+        # The unset schema_suffix is not carried.
+        assert params["tag_prefix"] == "acme_"
+        assert "schema_suffix" not in params
+        assert "tag_suffix" not in params
+
+    def test_dag_for_install_empty_string_fields_are_not_explicit(
+        self, engine, deployed_version
+    ):
+        """``""`` counts as unset: the factory replaces it with the
+        default, so it must not block a scoped file's value either."""
+        biz_id, vid, vint = deployed_version
+        with Session(engine) as session:
+            business = session.get(Business, biz_id)
+            dag = _safe_call_factory(
+                _resolve_factory("dag_for_install"),
+                {
+                    "intent": "install",
+                    "version_id": vid,
+                    "naming_convention": "",
+                    "primary_key_suffix": "",
+                    "table_id_type": "",
+                    "schema_suffix": "",
+                    "tag_prefix": "",
+                },
+                business=business,
+                session=session,
+            )
+        params = dag.steps[0].params
+        assert params["explicit_convention_keys"] == []
+        assert params["naming_convention"] == "snake_case"
+        assert params["primary_key_suffix"] == "_id"
+        assert params["table_id_type"] == "BIGINT"
+        assert "schema_suffix" not in params
+        assert "tag_prefix" not in params
+
     def test_dag_for_uninstall_returns_one_step(
         self, engine, deployed_version
     ):
@@ -752,36 +800,6 @@ class TestDagFactories:
         assert isinstance(dag, Dag)
         assert len(dag.steps) == 1
         assert dag.steps[0].name == "uninstall"
-
-    def test_dag_for_generate_samples_returns_one_step(
-        self, engine, deployed_version
-    ):
-        from vibe_modeling.backend.services.orchestrator.dag import Dag
-
-        biz_id, vid, vint = deployed_version
-        with Session(engine) as session:
-            business = session.get(Business, biz_id)
-            factory = _resolve_factory("dag_for_generate_samples")
-            dag = _safe_call_factory(
-                factory,
-                {
-                    "intent": "generate-samples",
-                    "version_id": vid,
-                    "scope": "ecm",
-                    "version_int": vint,
-                    "deployment_catalog": "test_catalog",
-                    "catalog": "test_catalog",
-                    "sample_count": 10,
-                    "cataloging_style": "One Catalog",
-                },
-                business=business,
-                session=session,
-            )
-
-        assert isinstance(dag, Dag)
-        assert len(dag.steps) == 1
-        assert dag.steps[0].name == "generate_samples"
-
 
 # ---------------------------------------------------------------------------
 # 10. Per-primitive: dag.validate_cross_step() returns no issues for happy
@@ -853,31 +871,6 @@ class TestPerPrimitiveCrossStep:
                 session=session,
             )
         assert dag.validate_cross_step() == []
-
-    def test_generate_samples_no_cross_step_issues(
-        self, engine, deployed_version
-    ):
-        biz_id, vid, vint = deployed_version
-        with Session(engine) as session:
-            business = session.get(Business, biz_id)
-            factory = _resolve_factory("dag_for_generate_samples")
-            dag = _safe_call_factory(
-                factory,
-                {
-                    "intent": "generate-samples",
-                    "version_id": vid,
-                    "scope": "ecm",
-                    "version_int": vint,
-                    "deployment_catalog": "test_catalog",
-                    "catalog": "test_catalog",
-                    "sample_count": 10,
-                    "cataloging_style": "One Catalog",
-                },
-                business=business,
-                session=session,
-            )
-        assert dag.validate_cross_step() == []
-
 
 # ---------------------------------------------------------------------------
 # 11. Edge cases: missing required field, unknown intent, parallel runs.
@@ -969,6 +962,7 @@ class TestEdgeCases:
                 "deployment_catalog": "test_catalog",
                 "catalog": "test_catalog",
                 "cataloging_style": "One Catalog",
+                "confirmed_issues": [uninstall_confirm_subject(v1_id, "test_catalog")],
             },
         )
         resp2 = _post_runs(
@@ -982,6 +976,7 @@ class TestEdgeCases:
                 "deployment_catalog": "test_catalog",
                 "catalog": "test_catalog",
                 "cataloging_style": "One Catalog",
+                "confirmed_issues": [uninstall_confirm_subject(v2_id, "test_catalog")],
             },
         )
         assert resp1.status_code == 200, resp1.text
@@ -1021,6 +1016,7 @@ class TestRunOutShape:
                 "deployment_catalog": "test_catalog",
                 "catalog": "test_catalog",
                 "cataloging_style": "One Catalog",
+                "confirmed_issues": [uninstall_confirm_subject(vid, "test_catalog")],
             },
         )
         assert resp.status_code == 200, resp.text
@@ -1081,15 +1077,15 @@ def _safe_call_factory(factory, request_dict: dict, *, business: Any, session: A
 
 
 # ---------------------------------------------------------------------------
-# dag_for_install / dag_for_revert: import_source_path → context_file_override
+# dag_for_install: import_source_path → context_file_candidates
 # ---------------------------------------------------------------------------
 
 
 class TestInstallDagContextFileOverride:
     """Locks the v0.4.0 install BLOCKER fix surfaced by the 2026-05-18
     walkthrough: the install DAG factory MUST consult
-    ``ModelVersion.import_source_path`` and pass it through the install
-    step's ``context_file_override`` param. Without this, imported and
+    ``ModelVersion.import_source_path`` and pass it first through the
+    install step's ``context_file_candidates`` param. Without this, imported and
     reference-seeded versions crash at install with "Model JSON File not
     found" on the constructed convention path."""
 
@@ -1133,17 +1129,16 @@ class TestInstallDagContextFileOverride:
         ops = _runops_for(engine, resp.json()["id"])
         assert len(ops) == 1
         params = json.loads(ops[0].params_json)
-        assert params.get("context_file_override") == (
+        assert params["context_file_candidates"][0] == (
             "/Volumes/vibe_modeling_test/_metamodel/vol_root/"
             "walkthrough_2026_05_18/import_test/model.json"
         )
 
-    def test_install_passes_none_when_import_source_path_absent(
+    def test_install_passes_only_the_canonical_paths_when_import_source_path_absent(
         self, client_with_agent, mock_ws, deployed_version, engine
     ):
-        """Agent-produced version (import_source_path NULL) → override
-        is None and the install primitive falls back to the constructed
-        convention path."""
+        """Agent-produced version (import_source_path NULL) → only the
+        canonical nested and flat paths are candidates."""
         biz_id, vid, vint = deployed_version
         _ws_with_run_now(mock_ws, run_id=42425)
         resp = _post_runs(
@@ -1163,9 +1158,9 @@ class TestInstallDagContextFileOverride:
         ops = _runops_for(engine, resp.json()["id"])
         assert len(ops) == 1
         params = json.loads(ops[0].params_json)
-        # Either absent or explicit None — both are acceptable since the
-        # primitive's _build_install_widgets treats falsy values the same.
-        assert not params.get("context_file_override")
+        candidates = params["context_file_candidates"]
+        assert len(candidates) == 2
+        assert all(p.startswith("/Volumes/") and p.endswith("/model.json") for p in candidates)
 
 
 # ---------------------------------------------------------------------------
@@ -1177,10 +1172,9 @@ class TestInstallDagContextFileOverride:
 # would otherwise dispatch the agent and burn ~6 minutes of compute before
 # the agent's own clash guard rejects it. The gate lives in
 # ``deployed_version_reinstall_warning`` (services/orchestrator/validate.py)
-# and is called from both ``_collect_run_preflight_blockers`` (feeds
-# ``POST /runs/validate``) and ``_create_run_via_orchestrator`` (feeds
-# ``RunOut.warnings`` on the actual ``POST /runs`` submit) - non-blocking
-# in both cases, since re-install after an out-of-band ``DROP SCHEMA`` (or a
+# and is called once, by the shared ``run_preflight``, whose warnings feed
+# both ``POST /runs/validate`` and ``RunOut.warnings`` on the actual
+# ``POST /runs`` submit - non-blocking in both cases, since re-install after an out-of-band ``DROP SCHEMA`` (or a
 # stale reconcile read) is a legitimate workflow.
 # ---------------------------------------------------------------------------
 
@@ -1222,6 +1216,8 @@ class TestDeployedVersionReinstallWarning:
                     "first will fail the agent's clash check."
                 ),
                 "severity": "warning",
+                "subject": None,
+                "versions": [],
             }
         ]
 
@@ -1300,7 +1296,7 @@ class TestDeployedVersionReinstallWarning:
     ):
         """The live-form ``POST /runs/validate`` preview (what the FE's
         debounced warnings renderer reads) surfaces the identical warning,
-        via the shared ``_collect_run_preflight_blockers`` gate."""
+        via the shared ``run_preflight``."""
         biz_id, vid, vint = deployed_version
 
         resp = client_with_agent.post(

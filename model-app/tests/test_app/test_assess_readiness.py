@@ -9,7 +9,8 @@ from sqlmodel import Session, select
 
 from vibe_modeling.backend.assessment.metamodel import MetamodelLocation, resolve_metamodel_location
 from vibe_modeling.backend.assessment.reader_sp import reader_not_found_message
-from vibe_modeling.backend.assessment.readiness import effective_privileges, warehouse_state
+from vibe_modeling.backend.assessment.readiness import warehouse_state
+from vibe_modeling.backend.core._uc_privileges import effective_privileges
 from vibe_modeling.backend.db_models import AssessConfig, Business, Domain, ModelVersion
 
 sys.path.insert(0, os.path.dirname(__file__))

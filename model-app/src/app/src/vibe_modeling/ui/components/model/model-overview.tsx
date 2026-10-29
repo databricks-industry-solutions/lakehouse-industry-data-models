@@ -9,6 +9,7 @@ import {
   listVersionsKey,
 } from "@/lib/api";
 import type {
+  ModelVersionOut,
   VibeInputOut,
   RunListOut,
   EvolutionMetricsOut,
@@ -23,6 +24,8 @@ import { CommandStrip } from "@/components/overview/command-strip";
 import { MetricsBand } from "@/components/overview/metrics-band";
 import { deriveOverviewMetrics } from "@/components/overview/metrics";
 import { InstallationDriftDialog } from "@/components/explorer/installation-drift-dialog";
+import { VersionReportCompact } from "@/components/runs/run-report-card";
+import { VersionChangesSummary } from "@/components/runs/run-changes-card";
 
 /**
  * Shared Overview tab body for the model page. Rendered by `ModelTabsShell`
@@ -37,28 +40,29 @@ import { InstallationDriftDialog } from "@/components/explorer/installation-drif
  */
 export function ModelOverview({
   businessId,
-  businessName,
   version,
   scope,
-  versionId,
-  deploymentStatus,
+  currentVersion,
+  versions,
   model,
   modelVersionId,
   defaultTargetPath,
   showLifecycleActions = true,
 }: {
   businessId: string;
-  businessName?: string;
   version: string;
   scope: string;
-  versionId: string | undefined;
-  deploymentStatus: string;
+  /** The page's version row; undefined while it is not in the list. */
+  currentVersion: ModelVersionOut | undefined;
+  versions: readonly ModelVersionOut[];
   model: any;
   modelVersionId: string;
   defaultTargetPath?: string;
   showLifecycleActions?: boolean;
 }) {
   const queryClient = useQueryClient();
+  const versionId = currentVersion?.id;
+  const deploymentStatus = currentVersion?.deployment_status || "draft";
   return (
     <div className="space-y-6 mt-4">
       {versionId && (
@@ -87,17 +91,23 @@ export function ModelOverview({
       {/* Command strip - replaces the old Actions + Runs cards. Suppressed on
           the input-review surface (showLifecycleActions=false): a review page
           offers no run/install lifecycle actions. */}
-      {showLifecycleActions && versionId && (
+      {showLifecycleActions && currentVersion && (
         <CommandStrip
           businessId={businessId}
-          businessName={businessName}
-          versionId={versionId}
-          versionNum={Number(version)}
-          scope={scope}
-          deploymentStatus={deploymentStatus}
+          version={currentVersion}
+          versions={versions}
           defaultTargetPath={defaultTargetPath}
         />
       )}
+
+      {showLifecycleActions && currentVersion && (
+        <VersionReportCompact
+          businessId={businessId}
+          version={currentVersion}
+          versions={versions}
+        />
+      )}
+      {versionId && <VersionChangesSummary businessId={businessId} versionId={versionId} />}
 
       {/* Metrics band - review %, quality, change, size. The full Statistics
           tab (and review marking) lives in the tab bar, not behind a link. */}

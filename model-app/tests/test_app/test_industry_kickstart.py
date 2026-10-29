@@ -9,12 +9,16 @@ counts. Provenance columns and an audit Run must also be set.
 
 from __future__ import annotations
 
+import json
 import time
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from sqlmodel import Session, select
 
+from ._drift.fake_uc import agent_registry_columns
+from ._lifecycle_fixtures import require_files_catalog  # noqa: F401
 from vibe_modeling.backend.db_models import (
     AgentConfig,
     Attribute,
@@ -182,9 +186,17 @@ def _ws_with_artifacts(rel_files: list[str]) -> MagicMock:
         e.file_size = None
         entries.append(e)
     ws.files.list_directory_contents.return_value = entries
-    body = MagicMock()
-    body.contents.read.return_value = b"<bytes>"
-    ws.files.download.return_value = body
+
+    def _download(path):
+        body = MagicMock()
+        # The kickstart reads the industry model.json for its schema prefix
+        # (``scope_prefix.import_schema_prefix``); every other file is opaque bytes.
+        body.contents.read.return_value = (
+            json.dumps({"model": SAMPLE_MODEL}).encode() if path.endswith("/model.json") else b"<bytes>"
+        )
+        return body
+
+    ws.files.download.side_effect = _download
     ws.files.upload = MagicMock()
     return ws
 
@@ -368,8 +380,9 @@ def test_kickstart_background_two_phase_progress_and_completes(engine, monkeypat
 
 
 def test_kickstart_background_seed_failure_marks_run_failed(engine, monkeypatch):
-    """A _metamodel seed error in phase 1 marks the RUN failed + error_message
-    and never reaches the copy phase; the business stays usable."""
+    """A _metamodel seed error in phase 1 still runs the copy phase, then
+    marks the RUN failed with the seed failure in error_message; the business
+    stays usable."""
     import vibe_modeling.backend.services.industry_kickstart as k
 
     run_id = _seed_running_kickstart_run(engine, "BG Seed Fail Co")
@@ -401,9 +414,11 @@ def test_kickstart_background_seed_failure_marks_run_failed(engine, monkeypatch)
         run = s.get(Run, run_id)
         assert run.status == "failed"
         assert "warehouse exploded" in run.error_message
+        assert "ecm v1" in run.error_message
+        assert "artifacts were copied" in run.progress_message
         assert run.completed_at is not None
-    # Seed failure short-circuits before the copy phase.
-    assert copied_scopes == []
+    # The copy phase runs after a failed seed.
+    assert copied_scopes == ["ecm"]
 
 
 def test_kickstart_background_copy_failure_marks_run_failed(engine, monkeypatch):
@@ -437,7 +452,7 @@ def test_kickstart_background_copy_failure_marks_run_failed(engine, monkeypatch)
         assert run.completed_at is not None
 
 
-def test_kickstart_copies_and_indexes_artifacts(engine):
+def test_kickstart_copies_and_indexes_artifacts(engine, require_files_catalog):
     """Item 1: a DRAFT industry (source ``uc_catalog=''``) STILL copies +
     indexes because the catalog is resolved from the deployment config, not
     from the empty per-model install catalog."""
@@ -451,7 +466,7 @@ def test_kickstart_copies_and_indexes_artifacts(engine):
         session.commit()
     ws = _ws_with_artifacts(["model.json", "vibes/next_vibes.txt"])
 
-    with Session(engine) as session:
+    with Session(engine) as session, require_files_catalog:
         new_business = kickstart_from_industry(
             session, ws,
             source_industry_id=industry_id,
@@ -460,6 +475,7 @@ def test_kickstart_copies_and_indexes_artifacts(engine):
         )
         session.commit()
         new_id = new_business.id
+    assert require_files_catalog.checked == 1
 
     # Uploads happened into the new version dir under the DEPLOYMENT catalog.
     assert ws.files.upload.call_count == 2
@@ -485,6 +501,40 @@ def test_kickstart_copies_and_indexes_artifacts(engine):
         # Story-5 typing flows through the indexer on the copied bundle.
         assert "model_json" in types
         assert "vibes_text" in types
+
+
+def test_kickstarted_version_copies_no_install_state_and_reads_its_artifacts(engine):
+    """The source is installed in ``test_cat``; the kickstarted version is
+    installed nowhere (no install catalog, no install row), and its artifacts
+    resolve to the metamodel catalog the kickstart copied them into."""
+    from vibe_modeling.backend.core._catalogs import resolve_version_volume_catalog
+    from vibe_modeling.backend.db_models import ModelVersionInstall
+
+    _seed_agent_config(engine, deployment_catalog="deploy_cat")
+    industry_id, src_version_id = _seed_industry(engine)
+    with Session(engine) as session:
+        src = session.get(ModelVersion, src_version_id)
+        src.deployment_status = "deployed"
+        session.add(src)
+        session.commit()
+    ws = _ws_with_artifacts(["model.json"])
+
+    with Session(engine) as session:
+        new_business = kickstart_from_industry(
+            session, ws, source_industry_id=industry_id, source_version=1, new_name="Delta Inc",
+        )
+        session.commit()
+        new_id = new_business.id
+
+    with Session(engine) as session:
+        new_mv = session.exec(select(ModelVersion).where(ModelVersion.business_id == new_id)).one()
+        assert (new_mv.deployment_status, new_mv.uc_catalog, new_mv.files_catalog) == ("draft", "", "deploy_cat")
+        assert session.exec(
+            select(ModelVersionInstall).where(ModelVersionInstall.version_id == new_mv.id)
+        ).all() == []
+        assert resolve_version_volume_catalog(new_mv, session) == "deploy_cat"
+        arts = session.exec(select(RunArtifact).where(RunArtifact.model_version_id == new_mv.id)).all()
+        assert arts and all(a.file_path.startswith("/Volumes/deploy_cat/") for a in arts)
 
 
 def test_copy_version_files_ignores_src_uc_catalog(engine):
@@ -555,17 +605,17 @@ def test_copy_version_files_one_bad_file_does_not_abort_others():
 def test_copy_version_files_worker_count_is_bounded():
     """The per-file download+upload copy runs on a bounded worker pool -
     observed concurrency must never exceed
-    ``industry_kickstart._COPY_WORKER_COUNT``, even with more files in
+    ``volume_copy.COPY_WORKER_COUNT``, even with more files in
     flight than workers available. A regression to an unbounded pool (one
     thread per file) would show up here as concurrency exceeding the bound."""
     import threading
 
-    from vibe_modeling.backend.services import industry_kickstart as ik
+    from vibe_modeling.backend.services import volume_copy as ik
     from vibe_modeling.backend.services.industry_kickstart import (
         _copy_version_files,
     )
 
-    rel_files = [f"file_{i}.txt" for i in range(3 * ik._COPY_WORKER_COUNT)]
+    rel_files = [f"file_{i}.txt" for i in range(3 * ik.COPY_WORKER_COUNT)]
     ws = _ws_with_artifacts(rel_files)
 
     lock = threading.Lock()
@@ -599,9 +649,9 @@ def test_copy_version_files_worker_count_is_bounded():
     )
 
     assert copied == len(rel_files)
-    assert peak <= ik._COPY_WORKER_COUNT, (
+    assert peak <= ik.COPY_WORKER_COUNT, (
         f"observed concurrency {peak} exceeded the bound "
-        f"{ik._COPY_WORKER_COUNT}"
+        f"{ik.COPY_WORKER_COUNT}"
     )
     assert peak > 1, "expected the copy to actually overlap, not run serially"
 
@@ -868,10 +918,15 @@ def test_kickstart_seed_feeds_real_export_through_writer(engine):
     _seed_agent_config_full(engine, catalog="deploy_cat", warehouse="wh-1")
     industry_id, _ = _seed_industry(engine)
     ws = _ws_with_artifacts([])
-    # A statement_execution whose every INSERT reports no error.
+    # The registry tables exist (with the agent's columns), so the seed runs
+    # no DDL; every statement succeeds.
+    ws.tables.get.return_value = SimpleNamespace(columns=[
+        SimpleNamespace(name=c) for c, _ in agent_registry_columns("business")
+    ])
     stmt = MagicMock()
     resp = MagicMock()
     resp.status.error = None
+    resp.status.state = "SUCCEEDED"
     stmt.execute_statement.return_value = resp
     ws.statement_execution = stmt
 
@@ -886,7 +941,8 @@ def test_kickstart_seed_feeds_real_export_through_writer(engine):
     # The business INSERT + domain/product/attribute batches all executed.
     assert stmt.execute_statement.call_count >= 1
     stmts = " ".join(c.kwargs.get("statement", "") for c in stmt.execute_statement.call_args_list)
-    assert "`_metamodel`.`business`" in stmts
+    assert "INSERT INTO `deploy_cat`.`_metamodel`.`business`" in stmts
+    assert "CREATE TABLE" not in stmts
     assert "realexport_co" in stmts.lower()
 
 
@@ -1408,7 +1464,7 @@ def test_kickstart_phase0_sets_run_version_id_on_success(engine):
 
 
 def test_kickstart_active_run_gate_blocks_iterate_during_background_window(
-    client, engine, seed_business_with_version,
+    client_with_agent, engine, seed_business_with_version,
 ):
     """The active-run gate (business_id + status in {pending,running,stale})
     keys off the Run row alone, created BEFORE phase 0 - so it still blocks
@@ -1427,7 +1483,9 @@ def test_kickstart_active_run_gate_blocks_iterate_during_background_window(
         ))
         s.commit()
 
-    resp = client.post(f"/api/businesses/{business_id}/runs", json={
+    # A configured agent: a missing prerequisite would answer before the
+    # active run (the pre-flight's level 1 runs first).
+    resp = client_with_agent.post(f"/api/businesses/{business_id}/runs", json={
         "intent": "vibe-iterate",
         "catalog": "my_catalog",
         "vibe_instructions": "Add HR tables",

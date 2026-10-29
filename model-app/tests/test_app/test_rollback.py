@@ -38,7 +38,6 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "app", "src"))
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 from sqlalchemy.pool import StaticPool
@@ -57,16 +56,6 @@ from vibe_modeling.backend.db_models import (
     Run,
     RunOperation,
 )
-from vibe_modeling.backend.router import router as _runs_router
-from vibe_modeling.backend.routes import (
-    _dev_fixtures as _routes_dev_fixtures,
-    businesses as _routes_businesses,
-    config as _routes_config,
-    deployment as _routes_deployment,
-    industries as _routes_industries,
-    platform as _routes_platform,
-    versions as _routes_versions,
-)
 from vibe_modeling.backend.services.operations._protocol import (
     Operation,
     OperationContext,
@@ -77,16 +66,8 @@ from vibe_modeling.backend.services.operations._protocol import (
 from vibe_modeling.backend.services.orchestrator import Orchestrator
 from vibe_modeling.backend.services.orchestrator.dag import Dag, OperationStep
 
-
-_SUB_ROUTERS = (
-    _routes_platform.router,
-    _routes_industries.router,
-    _routes_config.router,
-    _routes_businesses.router,
-    _routes_versions.router,
-    _routes_deployment.router,
-    _routes_dev_fixtures.router,
-)
+sys.path.insert(0, os.path.dirname(__file__))
+from _test_app import make_test_app  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -263,10 +244,7 @@ def tracker(mock_ws, session_factory, patched_registry):
 
 @pytest.fixture
 def client(engine, mock_ws, config, tracker):
-    app = FastAPI()
-    app.include_router(_runs_router)
-    for _r in _SUB_ROUTERS:
-        app.include_router(_r)
+    app = make_test_app()
 
     def override_session():
         with Session(engine) as session:
@@ -505,12 +483,46 @@ class TestSafetyGate:
         # 409 — see router.cancel_run_with_rollback. Refusal semantics:
         # no rollback applied, run unchanged.
         assert resp.status_code == 409, resp.text
-        assert "success" in resp.json().get("detail", "").lower()
+        detail = resp.json().get("detail", "")
+        # The 409 names the cause and the step it refused on.
+        assert "finished successfully" in detail
+        # ``_drive_until_running`` stops on the first running step.
+        assert "'generate_ecm'" in detail
 
         # Run was NOT mutated.
         with Session(engine) as s:
             run = s.get(Run, run_id)
             assert run.status == "running"
+
+        # Polling stopped for the attempt and resumes on refusal, so the
+        # still-running run is not left without a poller until the next boot.
+        tracker.stop_tracking.assert_called_once_with(run_id)
+        tracker.start_tracking.assert_called_once_with(run_id)
+
+    def test_completed_rollback_does_not_restart_tracking(
+        self, client, engine, seed_business_and_agent, tracker, patched_registry
+    ):
+        bid = seed_business_and_agent
+        op0 = FakePrimitive(
+            "generate_ecm",
+            on_observe=lambda h, c, w, s: _running("generate_ecm"),
+        )
+        patched_registry.update({"generate_ecm": op0})
+        run_id = _make_run(engine, seed_business_and_agent)
+        dag = Dag(
+            intent="new-base-model",
+            steps=(OperationStep(name="generate_ecm", params={}),),
+        )
+        with Session(engine) as s:
+            run = s.get(Run, run_id)
+            tracker.orchestrator.start(run, dag, s)
+            s.commit()
+        _drive_until_running(tracker.orchestrator, run_id, engine)
+
+        resp = client.post(f"/api/businesses/{bid}/runs/{run_id}/cancel-with-rollback")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "cancelled"
+        tracker.start_tracking.assert_not_called()
 
 
 class TestPartialFailure:

@@ -1,9 +1,7 @@
 import { useState } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
-import { toast } from "sonner";
 import {
-  Beaker,
   Clock,
   Check,
   Download,
@@ -12,12 +10,13 @@ import {
   Trash,
 } from "lucide-react";
 import {
-  createRun,
   forceResyncVersion,
-  Intent,
   useListRunsForVersion,
+  type ModelVersionOut,
   type RunListOut,
 } from "@/lib/api";
+import { installActionLabel, isInstalled } from "@/lib/version-lifecycle";
+import type { VersionOperationIntent } from "@/lib/use-version-operation-launch";
 import { selector } from "@/lib/selector";
 import { versionScopeLabel } from "@/lib/version-label";
 import { Badge } from "@/components/ui/badge";
@@ -31,45 +30,40 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { LaunchRunDialog } from "@/components/runs/launch-run-dialog";
+import { VersionOperationDialog } from "@/components/runs/version-operation-dialog";
 import { PublishVersionDialog } from "@/components/overview/publish-version-dialog";
 import { formatRelative } from "@/lib/date";
 
 /**
- * Compact command strip — replaces the old space-wasting "Actions on …" and
- * "Runs for this version" cards (design: `.cmd-strip`). One bordered row:
- *   left  — a "Manage" overline + the version-lifecycle actions
- *           (Install / Uninstall / Generate samples / Re-sync, plus the
- *           "Prepare new Vibe" entry to the compose surface);
- *           preserves the same dialogs + logic the cards used.
- *   right — run-status summary ("N runs · latest <ago>") + an "Installed"
+ * Compact command strip (design: `.cmd-strip`). One bordered row:
+ *   left  - a "Manage" overline + the version-lifecycle actions: the install
+ *           action named for the version's state ("Install this Dry Run",
+ *           "Install" / "Re-install", "Make this version current"),
+ *           Uninstall, the "Prepare new Vibe" entry to the compose surface,
+ *           Re-sync and Publish. Install and Uninstall open
+ *           `VersionOperationDialog` (`useVersionOperationLaunch`).
+ *   right - run-status summary ("N runs · latest <ago>") + an "Installed"
  *           success badge when deployed.
  */
 export function CommandStrip({
   businessId,
-  businessName,
-  versionId,
-  versionNum,
-  scope,
-  deploymentStatus,
+  version,
+  versions,
   defaultTargetPath,
 }: {
   businessId: string;
-  businessName?: string;
-  versionId: string;
-  versionNum: number;
-  scope?: string;
-  deploymentStatus: string;
+  version: ModelVersionOut;
+  /** The business's versions, for the dialogs' version labels. */
+  versions: readonly ModelVersionOut[];
   /** Pre-fill for the publish dialog's editable bundle-root (ADR D-049). */
   defaultTargetPath?: string;
 }) {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [launching, setLaunching] = useState<string>("");
+  const versionId = version.id;
+  const versionNum = version.version;
+  const scope = version.scope || undefined;
   const [error, setError] = useState("");
-  const [pending, setPending] = useState<{ op: Intent; label: string } | null>(
-    null,
-  );
+  const [dialog, setDialog] = useState<VersionOperationIntent | null>(null);
   const [resyncOpen, setResyncOpen] = useState(false);
   const [resyncing, setResyncing] = useState(false);
 
@@ -114,39 +108,8 @@ export function CommandStrip({
     }
   };
 
-  const runLaunch = async (op: Intent, label: string) => {
-    setLaunching(label);
-    setError("");
-    try {
-      const res = await createRun(
-        { business_id: businessId },
-        { intent: op, version_id: versionId },
-      );
-      // Non-blocking gates (e.g. re-installing an already-deployed version)
-      // surface here instead of a debounced pre-submit validate call - this
-      // strip launches runs directly, with no live-validate step beforehand.
-      for (const w of res.data.warnings ?? []) {
-        const message = (w as { message?: string }).message;
-        if (message) toast.warning(message);
-      }
-      navigate({
-        to: "/businesses/$businessId/runs/$runId",
-        params: { businessId, runId: res.data.id },
-      });
-    } catch (err: unknown) {
-      const e = err as { body?: { detail?: string }; message?: string };
-      setError(e?.body?.detail || e?.message || String(err));
-      setLaunching("");
-      setPending(null);
-    }
-  };
-
-  const requestLaunch = (op: Intent, label: string) => {
-    setError("");
-    setPending({ op, label });
-  };
-
-  const isInstalled = deploymentStatus === "deployed";
+  const installed = isInstalled(version);
+  const installLabel = installActionLabel(version);
   const versionLabel = versionScopeLabel(versionNum, scope);
 
   const runRows = runs ?? [];
@@ -162,57 +125,32 @@ export function CommandStrip({
         Manage
       </span>
       <div className="flex flex-wrap items-center gap-1.5">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!!launching}
-          onClick={() => requestLaunch(Intent.install, "install")}
-          title={
-            isInstalled
-              ? "Re-install this version into Unity Catalog"
-              : "Install this model version into Unity Catalog"
-          }
-        >
-          <Download
-            className={`h-4 w-4 mr-1.5 ${launching === "install" ? "animate-spin" : ""}`}
-          />
-          {launching === "install"
-            ? "Starting..."
-            : isInstalled
-              ? "Re-install"
-              : "Install"}
-        </Button>
+        {installLabel && (
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="install-version"
+            onClick={() => setDialog("install")}
+            title="Pick the catalog, review what changes, then start the install"
+          >
+            <Download className="h-4 w-4 mr-1.5" />
+            {installLabel}
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="sm"
-          disabled={!!launching || !isInstalled}
-          onClick={() => requestLaunch(Intent.uninstall, "uninstall")}
+          data-testid="uninstall-version"
+          disabled={!installed}
+          onClick={() => setDialog("uninstall")}
           title={
-            isInstalled
-              ? "Uninstall this version from Unity Catalog"
+            installed
+              ? "Review what the uninstall drops, then start it"
               : "Version is not installed"
           }
         >
-          <Trash
-            className={`h-4 w-4 mr-1.5 ${launching === "uninstall" ? "animate-spin" : ""}`}
-          />
-          {launching === "uninstall" ? "Starting..." : "Uninstall"}
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={!!launching || !isInstalled}
-          onClick={() => requestLaunch(Intent["generate-samples"], "samples")}
-          title={
-            isInstalled
-              ? "Generate sample rows for each installed table"
-              : "Install the version first"
-          }
-        >
-          <Beaker
-            className={`h-4 w-4 mr-1.5 ${launching === "samples" ? "animate-spin" : ""}`}
-          />
-          {launching === "samples" ? "Starting..." : "Generate samples"}
+          <Trash className="h-4 w-4 mr-1.5" />
+          Uninstall
         </Button>
         {/* Opens the compose surface for this version's scope — pick inputs,
             then Start run will iterate the version. */}
@@ -221,7 +159,6 @@ export function CommandStrip({
             variant="ghost"
             size="sm"
             data-testid="prepare-new-vibe"
-            disabled={!!launching}
             asChild
             title="Prepare a new vibe: pick inputs on the compose surface, then start the run"
           >
@@ -237,7 +174,7 @@ export function CommandStrip({
         <Button
           variant="ghost"
           size="sm"
-          disabled={!!launching || resyncing}
+          disabled={resyncing}
           onClick={() => {
             setError("");
             setResyncOpen(true);
@@ -284,7 +221,7 @@ export function CommandStrip({
             No runs yet
           </span>
         )}
-        {isInstalled && (
+        {installed && (
           <Badge
             variant="outline"
             className="gap-1 border-success/40 bg-success/15 text-success"
@@ -299,19 +236,18 @@ export function CommandStrip({
         <p className="basis-full pt-0.5 text-xs text-destructive">{error}</p>
       )}
 
-      <LaunchRunDialog
-        open={pending !== null}
-        operationType={pending?.op ?? ""}
-        businessName={businessName ?? "this business"}
-        versionLabel={versionLabel}
-        submitting={!!launching}
-        onConfirm={() => {
-          if (pending) void runLaunch(pending.op, pending.label);
-        }}
-        onCancel={() => {
-          if (!launching) setPending(null);
-        }}
-      />
+      {dialog && (
+        <VersionOperationDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setDialog(null);
+          }}
+          businessId={businessId}
+          intent={dialog}
+          version={version}
+          versions={versions}
+        />
+      )}
       <Dialog
         open={resyncOpen}
         onOpenChange={(open) => {

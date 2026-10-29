@@ -1,8 +1,9 @@
 """Unity Catalog model-service names (``catalog.schema.service``).
 
 Canonical for the app (Settings validation, the model-services list) and the
-installer: ``install/check_model_service.py`` loads this file by path, so it
-imports only the standard library.
+installer: ``install/deploy_settings.py`` (the install-time validation of
+``--taxonomy-model-service``) and ``install/check_model_service.py`` load this
+file by path, so it imports only the standard library.
 
 The rule mirrors the AI Gateway's own check (observed on a test workspace 2026-10-18):
 three non-empty parts, each at most 255 characters, containing no ``.``,

@@ -2,14 +2,14 @@
  * Domain page (`$domainName.index.tsx`) same-route domain switch (item 3B
  * regression, caught in commit review).
  *
- * A domain-to-domain navigation from the title dropdown (or a
+ * A domain-to-domain navigation from the diagram's domain dropdown (or a
  * related-domain-group click inside the diagram) stays on THIS route -
  * only the `domainName` URL param changes. The router re-renders
  * `DomainDetail` in place rather than remounting it, so a plain prop change
  * would NOT reach `DiagramViewer`'s internal `useState`-seeded
  * `selectedDomain` (item 3B deleted the resync fallback that used to keep
  * it live). Without a fix, the diagram would silently keep showing the OLD
- * domain's layout while the URL, breadcrumbs, and title dropdown all show
+ * domain's layout while the URL, breadcrumbs, and page title all show
  * the new one. The fix keys `DiagramViewer` on `domainName` so React
  * remounts it on every domain change, matching what a cross-route
  * navigation already gets for free.

@@ -3,7 +3,9 @@
 Three different concerns share this module because they're all small,
 related, and called from many places:
 
-- ``sanitize_tag`` — Databricks job tag value safety.
+- ``sanitize_tag`` — Databricks job tag value safety. It lives in the
+  stdlib-only ``core/_job_tags.py`` (the installer loads that file by path)
+  and is re-exported here.
 - ``sanitize_catalog_segment`` — UC catalog-identifier safety.
 - ``escape_sql_literal`` — SQL single-quoted string-literal escaping.
 
@@ -14,11 +16,21 @@ broken SQL or broken identifiers. Pick the one that matches the target
 grammar.
 """
 
+import logging
 import re
 
-# Tag: A-Za-z0-9 plus -, _, . internal. Starts/ends with alphanumeric.
-_TAG_RE = re.compile(r"[^A-Za-z0-9._-]")
-_MULTI_UNDERSCORE = re.compile(r"_+")
+from ._job_tags import sanitize_tag
+
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "agent_business_segment",
+    "escape_sql_literal",
+    "metamodel_display_business",
+    "normalize_scope",
+    "sanitize_catalog_segment",
+    "sanitize_tag",
+]
 
 # Catalog segment: lowercase [a-z0-9_], underscores collapsed.
 _CATALOG_SEGMENT_NON_SAFE = re.compile(r"[^a-z0-9_]+")
@@ -29,19 +41,6 @@ _CATALOG_SEGMENT_UNDERSCORES = re.compile(r"_+")
 # non-[a-z0-9_] char with `_` (then collapses + strips), so a single
 # match means the input wasn't pre-normalized. Plain space included.
 _AGENT_SEGMENT_NON_SAFE = re.compile(r"[^a-z0-9_]")
-
-
-def sanitize_tag(value: str) -> str:
-    """Sanitize a string for use as a Databricks job tag value.
-
-    Per the Integration Guide: alphanumeric start/end, only A-Za-z0-9, -, _, . in between.
-    Spaces and special chars are replaced with ``_``, consecutive ``_`` collapsed,
-    leading/trailing ``_``, ``.``, ``-`` stripped. Truncated to 256 chars.
-    """
-    result = _TAG_RE.sub("_", value)
-    result = _MULTI_UNDERSCORE.sub("_", result)
-    result = result.strip("_.-")
-    return result[:256]
 
 
 def sanitize_catalog_segment(value: str) -> str:
@@ -61,7 +60,7 @@ def agent_business_segment(name: str) -> str:
     and as the ``business_name`` widget value.
 
     Mirrors the bundled agent's ``sanitize_name(strip_stop_words=False)``
-    (see ``src/app/vendored/agent/vibe_modelling_agent_v4.9.9.ipynb``,
+    (see ``src/app/vendored/agent/vibe_modelling_agent_v5.3.3.ipynb``,
     cell defining ``def sanitize_name(name, strip_stop_words=True):  #
     GEN-RUL-002``). The strip-stop-words branch is intentionally NOT
     applied here because the app passes raw business identifiers.
@@ -140,10 +139,20 @@ def escape_sql_literal(s: object) -> str:
     to string. Intended only for values we're about to wrap in ``'…'`` —
     **never for identifiers**. Use ``sanitize_catalog_segment`` for UC
     catalog names or validate-against-allowlist for other identifiers.
+
+    Stripping NUL bytes changes the value, so it logs a warning with the
+    count; the value itself is not logged.
     """
     if s is None:
         return ""
-    return str(s).replace("\\", "\\\\").replace("'", "''").replace("\x00", "")
+    text = str(s)
+    nul_count = text.count("\x00")
+    if nul_count:
+        logger.warning(
+            "escape_sql_literal: stripped %d NUL byte(s) from a SQL literal", nul_count
+        )
+        text = text.replace("\x00", "")
+    return text.replace("\\", "\\\\").replace("'", "''")
 
 
 def normalize_scope(scope: str) -> str:

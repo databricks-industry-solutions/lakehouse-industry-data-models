@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { LetterBadge } from "@/components/assessment/letter-badge";
 import { StructureBadge } from "@/components/assessment/structure-badge";
+import { AgentText } from "@/components/assessment/agent-text";
 import { STRUCTURE_RANK } from "@/lib/assessment";
 import { SortableTableHead, useTableSort } from "@/components/ui/sortable-table-head";
 import { Table, TableBody, TableCell, TableHeader, TableHead, TableRow } from "@/components/ui/table";
@@ -80,7 +81,7 @@ function ColumnTable({ entity }: { entity: AssessEntityOut }) {
   return (
     <div className="space-y-3 py-2">
       <div className="space-y-1 text-sm">
-        {entity.grade_reason && <p>{entity.grade_reason}</p>}
+        {entity.grade_reason && <p><AgentText text={entity.grade_reason} /></p>}
         {entity.row_filter && (
           <p className="text-muted-foreground">
             Row filter: <code className="text-xs">{entity.row_filter}</code>
@@ -159,7 +160,7 @@ function ColumnTable({ entity }: { entity: AssessEntityOut }) {
                       </TableCell>
                       <TableCell>{c.null_pct ?? "—"}</TableCell>
                       <TableCell>{c.distinct_count ?? "—"}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{c.evidence}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground"><AgentText text={c.evidence} /></TableCell>
                     </TableRow>
                     {isExpanded && hasProfiles && (
                       <>

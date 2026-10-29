@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -23,20 +22,17 @@ from sqlmodel import Session, select
 
 from ..._metadata import api_prefix
 from ..agent_compat import (
-    SUPPORTED_TAGS,
-    classify_tag,
-    describe_incompatibility,
-    detect_tag_from_model_json,
     extract_version_provenance,
+    extract_vibe_scope_facts,
+    gate_model_json,
     latest_supported_tag,
 )
 from .._query_helpers import (
     BusinessNameConflict,
     ensure_business_name_available,
-    next_version_for_scope,
-    resolve_lineage_parent,
+    resolve_model_json_parent,
 )
-from ..core import Dependencies, resolve_metamodel_catalog
+from ..core import Dependencies, resolve_import_registry_catalog
 from ..core._warehouse import get_warehouse_id
 from ..db_models import (
     Business,
@@ -45,11 +41,15 @@ from ..db_models import (
     ModelVersion,
 )
 from ..import_model import detect_schema, read_model_json_from_volume
+from ..industry_resolve import (
+    industry_ambiguous_detail,
+    industry_candidates,
+    industry_slug,
+    resolve_industry,
+)
 from ..model_sync import (
     NEXT_VIBES_JSON_RELATIVE_PATHS,
     NEXT_VIBES_TXT_RELATIVE_PATHS,
-    ModelSyncService,
-    ingest_next_vibes,
 )
 from ..models import (
     ArtifactPreview,
@@ -60,40 +60,28 @@ from ..models import (
     ImportCreateBusinessAndExecuteOut,
     ImportPreviewOut,
 )
+from ..run_link import link_after_import
 from ..services.artifact_indexer import (
     infer_artifact_type,
     walk_volume_dir_with_size,
 )
 from ..services.business_digest import extract_business_digest
+from ..services.metamodel_registry import ensure_metamodel_or_refuse
+from ..services.dialog_import import (
+    ImportCopyFailed,
+    analysis_fields,
+    copy_import_files,
+    finish_dialog_import,
+    prepare_dialog_import,
+    resolve_scope,
+    sync_prepared,
+    undo_import,
+    version_fields,
+)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix=api_prefix)
-
-
-def _extract_gfv_tag(payload: dict) -> str:
-    """Pull a parent-version lineage tag out of a model.json payload.
-
-    The agent's ``_vibe_session_metadata.generated_from_version`` field
-    turns out to label the OUTPUT version of the run (e.g. ``"v2_ecm"``
-    for v2 ECM's own file), not the parent. ``progression.previous_version``
-    is also unreliable — it's ``"unknown"`` for every Zalando file we
-    looked at. So neither field is usable as a lineage pointer today.
-
-    Hand-edited files MAY carry a real parent pointer at the top-level
-    or inside the inner ``model`` block (older convention). Keep those
-    lookups for compat. The dominant case — agent-produced files —
-    falls through to the version-decrement heuristic in
-    :func:`_infer_lineage_parent_id`.
-
-    Returns the tag string (e.g. ``"v1_ecm"``) or ``""`` if absent.
-    """
-    if not isinstance(payload, dict):
-        return ""
-    for blob in (payload, payload.get("model") or {}):
-        if isinstance(blob, dict) and blob.get("generated_from_version"):
-            return str(blob["generated_from_version"])
-    return ""
 
 
 def _infer_lineage_parent_id(
@@ -121,43 +109,11 @@ def _infer_lineage_parent_id(
     return parent.id if parent is not None else None
 
 
-def _find_industry(session: Session, industry_alignment: str) -> Optional[Industry]:
-    """Case-insensitive lookup against ``short_name`` then ``name``.
-
-    Returns the full row (callers may need ``id`` AND need to know
-    whether they're auto-creating) rather than just the id like
-    ``_resolve_industry_id`` in ``businesses.py``. Kept here rather than
-    unified into that helper to avoid changing the existing helper's
-    return type — its callers only need the id.
-    """
-    text = (industry_alignment or "").strip()
-    if not text:
-        return None
-    text_lower = text.lower()
-    row = session.exec(
-        select(Industry).where(Industry.short_name.ilike(text_lower))
-    ).first()
-    if row is None:
-        row = session.exec(
-            select(Industry).where(Industry.name.ilike(text_lower))
-        ).first()
-    return row
-
-
-def _enrich_digest_with_industry_flag(
-    session: Session, digest: BusinessDigest,
-) -> BusinessDigest:
-    """Stamp ``industry_will_be_created`` based on the live catalog.
-
-    Story-1 wants the analyze response to flag "this name is new" so the
-    confirmation panel can say "Note: industry 'X' will be added on
-    import." Mutates by returning a fresh model — Pydantic models are
-    not frozen but ``model_copy`` keeps the call-site explicit.
-    """
-    if not digest.industry_alignment:
-        return digest
-    existing = _find_industry(session, digest.industry_alignment)
-    return digest.model_copy(update={"industry_will_be_created": existing is None})
+def _with_resolved_industry(session: Session, digest: BusinessDigest) -> BusinessDigest:
+    """Stamp the catalog industry the digest's ``industry_alignment`` resolves
+    to, so the import dialog starts from the backend's match."""
+    industry = resolve_industry(session, digest.industry_alignment)
+    return digest.model_copy(update={"industry_id": industry.id if industry else None})
 
 
 @router.post(
@@ -185,21 +141,17 @@ def analyze_import_root(
 
     analysis = detect_schema(model_json)
     from ..core._defaults import SUPPORTED_AGENT_VERSION
-    fallback_tag = SUPPORTED_AGENT_VERSION if analysis.valid else None
-    detected_tag = detect_tag_from_model_json(model_json, fallback=fallback_tag)
-    verdict = classify_tag(detected_tag)
+    gate = gate_model_json(model_json, fallback=SUPPORTED_AGENT_VERSION if analysis.valid else None)
+    detected_tag = gate.tag
     warnings = list(analysis.warnings)
-    if analysis.valid and verdict in ("breaking", "unknown"):
-        warnings.append(describe_incompatibility(detected_tag, verdict))
-    elif analysis.valid and verdict == "needs-adapter":
-        warnings.append(
-            f"Agent tag {detected_tag!r} requires an adapter; import will "
-            f"proceed with a runtime warning until an adapter ships."
-        )
+    if analysis.valid and gate.refused:
+        warnings.append(gate.refusal_message)
+    elif analysis.valid and gate.needs_adapter:
+        warnings.append(gate.adapter_warning)
 
     digest = extract_business_digest(model_json) if analysis.valid else None
     if digest is not None:
-        digest = _enrich_digest_with_industry_flag(session, digest)
+        digest = _with_resolved_industry(session, digest)
 
     return ImportAnalyzeOut(
         valid=analysis.valid,
@@ -212,10 +164,11 @@ def analyze_import_root(
         fk_count=analysis.fk_count,
         warnings=warnings,
         detected_agent_tag=detected_tag,
-        compat_verdict=verdict,
+        compat_verdict=gate.verdict,
         latest_supported_tag=latest_supported_tag(),
         business_digest=digest,
         business_digest_diff=None,
+        **(analysis_fields(model_json, data.volume_path) if analysis.valid else {}),
     )
 
 
@@ -300,17 +253,6 @@ def get_import_preview(
     )
 
 
-def _slugify_industry(name: str) -> str:
-    """Best-effort slug for ``Industry.short_name``: lowercase, spaces
-    and punctuation collapsed to hyphens. Matches the catalog's
-    convention (``digital-fashion-commerce``). Identity-safe — the
-    catalog only requires uniqueness within itself, no external
-    consumer parses this."""
-    s = name.strip().lower()
-    s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
-    return s or name.strip().lower()
-
-
 @router.post(
     "/import/create-business-and-execute",
     response_model=ImportCreateBusinessAndExecuteOut,
@@ -326,9 +268,11 @@ def create_business_and_execute_import(
 ):
     """Create a Business from a model.json's business identity, then import.
 
-    Story-1 entry point. Single transaction so partial state can't leak
-    on failure — if the import sync raises, the Business creation rolls
-    back too.
+    Story-1 entry point. Every check runs before the first write
+    (``services/dialog_import.prepare_dialog_import``). The industry (when
+    ``create_industry`` adds one), the business, its version and the Lakebase
+    sync commit together before the Volume copy; a failed copy deletes all of
+    them (``undo_import``).
 
     Conflict semantics: if a Business with the same (case-insensitive)
     name already exists, returns 409 pointing the user at the existing
@@ -417,55 +361,71 @@ def create_business_and_execute_import(
         ) from exc
 
     from ..core._defaults import SUPPORTED_AGENT_VERSION
-    detected_tag = detect_tag_from_model_json(
-        model_json, fallback=SUPPORTED_AGENT_VERSION
-    )
-    verdict = classify_tag(detected_tag)
+    gate = gate_model_json(model_json, fallback=SUPPORTED_AGENT_VERSION)
+    detected_tag = gate.tag
     exec_warnings = list(analysis.warnings)
-    if verdict in ("breaking", "unknown"):
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "incompatible_agent_tag",
-                "detected_agent_tag": detected_tag,
-                "compat_verdict": verdict,
-                "latest_supported_tag": latest_supported_tag(),
-                "supported_tags": sorted(SUPPORTED_TAGS),
-                "message": describe_incompatibility(detected_tag, verdict),
-            },
-        )
-    if verdict == "needs-adapter":
-        adapter_warning = (
-            f"Agent tag {detected_tag!r} classified as needs-adapter; "
-            f"no adapter is implemented yet — importing with the compatible "
-            f"code path. Verify the resulting model before deploying."
-        )
-        logger.warning("create_business_and_execute_import: %s", adapter_warning)
-        exec_warnings.append(adapter_warning)
+    if gate.refused:
+        raise HTTPException(status_code=422, detail=gate.refusal_detail())
+    if gate.needs_adapter:
+        logger.warning("create_business_and_execute_import: %s", gate.adapter_warning)
+        exec_warnings.append(gate.adapter_warning)
 
-    # Resolve or auto-create the Industry. Mirrors ``initial_sync.py``'s
-    # path: when the catalog doesn't recognize the name, we create a
-    # stub row with ``is_auto_created=True`` so admins can prune later.
-    industry_id: Optional[str] = None
-    if industry_alignment:
-        existing_industry = _find_industry(session, industry_alignment)
-        if existing_industry is not None:
-            industry_id = existing_industry.id
-        else:
-            new_industry = Industry(
-                name=industry_alignment,
-                short_name=_slugify_industry(industry_alignment),
-                description="",
-                is_auto_created=True,
-                is_active=True,
+    # ECM or MVM, and the app's folder for the new business's v1 of that
+    # scope, checked before the industry, the business or the version is
+    # written. A new business has no versions, so this is its v1.
+    scope = resolve_scope(model_json, data.volume_path, data.scope)
+    new_version_num = 1
+    catalog = resolve_import_registry_catalog(session)
+    prepared = prepare_dialog_import(
+        ws,
+        model_json=model_json,
+        volume_path=data.volume_path,
+        scope=scope,
+        version=new_version_num,
+        catalog=catalog,
+        business_name=business_name,
+        databricks_run_id=data.databricks_run_id,
+    )
+
+    # The dialog's pick (``industry_id``) wins; otherwise the alignment
+    # resolves. No match leaves the business without an industry. An industry
+    # is added only when the dialog asks (``create_industry``) and no active
+    # industry shares the alignment's slug: an ambiguous slug is the user's
+    # pick to make, never a reason for another row.
+    if data.industry_id:
+        industry = session.get(Industry, data.industry_id)
+        if industry is None or not industry.is_active:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "industry_not_found",
+                    "industry_id": data.industry_id,
+                    "message": "The selected industry is no longer in the catalog. Pick another one.",
+                },
             )
-            session.add(new_industry)
-            session.flush()  # assigns id
-            industry_id = new_industry.id
-            exec_warnings.append(
-                f"Auto-created industry '{industry_alignment}' in the catalog "
-                f"(was not present)."
+    else:
+        industry = resolve_industry(session, industry_alignment)
+    created_industry_id: Optional[str] = None
+    if industry is None and data.create_industry:
+        short_name = industry_slug(industry_alignment)
+        if not short_name:
+            raise HTTPException(
+                status_code=400,
+                detail=f"'{industry_alignment}' cannot name an industry: it has no letters or digits.",
             )
+        candidates = industry_candidates(session, industry_alignment)
+        if candidates:
+            raise HTTPException(status_code=409, detail=industry_ambiguous_detail(industry_alignment, candidates))
+        industry = Industry(name=industry_alignment, short_name=short_name, description="")
+        session.add(industry)
+        session.flush()
+        created_industry_id = industry.id
+        exec_warnings.append(f"Added industry '{industry_alignment}' to the catalog.")
+    industry_id = industry.id if industry is not None else None
+
+    # Every refusal is behind us: the app's folder needs its _metamodel schema
+    # and vol_root volume, which a catalog the agent never ran in lacks.
+    ensure_metamodel_or_refuse(ws, catalog)
 
     # Create the Business. Single transaction with the ModelVersion +
     # sync below — failures roll back both.
@@ -508,26 +468,11 @@ def create_business_and_execute_import(
         is_active=True,
     ))
 
-    # Infer scope from model.json's version string.
-    version_str = str((analysis._model or {}).get("version", ""))
-    m = re.match(r"^v\d+_(mvm|ecm)$", version_str)
-    scope = m.group(1) if m else ""
-
-    # Per-scope counter — fresh business, so this is always 1, but use
-    # the shared helper so future logic (e.g. allowing both ECM + MVM
-    # in one create call) stays correct.
-    new_version_num = next_version_for_scope(session, business.id, scope)
-
-    # Lineage: prefer an explicit ``generated_from_version`` tag if it
-    # resolves to an existing version; fall back to the heuristic
-    # "parent = (same scope, version - 1)" used by `_infer_lineage_parent_id`.
-    inner_payload = analysis._model or {}
-    gfv_tag = _extract_gfv_tag(inner_payload)
-    lineage_parent_id = None
-    if gfv_tag:
-        parent = resolve_lineage_parent(session, business.id, gfv_tag)
-        if parent is not None:
-            lineage_parent_id = parent.id
+    # Lineage: the parent the model.json names (the 5.3.3 ``lineage`` block,
+    # else the ``generated_from_version`` tag) when it exists; else the
+    # heuristic "parent = (same scope, version - 1)".
+    parent = resolve_model_json_parent(session, business.id, model_json)
+    lineage_parent_id = parent.id if parent is not None else None
     if lineage_parent_id is None:
         lineage_parent_id = _infer_lineage_parent_id(
             session, business.id, scope, new_version_num,
@@ -537,76 +482,65 @@ def create_business_and_execute_import(
     # ``model_json`` — ``analysis._model`` is the already-unwrapped inner model
     # and no longer carries the top-level agent_version / release_version keys.
     agent_version, release_version = extract_version_provenance(model_json)
+    fence_mode, fence_base_version, fence_base_scope = extract_vibe_scope_facts(model_json)
 
     now_ts = datetime.now(timezone.utc)
     mv = ModelVersion(
         business_id=business.id,
-        version=new_version_num,
         status="completed",
         deployment_status="draft",
-        scope=scope,
         base_version_id=lineage_parent_id,
         completion_date=now_ts,
-        import_source_path=data.volume_path,
         imported_at=now_ts,
         agent_version=agent_version,
         release_version=release_version,
+        scope_fence_mode=fence_mode,
+        scope_base_version=fence_base_version,
+        scope_base_scope=fence_base_scope,
+        files_catalog=catalog,
+        **version_fields(prepared, volume_path=data.volume_path),
     )
     session.add(mv)
     session.flush()
-
-    sync = ModelSyncService(session)
-    sync.sync_from_model_json(mv.id, analysis._model or {})
-
-    # Artifact indexing + next_vibes load — same logic as the
-    # per-business execute. Non-fatal.
-    volume_root_path = data.volume_path.rsplit("/", 1)[0] if "/" in data.volume_path else ""
-    if volume_root_path:
-        try:
-            from ..services.artifact_indexer import index_artifacts_at_path
-            index_artifacts_at_path(
-                ws, session,
-                run_id=None,
-                model_version_id=mv.id,
-                volume_root_path=volume_root_path,
-            )
-        except Exception:
-            logger.exception(
-                "create_business_and_execute_import: artifact indexing failed "
-                "for version %s (non-fatal)", mv.id,
-            )
-
-        # The raw file is already indexed as a RunArtifact by
-        # index_artifacts_at_path above, so we only materialize the structured
-        # next-vibe inputs here (shared load-then-materialize helper).
-        ingest_next_vibes(
-            ws, session,
-            version_dir=volume_root_path,
-            version_id=mv.id,
-            business_id=mv.business_id,
-        )
-
-    # Persist the Lakebase ModelVersion + child rows BEFORE the
-    # external _metamodel.* Delta writes. The metamodel writer batches
-    # its INSERTs (chunked multi-row statements) so even a large model
-    # is a handful of warehouse round-trips, but it still targets an
-    # external system over a SQL warehouse. Commit here so the import
-    # survives a slow or failing metamodel write — write_metamodel does
-    # not touch this session, so nothing is lost by committing first.
+    sync_prepared(session, mv.id, prepared)
+    # Lakebase durable before the Volume copy and the external _metamodel
+    # write, neither of which holds a transaction.
     session.commit()
 
-    # _metamodel.* Delta writes - external system, non-fatal, post-commit.
-    from ..services.import_metamodel_writer import seed_metamodel_one
-    seed_metamodel_one(
-        ws,
-        catalog=resolve_metamodel_catalog(session),
-        warehouse_id=get_warehouse_id(session),
-        model_json=model_json,
+    business_id = business.id
+
+    def _delete_business(s: Session) -> None:
+        for ctx in s.exec(select(BusinessContext).where(BusinessContext.business_id == business_id)).all():
+            s.delete(ctx)
+        created = s.get(Business, business_id)
+        if created is not None:
+            s.delete(created)
+        s.flush()
+        added = s.get(Industry, created_industry_id) if created_industry_id else None
+        if added is not None:
+            s.delete(added)
+
+    try:
+        copy_import_files(ws, prepared)
+    except ImportCopyFailed as exc:
+        undo_import(session, ws, prepared, mv.id, also_delete=_delete_business)
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+
+    exec_warnings.extend(finish_dialog_import(
+        ws, session, prepared,
+        version_id=mv.id,
+        business_id=business.id,
         business_name=business.name,
-        scope=scope,
-        version=new_version_num,
+        catalog=catalog,
+        warehouse_id=get_warehouse_id(session),
         log_prefix="create_business_and_execute_import",
-    )
+    ))
+
+    linked_run_id = None
+    if data.databricks_run_id is not None:
+        linked_run_id, link_warning = link_after_import(session, ws, business, mv, data.databricks_run_id)
+        if link_warning:
+            exec_warnings.append(link_warning)
 
     # Post-import diagram pre-compute. Best-effort.
     try:
@@ -660,6 +594,7 @@ def create_business_and_execute_import(
         fk_links=len(fks),
         warnings=exec_warnings,
         detected_agent_tag=detected_tag,
-        compat_verdict=verdict,
+        compat_verdict=gate.verdict,
         latest_supported_tag=latest_supported_tag(),
+        linked_run_id=linked_run_id,
     )

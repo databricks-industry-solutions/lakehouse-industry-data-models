@@ -29,6 +29,7 @@ from unittest.mock import MagicMock
 
 from databricks.sdk.service.serving import ExternalFunctionRequestHttpMethod
 
+from _test_app import make_test_app
 from vibe_modeling.backend import model_export
 from vibe_modeling.backend.db_models import (
     AgentConfig,
@@ -323,7 +324,6 @@ def test_publish_records_audit_run(engine):
 def test_publish_endpoint_422_connection_missing(engine):
     """The route returns 422 github_connection_missing when no UC connection
     is configured (the human-gated step), with OBO + role deps overridden."""
-    from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     from vibe_modeling.backend.core._defaults import _get_user_ws
@@ -334,8 +334,7 @@ def test_publish_endpoint_422_connection_missing(engine):
     bid, vid = _seed(engine)
     # No AgentConfig row -> cfg falls back to empty AgentConfig() -> guard 422.
 
-    app = FastAPI()
-    app.include_router(im_router)
+    app = make_test_app(im_router)
 
     def override_session():
         with Session(engine) as session:

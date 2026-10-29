@@ -1,4 +1,6 @@
 import { createFileRoute, Outlet, useMatchRoute } from "@tanstack/react-router";
+import { KickstartProgressBanner } from "@/components/industry/kickstart-progress-banner";
+import { OobBanner } from "@/components/oob/oob-banner";
 import { businessVisitKey, useRecordVisit } from "@/components/home/recent-items";
 
 export const Route = createFileRoute("/_sidebar/businesses/$businessId")({
@@ -15,6 +17,16 @@ export const Route = createFileRoute("/_sidebar/businesses/$businessId")({
     // key is null there; leaving the version records the business again.
     useRecordVisit(onVersionRoute ? null : businessVisitKey(businessId));
 
-    return <Outlet />;
+    // Page-wide strips stack in one container above the child route; each
+    // renders nothing when it has nothing to say.
+    return (
+      <>
+        <div className="flex flex-col" data-testid="business-banners">
+          <KickstartProgressBanner businessId={businessId} />
+          <OobBanner businessId={businessId} />
+        </div>
+        <Outlet />
+      </>
+    );
   },
 });

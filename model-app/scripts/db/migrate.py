@@ -32,6 +32,7 @@ from vibe_modeling.backend.migrations.v_0_6_6 import (  # noqa: E402
     SELF_FK_INDEX_COLUMNS,
     TRGM_INDEX_COLUMNS,
 )
+from vibe_modeling.backend.migrations.v_0_9_0 import FK_INDEX_COLUMNS  # noqa: E402
 
 
 MIGRATIONS = [
@@ -109,6 +110,49 @@ MIGRATIONS = [
     ("agent_config", "taxonomy_llm_max_concurrency", "INTEGER NOT NULL DEFAULT 6"),
     ("businesses", "business_domains", "VARCHAR DEFAULT ''"),
     ("businesses", "org_divisions", "VARCHAR DEFAULT ''"),
+    # v_0_9_0: version lifecycle on model_versions (Dry Run flag, promotion,
+    # replacement, files location, _vibe_scope facts), per-feedback outcomes on
+    # run_input_links, the consuming run on vibe_inputs, and the installed
+    # notebook identity cache on agent_config. The three FK columns are
+    # ON DELETE SET NULL; their indexes ride FK_INDEX_COLUMNS below. The two
+    # new tables (run_agent_reports, run_post_install_deletes) and the
+    # files_catalog / dry_run backfills run in the in-app migration only.
+    ("model_versions", "dry_run", "BOOLEAN NOT NULL DEFAULT false"),
+    ("model_versions", "promoted_at", "TIMESTAMP"),
+    ("model_versions", "promoted_by_run_id", "VARCHAR REFERENCES runs(id) ON DELETE SET NULL"),
+    (
+        "model_versions",
+        "replaced_by_version_id",
+        "VARCHAR REFERENCES model_versions(id) ON DELETE SET NULL",
+    ),
+    ("model_versions", "replaced_at", "TIMESTAMP"),
+    ("model_versions", "files_catalog", "VARCHAR"),
+    ("model_versions", "scope_fence_mode", "VARCHAR"),
+    ("model_versions", "scope_base_version", "INTEGER"),
+    ("model_versions", "scope_base_scope", "VARCHAR"),
+    ("run_input_links", "outcome_status", "VARCHAR"),
+    ("run_input_links", "outcome_reason", "TEXT"),
+    ("run_input_links", "outcome_target", "VARCHAR"),
+    ("vibe_inputs", "consumed_by_run_id", "VARCHAR REFERENCES runs(id) ON DELETE SET NULL"),
+    ("agent_config", "installed_release_version", "VARCHAR"),
+    ("agent_config", "installed_agent_version", "VARCHAR"),
+    ("agent_config", "installed_checked_at", "TIMESTAMP"),
+    ("agent_config", "installed_checked_path", "VARCHAR"),
+    ("agent_config", "installed_check_error", "VARCHAR"),
+    # v_0_9_0_1: link-run provenance on runs and the taxonomy settings audit
+    # pair on agent_config. The five new tables (install locations, metamodel
+    # cleanups, schema drops, change decisions, wizard state), the install-row
+    # backfill and the industry dedup run in the in-app migration only.
+    ("runs", "linked_at", "TIMESTAMP"),
+    ("runs", "link_evidence", "VARCHAR"),
+    ("agent_config", "taxonomy_updated_by", "VARCHAR"),
+    ("agent_config", "taxonomy_updated_at", "TIMESTAMP"),
+    # v_0_9_0_3: the Settings default run time budget (whole hours) on the
+    # agent_config singleton.
+    ("agent_config", "runtime_budget_hours", "INTEGER NOT NULL DEFAULT 6"),
+    # v_0_9_0_4: the scope prefixes an import added to a model.
+    ("model_versions", "import_schema_prefix_added", "VARCHAR"),
+    ("model_versions", "import_view_prefix_added", "VARCHAR"),
 ]
 
 WIDEN_TO_BIGINT = [
@@ -227,10 +271,10 @@ def main() -> int:
                     print(f"  DROP {table}.{column}")
                 except Exception as e:
                     print(f"  DROP-skip {table}.{column}: {e!r}")
-            # v_0_6_6: index the SET NULL self-FK columns (imported from the
-            # migration so there is one definition). Idempotent; safe in
+            # v_0_6_6 + v_0_9_0: index the SET NULL FK columns (imported from
+            # the migrations so there is one definition). Idempotent; safe in
             # autocommit (non-CONCURRENT CREATE INDEX IF NOT EXISTS).
-            for table, column in SELF_FK_INDEX_COLUMNS:
+            for table, column in (*SELF_FK_INDEX_COLUMNS, *FK_INDEX_COLUMNS):
                 stmt = (
                     f"CREATE INDEX IF NOT EXISTS ix_{table}_{column} "
                     f"ON {table} ({column})"

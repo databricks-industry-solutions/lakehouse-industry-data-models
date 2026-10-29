@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 const m = vi.hoisted(() => ({
@@ -11,7 +11,13 @@ const m = vi.hoisted(() => ({
   cancelTaxonomyDraft: vi.fn(),
   hook: { draft: null as any, lost: false },
 }));
-vi.mock("@tanstack/react-router", async (orig) => ({ ...(await orig<any>()), useNavigate: () => m.navigate }));
+vi.mock("@tanstack/react-router", async (orig) => ({
+  ...(await orig<any>()),
+  useNavigate: () => m.navigate,
+  Link: ({ children, to, search, hash, ...rest }: any) => (
+    <a href={`${to}${search?.tab ? `?tab=${search.tab}` : ""}${hash ? `#${hash}` : ""}`} {...rest}>{children}</a>
+  ),
+}));
 vi.mock("@/lib/api", async (orig) => ({
   ...(await orig<any>()),
   compileTaxonomy: m.compileTaxonomy, condenseTaxonomy: m.condenseTaxonomy, createBusiness: m.createBusiness,
@@ -23,6 +29,7 @@ vi.mock("@/lib/taxonomy/use-taxonomy-draft", async (orig) => ({
 }));
 
 import { ReviewStep } from "@/components/taxonomy/review-step";
+import { ApiError } from "@/lib/api";
 
 const COMPILED = {
   clamp: "## Conformance clamp", business_vibes: "## Company and segments\nX\n\n## Conformance clamp",
@@ -54,12 +61,15 @@ beforeEach(() => {
 describe("ReviewStep", () => {
   it("shows a message and re-enables the button when the condense draft is lost", async () => {
     m.hook.draft = undefined;
+    m.compileTaxonomy.mockImplementation(() => new Promise((r) => setTimeout(() => r({ data: COMPILED }), 150)));
     wrap(<ReviewStep {...props} />);
     await waitFor(() => expect(m.condenseTaxonomy).toHaveBeenCalled());
+    // The editor renders only after the compile query resolves, which the call above does not wait for.
+    const textbox = await screen.findByRole("textbox");
     m.hook.lost = true; // the poll 404s after the click
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "x" } }); // force a re-render
+    fireEvent.change(textbox, { target: { value: "x" } }); // force a re-render
     expect(await screen.findByText(/description draft was lost/i)).toBeTruthy();
-    expect((screen.getByRole("button", { name: /rewrite with claude/i }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: /rewrite with the model/i }) as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("creates the business with its proposed domains + coverage, then opens New Base Model", async () => {
@@ -82,6 +92,32 @@ describe("ReviewStep", () => {
       params: { businessId: "biz1" },
       search: { operationType: "new base model" },
     });
+  });
+
+  it("runs onCreated after the business exists and before opening New Base Model; its failure does not block", async () => {
+    const order: string[] = [];
+    m.createBusiness.mockImplementation(async () => { order.push("create"); return { data: { id: "biz1" } }; });
+    m.navigate.mockImplementation(() => { order.push("navigate"); });
+    const onCreated = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      order.push("onCreated");
+      throw new Error("discard failed");
+    });
+    wrap(<ReviewStep {...props} onCreated={onCreated} />);
+    await waitFor(() => expect(screen.getByDisplayValue("Short summary.")).toBeTruthy());
+    fireEvent.click(createBtn());
+    await waitFor(() => expect(m.navigate).toHaveBeenCalled());
+    expect(order).toEqual(["create", "onCreated", "navigate"]);
+  });
+
+  it("does not run onCreated when createBusiness fails", async () => {
+    m.createBusiness.mockRejectedValueOnce(new Error("Business name already exists"));
+    const onCreated = vi.fn(async () => {});
+    wrap(<ReviewStep {...props} onCreated={onCreated} />);
+    await waitFor(() => expect(screen.getByDisplayValue("Short summary.")).toBeTruthy());
+    fireEvent.click(createBtn());
+    await waitFor(() => expect(screen.getByText(/already exists/i)).toBeTruthy());
+    expect(onCreated).not.toHaveBeenCalled();
   });
 
   it("blocks Create when the description is over 2,000 characters", async () => {
@@ -115,7 +151,7 @@ describe("ReviewStep", () => {
     wrap(<ReviewStep {...props} tree={tree} />);
     expect(await screen.findByText("Domain 1 needs a name.")).toBeTruthy();
     expect(m.compileTaxonomy).not.toHaveBeenCalled();
-    expect((screen.getByRole("button", { name: /rewrite with claude/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /rewrite with the model/i }) as HTMLButtonElement).disabled).toBe(true);
     expect(createBtn().disabled).toBe(true);
   });
 
@@ -176,7 +212,7 @@ describe("ReviewStep", () => {
   it("shows a writing placeholder while the draft runs", async () => {
     m.hook.draft = { draft_id: "c1", status: "running", parts: { description: { status: "running" } } };
     wrap(<ReviewStep {...props} />);
-    expect(await screen.findAllByText(/claude is writing the description/i)).toBeTruthy();
+    expect(await screen.findAllByText(/the model is writing the description/i)).toBeTruthy();
   });
 
   it("does not auto-draft when an initialDescription is supplied, and pre-fills it", async () => {
@@ -193,7 +229,7 @@ describe("ReviewStep", () => {
     wrap(<ReviewStep {...props} initialDescription="Mine." />);
     await screen.findByText("Business domains:");
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "Mine, edited." } });
-    fireEvent.click(screen.getByRole("button", { name: /rewrite with claude/i }));
+    fireEvent.click(screen.getByRole("button", { name: /rewrite with the model/i }));
     expect(await screen.findByText(/replace your edits with a new draft/i)).toBeTruthy();
     expect(m.condenseTaxonomy).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: /^replace$/i }));
@@ -204,7 +240,7 @@ describe("ReviewStep", () => {
     m.hook.draft = null;
     wrap(<ReviewStep {...props} initialDescription="Untouched." />);
     await screen.findByText("Business domains:");
-    fireEvent.click(screen.getByRole("button", { name: /rewrite with claude/i }));
+    fireEvent.click(screen.getByRole("button", { name: /rewrite with the model/i }));
     await waitFor(() => expect(m.condenseTaxonomy).toHaveBeenCalledTimes(1));
   });
 
@@ -216,6 +252,18 @@ describe("ReviewStep", () => {
     r.rerender(<QueryClientProvider client={new QueryClient()}><ReviewStep {...props} /></QueryClientProvider>);
     await new Promise((res) => setTimeout(res, 50));
     expect(m.condenseTaxonomy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a refused model service shows its message with the link to the setting", async () => {
+    m.hook.draft = null;
+    m.condenseTaxonomy.mockRejectedValue(new ApiError(400, "Bad Request", {
+      detail: { error: "model_service_refused", key: "taxonomy_llm", status: "denied", message: "The app's service principal may not use it." },
+    }));
+    wrap(<ReviewStep {...props} />);
+    const notice = await screen.findByTestId("description-settings-error");
+    expect(notice).toHaveTextContent("The app's service principal may not use it.");
+    expect(notice).toHaveTextContent("Domain Taxonomy Builder model service");
+    expect(within(notice).getByRole("link", { name: "Configure" })).toHaveAttribute("href", "/settings?tab=platform#feature-taxonomy");
   });
 
   it("keeps the compiled preview collapsed by default", async () => {
@@ -234,9 +282,9 @@ describe("ReviewStep", () => {
       wrap(<ReviewStep {...props} />);
       await waitFor(() => expect(m.condenseTaxonomy).toHaveBeenCalled());
       const countdown = await screen.findByTestId("description-busy-countdown");
-      expect(countdown.textContent).toMatch(/The model is busy\. Retrying in 00:1[2-8]/);
-      expect(screen.queryByText(/Claude is writing the description/i)).toBeNull();
-      expect((screen.getByRole("button", { name: /rewrite with claude/i }) as HTMLButtonElement).disabled).toBe(true);
+      expect(countdown.textContent).toMatch(/The model is busy\. Next try in 00:1[2-8]/);
+      expect(screen.queryByText(/The model is writing the description/i)).toBeNull();
+      expect((screen.getByRole("button", { name: /rewrite with the model/i }) as HTMLButtonElement).disabled).toBe(true);
       const box = screen.getByRole("textbox") as HTMLTextAreaElement;
       fireEvent.change(box, { target: { value: "I'll write it myself." } });
       expect(box.value).toBe("I'll write it myself.");

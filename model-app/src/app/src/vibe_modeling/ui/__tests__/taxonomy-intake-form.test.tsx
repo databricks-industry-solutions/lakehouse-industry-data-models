@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import { readdirSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 vi.mock("@/components/business/sector-select", () => ({ SectorSelect: () => <div data-testid="sector-select" /> }));
 import { IntakeForm } from "@/components/taxonomy/intake-form";
@@ -8,7 +10,7 @@ describe("IntakeForm", () => {
   it("requires company + industry and submits the intake", () => {
     const onDraft = vi.fn();
     render(<IntakeForm onDraft={onDraft} onSkip={() => {}} submitting={false} />);
-    const draftBtn = screen.getByRole("button", { name: /draft with claude/i });
+    const draftBtn = screen.getByRole("button", { name: /draft with the model/i });
     expect((draftBtn as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText(/company name/i), { target: { value: "Ridgeline Energy" } });
     fireEvent.change(screen.getByLabelText(/^industry/i), { target: { value: "Electric & gas utility" } });
@@ -21,7 +23,7 @@ describe("IntakeForm", () => {
     fireEvent.change(screen.getByLabelText(/company name/i), { target: { value: "Ridgeline / Gas" } });
     fireEvent.change(screen.getByLabelText(/^industry/i), { target: { value: "Utility" } });
     expect(screen.getByText(/letters, numbers, spaces/i)).toBeTruthy();
-    expect((screen.getByRole("button", { name: /draft with claude/i }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: /draft with the model/i }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("offers Start blank and Start from the Ridgeline example as skip options", () => {
@@ -33,5 +35,13 @@ describe("IntakeForm", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start from the Ridgeline example" }));
     expect(onSkip.mock.calls.map((c) => c[2])).toEqual(["blank", "example"]);
     expect(onSkip.mock.calls[0][0]).toMatchObject({ company_name: "Acme", industry: "Utility" });
+  });
+});
+
+describe("Domain Taxonomy Builder copy", () => {
+  // The drafter is whichever model service the admin configured, so no vendor name in the wizard.
+  const dir = resolve(__dirname, "../components/taxonomy");
+  it.each(readdirSync(dir).filter((f) => f.endsWith(".tsx")))("%s does not mention Claude", (file) => {
+    expect(readFileSync(resolve(dir, file), "utf8")).not.toMatch(/claude/i);
   });
 });

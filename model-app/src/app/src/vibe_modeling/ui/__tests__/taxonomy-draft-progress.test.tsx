@@ -16,7 +16,7 @@ describe("DraftProgress", () => {
     expect(screen.getByText("Domains")).toBeTruthy();
     expect(screen.getByTestId("part-tree").getAttribute("data-status")).toBe("done");
     expect(screen.getByTestId("part-terminology").getAttribute("data-status")).toBe("failed");
-    expect(screen.getByText(/claude is drafting/i)).toBeTruthy();
+    expect(screen.getByText(/the model is drafting/i)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Cancel drafting" }));
     expect(onCancel).toHaveBeenCalled();
   });
@@ -32,7 +32,7 @@ describe("DraftProgress", () => {
     render(<DraftProgress draft={busyDraft} onCancel={() => {}} treeRetry={treeRetry} />);
     expect(screen.getByText("The model is busy")).toBeTruthy();
     expect(screen.getByTestId("part-company").getAttribute("data-status")).toBe("busy");
-    expect(screen.getByTestId("tree-busy-countdown").textContent).toContain("Retrying in 00:42");
+    expect(screen.getByTestId("tree-busy-countdown").textContent).toContain("Next try in 00:42");
     // Busy parts carry their own Cancel; the drafting Cancel is for running drafts.
     expect(screen.queryByRole("button", { name: "Cancel drafting" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Retry now" }));

@@ -178,3 +178,15 @@ export function sanitize(tree: TaxonomyTree, sections: Record<string, TaxonomySe
   }
   return { tree: clean, sections: outSections, problems };
 }
+
+/**
+ * The finished parts of the editor state, in the backend's shape: the
+ * sanitized tree when it has no problems (else null) and the sanitized
+ * sections. Used to seed a draft and to save the wizard.
+ */
+export function finishedParts(
+  tree: TaxonomyTree | null, sections: Record<string, TaxonomySection>,
+): { tree: TaxonomyTree | null; sections: Record<string, TaxonomySection> } {
+  const clean = sanitize(tree ?? emptyTree(), sections);
+  return { tree: tree && clean.problems.length === 0 ? clean.tree : null, sections: clean.sections };
+}

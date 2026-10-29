@@ -26,7 +26,9 @@ truth for anything the app later reads.
 Best-effort: any failure (permissions, warehouse unreachable, legacy
 workspace that can't be repaired) is logged at WARN and swallowed. The run
 still launches; if the legacy schema is present, the agent will fail at
-first flush with the old error — which is no worse than today.
+first flush with the old error — which is no worse than today. A failed
+probe is never read as a schema: the DROP runs only on a confirmed STRING
+column, and a catalog is cached only after a successful probe or repair.
 """
 
 from __future__ import annotations
@@ -37,6 +39,8 @@ from typing import Literal
 
 from databricks.sdk import WorkspaceClient
 
+from .core._sql import SqlStatementError, run, scalar
+
 logger = logging.getLogger(__name__)
 
 ResultJsonType = Literal["VARIANT", "STRING", "MISSING"]
@@ -46,33 +50,6 @@ ResultJsonType = Literal["VARIANT", "STRING", "MISSING"]
 # launches short-circuit. Cleared on process restart.
 _ENSURED_CATALOGS: set[str] = set()
 _CACHE_LOCK = threading.Lock()
-
-
-def _execute_sql_rows(
-    ws: WorkspaceClient,
-    warehouse_id: str,
-    sql: str,
-) -> list[list] | None:
-    """Execute SQL, return rows or None on error. Best-effort."""
-    try:
-        result = ws.statement_execution.execute_statement(
-            warehouse_id=warehouse_id,
-            statement=sql,
-            wait_timeout="30s",
-        )
-        status = getattr(result, "status", None)
-        if status and getattr(status, "error", None):
-            err = status.error
-            msg = getattr(err, "message", str(err))
-            logger.warning("progress_schema: SQL error: %s", msg)
-            return None
-        data = getattr(result, "result", None)
-        if not data or not getattr(data, "data_array", None):
-            return []
-        return data.data_array
-    except Exception as e:
-        logger.warning("progress_schema: SQL execution failed: %s", e)
-        return None
 
 
 def detect_result_json_type(
@@ -89,8 +66,8 @@ def detect_result_json_type(
                       will create it as VARIANT on next run. No action needed.
 
     Uses `information_schema.columns` (already used elsewhere in the app).
-    Any error returns "MISSING" so the caller's repair is a no-op — matches
-    the best-effort posture.
+    Raises `SqlStatementError` when the probe fails, so no caller acts on
+    a guessed type.
     """
     if not catalog or not warehouse_id:
         return "MISSING"
@@ -103,13 +80,13 @@ def detect_result_json_type(
         f"AND column_name  = 'result_json' "
         f"LIMIT 1"
     )
-    rows = _execute_sql_rows(ws, warehouse_id, sql)
-    if rows is None:
-        # SQL failed outright — treat as missing so caller skips repair.
+    # Fails fast on purpose (one 30 s wait, no polls): this runs inside
+    # launch_run, and on a cold warehouse the repair is skipped for this
+    # launch and probed again on the next one.
+    found = scalar(ws, warehouse_id, sql, wait_timeout="30s")
+    if found is None:
         return "MISSING"
-    if not rows:
-        return "MISSING"
-    dtype = (rows[0][0] or "").upper().strip()
+    dtype = str(found).upper().strip()
     if dtype == "VARIANT":
         return "VARIANT"
     if dtype == "STRING":
@@ -134,7 +111,8 @@ def ensure_progress_schema(
 
     Best-effort: any exception is logged at WARN and swallowed — legacy
     workspaces that can't be repaired still attempt the run (no worse than
-    today's behavior).
+    today's behavior). A failed probe skips the repair and caches nothing,
+    so the next launch probes again.
 
     - `strategy="drop"` (default): if STRING detected, DROP the table and
       let the agent recreate it as VARIANT on first flush. Safe because the
@@ -156,7 +134,15 @@ def ensure_progress_schema(
             if catalog in _ENSURED_CATALOGS:
                 return
 
-        dtype = detect_result_json_type(ws, warehouse_id, catalog)
+        try:
+            dtype = detect_result_json_type(ws, warehouse_id, catalog)
+        except SqlStatementError as e:
+            logger.warning(
+                "progress_schema: result_json probe failed for %s (%s); "
+                "skipping repair, will probe again on the next launch.",
+                catalog, e,
+            )
+            return
 
         if dtype in ("VARIANT", "MISSING"):
             # Already good, or not-yet-existing — the agent will create it
@@ -170,13 +156,14 @@ def ensure_progress_schema(
             drop_sql = (
                 f"DROP TABLE IF EXISTS `{catalog}`.`_metamodel`.`_vibe_progress`"
             )
-            rows = _execute_sql_rows(ws, warehouse_id, drop_sql)
-            if rows is None:
+            try:
+                run(ws, warehouse_id, drop_sql, wait_timeout="30s")
+            except SqlStatementError as e:
                 logger.warning(
-                    "progress_schema: DROP failed for %s._metamodel._vibe_progress; "
+                    "progress_schema: DROP failed for %s._metamodel._vibe_progress (%s); "
                     "legacy STRING schema still in place. Agent INSERT may fail at "
                     "first flush.",
-                    catalog,
+                    catalog, e,
                 )
                 return
             logger.info(

@@ -27,7 +27,6 @@ sys.path.insert(
 )
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlmodel import Session
 
@@ -43,29 +42,9 @@ from vibe_modeling.backend.core._defaults import (
 from vibe_modeling.backend.core._tracker import _TrackerDependency
 from vibe_modeling.backend.core.lakebase import _LakebaseDependency
 from vibe_modeling.backend.db_models import Business
-from vibe_modeling.backend.router import router
-from vibe_modeling.backend import explorer as _explorer  # noqa: F401
-from vibe_modeling.backend import diagram as _diagram  # noqa: F401
-from vibe_modeling.backend.routes import (
-    _dev_fixtures as _routes_dev_fixtures,
-    businesses as _routes_businesses,
-    config as _routes_config,
-    deployment as _routes_deployment,
-    industries as _routes_industries,
-    platform as _routes_platform,
-    versions as _routes_versions,
-)
 
-
-_SUB_ROUTERS = (
-    _routes_platform.router,
-    _routes_industries.router,
-    _routes_config.router,
-    _routes_businesses.router,
-    _routes_versions.router,
-    _routes_deployment.router,
-    _routes_dev_fixtures.router,
-)
+sys.path.insert(0, os.path.dirname(__file__))
+from _test_app import make_test_app  # noqa: E402
 
 
 def _make_test_client(
@@ -79,10 +58,7 @@ def _make_test_client(
     forced. Mirrors conftest.py's `client` fixture but parameterises the
     role so we can exercise the AdminOnly guards from a non-admin user.
     """
-    app = FastAPI()
-    app.include_router(router)
-    for _r in _SUB_ROUTERS:
-        app.include_router(_r)
+    app = make_test_app()
 
     def override_session():
         with Session(engine) as session:

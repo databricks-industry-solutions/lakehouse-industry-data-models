@@ -38,6 +38,7 @@ import {
   type InstallationStatusOut,
   type ReconcileInstallationOut,
 } from "@/lib/api";
+import { RequestTimeoutError, withRequestTimeout } from "@/lib/request-timeout";
 
 // Reconcile is just `SHOW SCHEMAS` + a Lakebase row update — both
 // sub-second on a healthy workspace. If we don't get an answer in 10s
@@ -71,20 +72,32 @@ async function fetchStatus(versionId: string): Promise<InstallationStatus> {
     in_sync: payload.in_sync ?? null,
     checked_at: payload.checked_at ?? new Date().toISOString(),
     skipped_reason: payload.skipped_reason ?? null,
+    also_installed_in: payload.also_installed_in ?? [],
   };
 }
 
+/** The catalogs missing schemas, with how many: the install catalog for
+ * the bare names, and each other install catalog for its
+ * ``<catalog>.<schema>`` entries. */
+export function missingByCatalog(status: InstallationStatus): [string, number][] {
+  const others = status.also_installed_in ?? [];
+  const counts = new Map<string, number>();
+  for (const name of status.missing_schemas) {
+    const other = others.find((c) => name.startsWith(`${c}.`));
+    const catalog = other ?? status.deployment_catalog;
+    counts.set(catalog, (counts.get(catalog) ?? 0) + 1);
+  }
+  return [...counts.entries()];
+}
+
 async function reconcile(versionId: string): Promise<ReconcileResult> {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), RECONCILE_TIMEOUT_MS);
   try {
-    const resp = await reconcileInstallation(
-      { model_version_id: versionId },
-      { signal: ctrl.signal },
+    const resp = await withRequestTimeout(RECONCILE_TIMEOUT_MS, (signal) =>
+      reconcileInstallation({ model_version_id: versionId }, { signal }),
     );
     return resp.data;
   } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") {
+    if (e instanceof RequestTimeoutError) {
       throw new Error(
         `reconcile timed out after ${RECONCILE_TIMEOUT_MS}ms — try again or dismiss`,
       );
@@ -104,8 +117,6 @@ async function reconcile(versionId: string): Promise<ReconcileResult> {
       throw new Error(`reconcile HTTP ${e.status}: ${text}`);
     }
     throw e;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -207,13 +218,15 @@ export function InstallationDriftDialog({
                 <>
                   <p>
                     Lakebase shows this version as{" "}
-                    <strong>installed</strong>, but{" "}
-                    {status.missing_schemas.length} of{" "}
-                    {status.expected_schemas.length} expected schemas are{" "}
-                    <strong>missing</strong> from{" "}
-                    <code className="text-xs">
-                      {status.deployment_catalog}
-                    </code>
+                    <strong>installed</strong>, but expected schemas are{" "}
+                    <strong>missing</strong>:{" "}
+                    {missingByCatalog(status).map(([catalog, n], i) => (
+                      <span key={catalog}>
+                        {i > 0 && ", "}
+                        {n} of {status.expected_schemas.length} from{" "}
+                        <code className="text-xs">{catalog}</code>
+                      </span>
+                    ))}
                     .
                   </p>
                   <div>

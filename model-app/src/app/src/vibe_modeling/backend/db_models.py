@@ -6,11 +6,17 @@ and progress events.
 """
 
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 import uuid
 
-from sqlalchemy import BigInteger, Boolean, Column, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    BigInteger, Boolean, Column, ForeignKey, Index, Integer, String, Text, UniqueConstraint, false, true,
+)
+from sqlalchemy import text as sa_text
 from sqlmodel import Field, SQLModel, Relationship
+
+from .runtime_budget import RUNTIME_BUDGET_DEFAULT_HOURS
+
 
 def _uuid() -> str:
     return str(uuid.uuid4())
@@ -144,13 +150,14 @@ class AgentConfig(SQLModel, table=True):
         default=3,
         sa_column=Column(Integer, nullable=False, server_default="3"),
     )
-    # When True, the per-run job tags include identity-bearing values
-    # (business name, session id, notebook path). When False (default),
-    # only operational tags (operation, model scope, counters, launcher
-    # source) are emitted. See backend/job_launcher.py:build_job_tags.
+    # Settings -> Agent -> "Annotate jobs with run tags" (name kept). When True
+    # (default), the per-run job tags add the business name, session id and
+    # notebook file name; the operational tags are always added. A new row is
+    # seeded from AppConfig.run_tags_default (install.sh --no-run-tags).
+    # See backend/job_launcher.py:build_job_tags.
     collect_vibe_run_statistics: bool = Field(
-        default=False,
-        sa_column=Column(Boolean, nullable=False, server_default="false"),
+        default=True,
+        sa_column=Column(Boolean, nullable=False, server_default=true()),
     )
     # GitHub publish/browse config (ADR D-049). ``github_auth_mode`` is one of
     # '' | 'oauth_u2m' | 'secret_pat'. For OAuth U2M, ``github_connection_name``
@@ -198,6 +205,30 @@ class AgentConfig(SQLModel, table=True):
     taxonomy_llm_max_concurrency: int = Field(
         default=6,
         sa_column=Column(Integer, nullable=False, server_default="6"),
+    )
+    # Identity of the notebook at ``notebook_path`` (v_0_9_0), read from the
+    # workspace file and cached with a short TTL so boot, the Settings card and
+    # the marker gates do not each re-export the notebook. ``installed_checked_path``
+    # is the path the cached values were read from (a changed path invalidates
+    # them). A failed read keeps the last-good versions and records the error.
+    # All NULL until the first read.
+    installed_release_version: Optional[str] = Field(default=None)
+    installed_agent_version: Optional[str] = Field(default=None)
+    installed_checked_at: Optional[datetime] = Field(default=None)
+    installed_checked_path: Optional[str] = Field(default=None)
+    installed_check_error: Optional[str] = Field(default=None)
+    # Who last saved the taxonomy settings and when (v_0_9_0_1), the audit pair
+    # ``assess_config`` keeps as ``updated_by`` / ``updated_at``. NULL until the
+    # first save.
+    taxonomy_updated_by: Optional[str] = Field(default=None)
+    taxonomy_updated_at: Optional[datetime] = Field(default=None)
+    # Settings -> Agent -> "Run time budget (hours)" (v_0_9_0_3): the default a
+    # new run stores when it sets no budget of its own. See runtime_budget.py.
+    runtime_budget_hours: int = Field(
+        default=RUNTIME_BUDGET_DEFAULT_HOURS,
+        sa_column=Column(
+            Integer, nullable=False, server_default=str(RUNTIME_BUDGET_DEFAULT_HOURS)
+        ),
     )
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
@@ -264,6 +295,54 @@ class ModelVersion(SQLModel, table=True):
     # ``agent_compat.extract_version_provenance``.
     agent_version: Optional[str] = Field(default=None)
     release_version: Optional[str] = Field(default=None)
+    # Version lifecycle (v_0_9_0). ``dry_run``: produced by a Dry Run; stays
+    # True after the draft is installed. ``promoted_at`` /
+    # ``promoted_by_run_id``: when and by which install run this version was
+    # made current. ``replaced_at`` / ``replaced_by_version_id``: written on
+    # every version an install drops; ``replaced_at`` is the flag and the id is
+    # only a pointer (ON DELETE SET NULL clears it when the replacer is
+    # deleted, which must not un-replace this version). Both cleared if this
+    # version is made current again.
+    dry_run: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default=false()),
+    )
+    promoted_at: Optional[datetime] = Field(default=None)
+    # ``use_alter`` breaks the model_versions <-> runs FK cycle
+    # (``runs.version_id`` points back here) so create_all / drop_all can order
+    # the two tables; Postgres adds this constraint after both exist.
+    promoted_by_run_id: Optional[str] = Field(
+        default=None,
+        sa_column=Column(
+            String,
+            ForeignKey("runs.id", ondelete="SET NULL", use_alter=True,
+                       name="model_versions_promoted_by_run_id_fkey"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    replaced_by_version_id: Optional[str] = Field(
+        default=None, foreign_key="model_versions.id", ondelete="SET NULL", index=True,
+    )
+    replaced_at: Optional[datetime] = Field(default=None)
+    # Where the agent wrote this version's files and its home ``_metamodel``
+    # rows. Set once when the version is created and never changed by an
+    # install; ``uc_catalog`` is where it is installed now. NULL for imports
+    # and for rows that predate it with no known catalog; readers must keep
+    # falling back to the installation's catalog for NULL.
+    files_catalog: Optional[str] = Field(default=None)
+    # The model.json ``_vibe_scope`` facts: fence mode (``all`` / ``some_domains``)
+    # and the base the agent scoped against. NULL when the file has no block.
+    scope_fence_mode: Optional[str] = Field(default=None)
+    scope_base_version: Optional[int] = Field(default=None)
+    scope_base_scope: Optional[str] = Field(default=None)
+    # The prefixes a 0.9.0 import put on the model's schemas and on its metric
+    # view names (``services/scope_prefix``). ``""``: the app copied the
+    # version's files into its own folder and added nothing. NULL: not brought
+    # in by a 0.9.0 import (agent runs, older rows). Publishing strips exactly
+    # these.
+    import_schema_prefix_added: Optional[str] = Field(default=None)
+    import_view_prefix_added: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=_now)
 
     business: Optional[Business] = Relationship(back_populates="versions")
@@ -275,17 +354,6 @@ class ModelVersion(SQLModel, table=True):
         back_populates="version",
         sa_relationship_kwargs={"passive_deletes": "all"},
     )
-
-    @property
-    def is_base(self) -> bool:
-        """True iff this version has no lineage parent. Imported v2
-        rows that declare ``generated_from_version`` in their model.json
-        get a ``base_version_id`` set during import and render as
-        "Vibed"; the boolean is computed here so ``ModelVersionOut``
-        auto-maps via ``from_attributes`` rather than relying on the
-        default value being correct.
-        """
-        return self.base_version_id is None
 
 class Run(SQLModel, table=True):
     __tablename__ = "runs"
@@ -346,6 +414,12 @@ class Run(SQLModel, table=True):
     last_poll_error: str = Field(default="", sa_column=Column(Text, default=""))
     started_at: Optional[datetime] = Field(default=None)
     completed_at: Optional[datetime] = Field(default=None)
+    # Set when the run was recorded after the fact by linking an imported
+    # version to the Databricks run that produced it (v_0_9_0_1).
+    # ``link_evidence`` says how the match was verified. Both NULL for runs
+    # the app launched.
+    linked_at: Optional[datetime] = Field(default=None)
+    link_evidence: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=_now)
 
     business: Optional[Business] = Relationship(back_populates="runs")
@@ -357,6 +431,16 @@ class Run(SQLModel, table=True):
         back_populates="run",
         sa_relationship_kwargs={"passive_deletes": "all"},
     )
+
+    def __init__(self, **data: Any) -> None:
+        # A table model skips pydantic validation on construction, so the
+        # ``extra="forbid"`` above alone would drop an unknown kwarg silently.
+        cls = type(self)
+        unknown = set(data) - set(cls.model_fields) - set(cls.__sqlmodel_relationships__)
+        if unknown:
+            raise TypeError(f"Run got unknown field(s): {', '.join(sorted(unknown))}")
+        super().__init__(**data)
+
 
 class RunArtifact(SQLModel, table=True):
     __tablename__ = "run_artifacts"
@@ -594,6 +678,11 @@ class VibeInput(SQLModel, table=True):
     # 0..1; agent next-vibes carry it, user inputs leave it null.
     confidence_score: Optional[float] = Field(default=None)
     consumed: bool = Field(default=False, index=True)
+    # The run whose success consumed this input; NULL while open and when the
+    # input is reopened. SET NULL keeps the input when that run is deleted.
+    consumed_by_run_id: Optional[str] = Field(
+        default=None, foreign_key="runs.id", ondelete="SET NULL", index=True,
+    )
     # Persisted "include in the next run" flag, toggled on the compose surface.
     # Default False (explicit opt-in); reset to False when the input is consumed
     # by a successful run. The run dispatches exactly the selected, active,
@@ -649,17 +738,205 @@ class VibeInputContextLink(SQLModel, table=True):
 
 
 class RunInputLink(SQLModel, table=True):
-    """Immutable run↔input usage audit, frozen on run finish. Composite PK
-    ``(run_id, input_id)``.
+    """Run↔input usage audit: a link records an input a run sent, consumed or
+    reopened. Composite PK ``(run_id, input_id)``.
+
+    The ``outcome_*`` columns hold the agent's per-feedback outcome for that
+    input (status from the agent vocabulary, e.g. ``applied`` / ``deferred``,
+    plus its reason and target), written once when the run finishes. NULL =
+    the agent reported no outcomes; ``not_reported`` = it reported outcomes
+    but none for this input. Install runs record ``applied`` / ``reopened``.
     """
 
     __tablename__ = "run_input_links"
 
     run_id: str = Field(foreign_key="runs.id", ondelete="CASCADE", primary_key=True)
     input_id: str = Field(foreign_key="vibe_inputs.id", ondelete="CASCADE", primary_key=True)
+    outcome_status: Optional[str] = Field(default=None)
+    outcome_reason: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
+    outcome_target: Optional[str] = Field(default=None)
     created_at: datetime = Field(default_factory=_now)
 
     input: Optional[VibeInput] = Relationship(back_populates="run_links")
+
+
+class RunAgentReport(SQLModel, table=True):
+    """What the agent's model.json said about one vibe run, one row per run.
+
+    Written when the run finishes; read by the feedback consume step and the
+    run report. The per-input outcomes live on ``run_input_links``. Versions
+    are the agent's integer version numbers. ``lineage_*`` are NULL when the
+    file carries no ``lineage`` block.
+    """
+
+    __tablename__ = "run_agent_reports"
+
+    run_id: str = Field(foreign_key="runs.id", ondelete="CASCADE", primary_key=True)
+    has_input_outcomes: bool = Field(default=False)
+    outcomes_malformed: bool = Field(default=False)
+    version_mismatch: bool = Field(default=False)
+    expected_version: Optional[int] = Field(default=None)
+    fetched_version: Optional[int] = Field(default=None)
+    lineage_base_version: Optional[int] = Field(default=None)
+    lineage_head_at_write: Optional[int] = Field(default=None)
+    lineage_stale: Optional[bool] = Field(default=None)
+    # Outcomes whose ``item_id`` matched no input the run sent.
+    unmatched_outcome_count: int = Field(default=0)
+    created_at: datetime = Field(default_factory=_now)
+
+
+class RunPostInstallDelete(SQLModel, table=True):
+    """A replaced version the user asked an install run to delete afterwards.
+
+    Written ``pending`` in the install's terminal commit; each row is then
+    deleted in its own transaction and set to ``deleted`` or ``failed``, or
+    to ``not_run`` by the boot sweep when the version changed in between.
+    Composite PK ``(run_id, version_id)``. ``version_id`` has no FK because
+    the row must outlive the version it deleted; ``version`` and ``scope``
+    keep it readable after that.
+    """
+
+    __tablename__ = "run_post_install_deletes"
+
+    run_id: str = Field(foreign_key="runs.id", ondelete="CASCADE", primary_key=True)
+    version_id: str = Field(primary_key=True)
+    version: int = Field()
+    scope: str = Field(default="")
+    status: str = Field(default="pending")  # pending | deleted | failed | not_run
+    reason: str = Field(default="", sa_column=Column(Text, default=""))
+    created_at: datetime = Field(default_factory=_now)
+    completed_at: Optional[datetime] = Field(default=None)
+
+
+class ModelVersionInstall(SQLModel, table=True):
+    """One catalog a version was installed into, open while it stays installed.
+
+    ``uninstalled_at`` NULL = still installed there; at most one open row per
+    ``(version_id, catalog)`` (partial unique index). ``ModelVersion.uc_catalog``
+    and ``deployment_status`` duplicate the latest open row: about 30 readers
+    use them, so they stay, and the drift checker asserts the two agree.
+    """
+
+    __tablename__ = "model_version_installs"
+    __table_args__ = (
+        Index(
+            "uq_model_version_installs_open",
+            "version_id",
+            "catalog",
+            unique=True,
+            sqlite_where=sa_text("uninstalled_at IS NULL"),
+            postgresql_where=sa_text("uninstalled_at IS NULL"),
+        ),
+    )
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    version_id: str = Field(foreign_key="model_versions.id", ondelete="CASCADE", index=True)
+    catalog: str = Field()
+    installed_by_run_id: Optional[str] = Field(
+        default=None, foreign_key="runs.id", ondelete="SET NULL", index=True,
+    )
+    installed_at: datetime = Field(default_factory=_now)
+    uninstalled_at: Optional[datetime] = Field(default=None)
+    uninstalled_by_run_id: Optional[str] = Field(
+        default=None, foreign_key="runs.id", ondelete="SET NULL", index=True,
+    )
+
+
+class MetamodelCleanup(SQLModel, table=True):
+    """A pending, done or failed removal of one deleted version's ``_metamodel``
+    rows from one catalog.
+
+    Written ``pending`` in the transaction that deletes the version (or the
+    business), run after the commit, and retried by a bounded boot sweep. No
+    FKs: the version and business are gone by design, so the row keeps the
+    agent's key ``(business_segment, version, scope)`` and the catalog.
+    """
+
+    __tablename__ = "metamodel_cleanups"
+    __table_args__ = (
+        Index("ix_metamodel_cleanups_lookup", "business_segment", "scope", "catalog", "status"),
+    )
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    business_segment: str = Field()
+    version: int = Field()
+    scope: str = Field(default="")
+    catalog: str = Field()
+    reason: str = Field()  # version_delete | business_delete | post_install_delete | orphan_drop
+    status: str = Field(default="pending")  # pending | done | failed
+    attempts: int = Field(default=0)
+    last_error: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class RunSchemaDrop(SQLModel, table=True):
+    """One orphan schema an orphan-drop run dropped or tried to drop.
+    Composite PK ``(run_id, catalog, schema_name)``."""
+
+    __tablename__ = "run_schema_drops"
+
+    run_id: str = Field(foreign_key="runs.id", ondelete="CASCADE", primary_key=True)
+    catalog: str = Field(primary_key=True)
+    schema_name: str = Field(primary_key=True)
+    table_count: int = Field(default=0)
+    status: str = Field(default="pending")  # pending | dropped | failed
+    error: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
+    created_at: datetime = Field(default_factory=_now)
+
+
+class RunChangeDecision(SQLModel, table=True):
+    """The modeler's accept or reject of one change a vibe run made.
+
+    One row per ``(run_id, element_kind, element_path)``; changed in place
+    until a newer run on the version starts. ``feedback_input_id`` is the
+    feedback item made from a rejection, if the modeler asked for one.
+    """
+
+    __tablename__ = "run_change_decisions"
+    __table_args__ = (
+        UniqueConstraint("run_id", "element_kind", "element_path", name="uq_run_change_decisions_element"),
+    )
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    run_id: str = Field(foreign_key="runs.id", ondelete="CASCADE")
+    version_id: str = Field(foreign_key="model_versions.id", ondelete="CASCADE", index=True)
+    element_kind: str = Field()  # domain | product | attribute
+    element_path: str = Field()
+    change_kind: str = Field()  # added | modified | removed
+    decision: str = Field()  # accepted | rejected
+    decided_by: str = Field(default="")
+    decided_at: datetime = Field(default_factory=_now)
+    feedback_input_id: Optional[str] = Field(
+        default=None, foreign_key="vibe_inputs.id", ondelete="SET NULL", index=True,
+    )
+
+
+class TaxonomyWizardState(SQLModel, table=True):
+    """One user's saved Domain Taxonomy wizard, so a draft survives a reload.
+
+    ``owner`` is the ``UserPreference.user_id`` key. The JSON columns are one
+    transient wizard document in the shape of the taxonomy request models,
+    read and written whole, never queried inside, and deleted once the
+    business exists; a table rather than a ``UserPreference`` value because the
+    row needs the sector FK, a ``revision`` for two-tab conflicts and an
+    expiry query.
+    """
+
+    __tablename__ = "taxonomy_wizard_states"
+
+    id: str = Field(default_factory=_uuid, primary_key=True)
+    owner: str = Field(unique=True)
+    step: int = Field(default=0)
+    sector_id: Optional[str] = Field(default=None, foreign_key="sectors.id", ondelete="SET NULL", index=True)
+    strictness: str = Field(default="strict")
+    intake_json: str = Field(sa_column=Column(Text, nullable=False))
+    tree_json: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
+    sections_json: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
+    revision: int = Field(default=0)
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+    expires_at: datetime = Field(index=True)
 
 
 class Subdomain(SQLModel, table=True):

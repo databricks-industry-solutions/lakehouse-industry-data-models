@@ -13,6 +13,7 @@
  * than rendering the component standalone.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { render, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -34,6 +35,8 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    // No base-model pre-fill: the form keeps its own values.
+    useGetRunDefaults: () => ({ data: undefined, isLoading: false, isError: false }),
     useGetBusinessSuspense: () => businessHook(),
     useListVersionsSuspense: () => versionsHook(),
     createRun: vi.fn(),
@@ -167,6 +170,8 @@ function readBaseVersionTrigger(): string {
   const sel = baseVersionSelect.options[baseVersionSelect.selectedIndex];
   return sel?.textContent?.trim() ?? "";
 }
+
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.runs.new"));
 
 describe("Runs/new — sourceVersion + sourceScope URL preselect", () => {
   it("renders scope-suffixed labels in the base-version dropdown", async () => {

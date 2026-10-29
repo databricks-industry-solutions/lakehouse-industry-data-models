@@ -6,7 +6,8 @@ import {
   compileTaxonomy, condenseTaxonomy, createBusiness,
   type TaxonomyIntake, type TaxonomySection, type TaxonomyTree,
 } from "@/lib/api";
-import { apiErrorMessage } from "@/lib/api-error";
+import { apiErrorMessage, parseSettingsError } from "@/lib/api-error";
+import { SettingsErrorNotice } from "@/components/feature-gate";
 import { useTaxonomyDraft, useTaxonomyDraftActions } from "@/lib/taxonomy/use-taxonomy-draft";
 import { useBusyAutoRetry } from "@/lib/taxonomy/busy-retry";
 import { RETRYABLE_PART_STATUSES } from "@/lib/taxonomy/part-status";
@@ -30,6 +31,8 @@ type Props = {
   sections: Record<string, TaxonomySection>;
   /** Pre-filled description (the Ridgeline example path); skips the auto-draft. */
   initialDescription?: string;
+  /** After the business is created, before navigating (the wizard discards its saved state). Errors are ignored. */
+  onCreated?: () => Promise<void>;
 };
 
 function download(name: string, text: string, type: string) {
@@ -39,7 +42,7 @@ function download(name: string, text: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
-export function ReviewStep({ intake, sectorId, tree, strictness, sections, initialDescription }: Props) {
+export function ReviewStep({ intake, sectorId, tree, strictness, sections, initialDescription, onCreated }: Props) {
   const navigate = useNavigate();
   // Never send raw editor state: the backend models are min_length=1 and would 422.
   const clean = useMemo(() => sanitize(tree, sections), [tree, sections]);
@@ -59,6 +62,8 @@ export function ReviewStep({ intake, sectorId, tree, strictness, sections, initi
   const [dirty, setDirty] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A refused or unset model service: shown with its Settings link.
+  const [settingsError, setSettingsError] = useState<unknown>(null);
 
   // A restarted app drops in-memory drafts (404): say so and clear the id so the button works again.
   useEffect(() => {
@@ -85,13 +90,15 @@ export function ReviewStep({ intake, sectorId, tree, strictness, sections, initi
 
   const writeDescription = async () => {
     setError(null);
+    setSettingsError(null);
     setLostMsg(false);
     try {
       const r = await condenseTaxonomy({ intake, tree: clean.tree, sections: clean.sections });
       setCondenseId(r.data.draft_id);
       setDirty(false);
     } catch (err) {
-      setError(apiErrorMessage(err, "Couldn't start writing the description"));
+      if (parseSettingsError(err)) setSettingsError(err);
+      else setError(apiErrorMessage(err, "Couldn't start writing the description"));
     }
   };
 
@@ -115,6 +122,7 @@ export function ReviewStep({ intake, sectorId, tree, strictness, sections, initi
     inFlight.current = true;
     setCreating(true);
     setError(null);
+    setSettingsError(null);
     try {
       const biz = await createBusiness({
         name: intake.company_name,
@@ -126,6 +134,7 @@ export function ReviewStep({ intake, sectorId, tree, strictness, sections, initi
         business_domains: compiled.data.business_domains,
         org_divisions: clean.tree.coverage ?? "",
       });
+      await onCreated?.().catch(() => {});
       navigate({
         to: "/businesses/$businessId/runs/new",
         params: { businessId: biz.data.id },
@@ -147,16 +156,16 @@ export function ReviewStep({ intake, sectorId, tree, strictness, sections, initi
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-medium">Business description (≤2,000 characters)</h3>
           <Button type="button" size="sm" variant="outline" onClick={rewrite} disabled={blocked || writing || countingDown}>
-            {writing ? <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Claude is writing…</> : "Rewrite with Claude"}
+            {writing ? <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> The model is writing…</> : "Rewrite with the model"}
           </Button>
         </div>
         {part && RETRYABLE_PART_STATUSES.has(part.status) && <p className="text-xs text-destructive">{part.error}</p>}
         {descriptionRetry.busy && <BusyCountdown state={descriptionRetry} testId="description-busy-countdown" />}
-        {lostMsg && <p className="text-xs text-destructive">The description draft was lost (the app restarted) — click Rewrite with Claude again.</p>}
+        {lostMsg && <p className="text-xs text-destructive">The description draft was lost (the app restarted). Click Rewrite with the model again.</p>}
         {writing && !description && (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Claude is writing the description…</p>
+          <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> The model is writing the description…</p>
         )}
-        <Textarea rows={8} placeholder={writing ? "Claude is writing the description…" : undefined} value={description} onChange={(e) => { setDescription(e.target.value); setDirty(true); }} />
+        <Textarea rows={8} placeholder={writing ? "The model is writing the description…" : undefined} value={description} onChange={(e) => { setDescription(e.target.value); setDirty(true); }} />
         <p className={`text-xs ${over ? "text-destructive" : "text-muted-foreground"}`}>
           {description.length.toLocaleString()} / {LIMIT.toLocaleString()}
         </p>
@@ -183,7 +192,7 @@ export function ReviewStep({ intake, sectorId, tree, strictness, sections, initi
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Replace your edits with a new draft?</AlertDialogTitle>
-            <AlertDialogDescription>Claude will write a fresh description and your current text will be lost.</AlertDialogDescription>
+            <AlertDialogDescription>The model will write a fresh description and your current text will be lost.</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Keep my edits</AlertDialogCancel>
@@ -193,6 +202,9 @@ export function ReviewStep({ intake, sectorId, tree, strictness, sections, initi
       </AlertDialog>
 
       {error && <p className="text-sm text-destructive">{error}</p>}
+      {settingsError != null && (
+        <SettingsErrorNotice error={settingsError} fallback="Couldn't start writing the description" testId="description-settings-error" />
+      )}
       <Button type="button" disabled={!canCreate} onClick={create}>
         {creating ? "Creating…" : "Create & configure first run"}
       </Button>

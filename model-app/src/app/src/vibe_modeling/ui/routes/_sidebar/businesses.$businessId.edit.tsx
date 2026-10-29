@@ -15,6 +15,10 @@ import { invalidateBusinessLists } from "@/lib/business-cache";
 import { selector } from "@/lib/selector";
 import { useBreadcrumbs } from "@/components/explorer/breadcrumb-context";
 import { SectorSelect } from "@/components/business/sector-select";
+import {
+  OrphanSchemasPanel,
+  useCanManageOrphanSchemas,
+} from "@/components/business/orphan-schemas-panel";
 import { MarkdownEditor } from "@/components/ui/markdown-editor";
 import { TagInput } from "@/components/ui/tag-input";
 import {
@@ -73,6 +77,7 @@ function EditBusinessForm({ businessId }: { businessId: string }) {
   const legacyOrgDivisions =
     storedOrgDivisions && !isOrgDivisionsPreset(storedOrgDivisions) ? storedOrgDivisions : null;
 
+  const showDeployment = useCanManageOrphanSchemas();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const mutation = useMutation({
@@ -245,6 +250,15 @@ function EditBusinessForm({ businessId }: { businessId: string }) {
           </Button>
         </div>
       </form>
+
+      {showDeployment && (
+        <section className="max-w-4xl space-y-3 border-t pt-4" aria-labelledby="business-deployment-heading">
+          <h2 id="business-deployment-heading" className="text-lg font-semibold tracking-tight">
+            Deployment
+          </h2>
+          <OrphanSchemasPanel businessId={businessId} businessKind={business.kind} />
+        </section>
+      )}
     </>
   );
 }

@@ -30,6 +30,7 @@ import type { RunOperationOut, RunOut } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FileText } from "lucide-react";
+import { stripVibeMarkers } from "@/lib/vibe-scope";
 
 interface WhatYouSubmittedProps {
   run: RunOut;
@@ -42,7 +43,8 @@ interface WhatYouSubmittedProps {
  * dispatched_widgets is an untyped dict on the wire.
  */
 function formatWidgetValue(value: unknown): string {
-  if (typeof value === "string") return value;
+  // `model_vibes` carries K1 markers when sent inline; never show them raw (D16).
+  if (typeof value === "string") return stripVibeMarkers(value);
   if (value === null || value === undefined) return String(value);
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
@@ -106,6 +108,9 @@ const ADVANCED_FIELD_LABELS: Record<string, string> = {
   classification_levels: "Classification levels",
   housekeeping_columns: "Housekeeping columns",
   history_tracking_columns: "History tracking columns",
+  // No entry in ADVANCED_FIELD_DEFAULTS: the default comes from Settings and
+  // can change, so the stored hours always show.
+  runtime_budget_hours: "Run time budget (hours)",
 };
 
 /** Canonical defaults (mirrored from `CONVENTION_DEFAULTS` in routes/_sidebar/
@@ -220,7 +225,9 @@ function parseAdvancedOverrides(paramsJson: string): Array<{ label: string; valu
 
 export function WhatYouSubmitted({ run, operations = [] }: WhatYouSubmittedProps) {
   const businessContextText = (run.business_context_text || "").trim();
-  const vibeInstructionsText = (run.vibe_instructions_text || "").trim();
+  // The stored text is the agent text, which carries K1 markers; react-markdown
+  // would render them as raw text (D16).
+  const vibeInstructionsText = stripVibeMarkers(run.vibe_instructions_text).trim();
   const volumePath = (run.vibe_instructions_volume_path || "").trim();
   const paramsJson = run.parameters_json || "{}";
 

@@ -3,21 +3,31 @@ bundle:
 
 # Install-time choices (Lakebase project id, UC catalog name, SQL warehouse
 # id, the optional Domain Taxonomy Builder flag and model service, the optional
-# assessment flag and reader SP) flow into the App via env vars set on the
-# deployer's shell: install/install.sh exports
-# VIBE_MODELING_LAKEBASE_PROJECT / _DATABASE_NAME / _DEPLOYMENT_CATALOG /
-# _WAREHOUSE_ID / _TAXONOMY_BUILDER_ENABLED / _TAXONOMY_MODEL_SERVICE /
-# _ASSESSMENT_ENABLED / _ASSESS_READER_SP before
-# `databricks bundle deploy`, and the artifacts hook below rewrites those
-# values into src/app/.build/app.yml. The Databricks
-# Apps `App` resource has no env field at the bundle level, so substitution
-# happens at build time, not deploy time. Source src/app/app.yml is never
-# modified — only the build output is rewritten.
+# assessment flag and reader SP, the run-tags seed) are resolved by
+# install/deploy_settings.py and rendered into src/app/.build/app.yml by the
+# artifacts hook below. Deploy with install/install.sh: it resolves this run's
+# flags over the settings it reads from the running app (the defaults for a new
+# app), exports them as VIBE_MODELING_* (plus VIBE_MODELING_APP_NAME), then plans
+# the deploy, refuses a plan that deletes or recreates the app, and applies
+# exactly that plan (install/bundle_state.py). A deploy without it needs the app
+# name (`--var app_name=<app>` or BUNDLE_VAR_app_name; the variable has no
+# default) and every value exported; the hook refuses (exit 2) rather than
+# render defaults (see INSTALL.md "Deploying without install.sh").
+# The Databricks Apps `App` resource has no env field at the bundle level, so
+# substitution happens at build time, not deploy time. install.sh and the hook
+# never modify the source src/app/app.yml; only the build output is rewritten.
 
 variables:
   app_name:
-    description: "Databricks App resource name (the name shown in the workspace Apps UI). Override via `--var \"app_name=<name>\"` or via install.sh's --app-name flag."
-    default: vibe-modeling
+    description: "Databricks App resource name (the name shown in the workspace Apps UI). Required: `--var \"app_name=<name>\"`, BUNDLE_VAR_app_name, or install.sh's --app-name flag."
+
+# One bundle root, and so one deployment state, per app name: two apps deploy
+# side by side from one identity, and `dev` and `github-publish` (which differ
+# only by a resource on the same app) are two ways to deploy the same app.
+# install/bundle_state.py builds the same path (BUNDLE_ROOT) and moves the state
+# of an install made before this layout (~/.bundle/vibe-modeling/<target>).
+workspace:
+  root_path: ~/.bundle/${bundle.name}/${var.app_name}
 
 sync:
   include:
@@ -26,16 +36,21 @@ sync:
 # The install-time App overrides rendered by install/build_and_render.sh
 # (today: the assessment's user_api_scopes). The CLI reads includes when it
 # loads the bundle, before the artifacts build hook below runs, so every deploy
-# path renders first (install/install.sh and the other deploy scripts do); for a plain
-# `databricks bundle deploy`, run `bash install/build_and_render.sh` first, or
-# re-run the deploy when the hook says the scopes changed. A glob, so a fresh
-# clone (nothing rendered, or the assessment off) still loads, with no user scopes.
+# path renders first (install/install.sh does); a deploy without it runs
+# `bash install/build_and_render.sh` first, with the same app name and settings
+# as the deploy, or re-runs the deploy when the hook says the scopes changed. A
+# glob, so a fresh clone (nothing rendered, or the assessment off) still loads,
+# with no user scopes.
 include:
   - install/.generated/*.yml
 
+# The hook gets the app name, target and CLI profile the CLI deploys with
+# (${workspace.profile} is --profile, else DATABRICKS_CONFIG_PROFILE, else
+# empty), so the rendered settings always belong to the app and workspace
+# being deployed.
 artifacts:
   default:
-    build: install/build_and_render.sh --bundle-hook
+    build: install/build_and_render.sh --bundle-hook --app-name ${var.app_name} --target ${bundle.target} --profile "${workspace.profile}"
 
 resources:
   apps:
@@ -73,20 +88,25 @@ resources:
 # across arbitrary Databricks accounts (AWS/Azure/any workspace) with no
 # edits to this file.
 #
-# Usage:
-#   databricks bundle deploy --profile <your-profile>
-#   databricks bundle run vibe-modeling-app --profile <your-profile>
+# Usage: bash install/install.sh --profile <your-profile> --app-name <app>
+# (INSTALL.md). Without it:
+#   export VIBE_MODELING_APP_NAME=<app>
+#   # plus every VIBE_MODELING_* setting (install/install.sh --dry-run prints them)
+#   bash install/build_and_render.sh
+#   databricks bundle plan --profile <your-profile> --var "app_name=<app>"
+#   databricks bundle deploy --profile <your-profile> --var "app_name=<app>"
 targets:
   # Default, portable target. App declares no resources, so a fresh install
-  # deploys on any workspace with no pre-existing UC connection. This is the
-  # target install/install.sh uses.
+  # deploys on any workspace with no pre-existing UC connection. install.sh
+  # uses it unless the app declares the github_pr connection (github-publish).
   dev:
     mode: development
     default: true
   # Opt-in target for the publish-to-GitHub feature. Use only on a workspace
   # where you have already created the `github_pr` UC HTTP connection
-  # (docs/github-integration-setup.md): `databricks bundle deploy --target
-  # github-publish --profile <p> --var "app_name=<app>"`. It adds the
+  # (docs/github-integration-setup.md): `bash install/install.sh --profile <p>
+  # --app-name <app> --enable-github-publish`; re-runs keep it, since the app
+  # then declares the github_pr resource (--disable-github-publish switches back). It adds the
   # USE_CONNECTION grant to the app and re-applies it on every deploy of this
   # target. The default `dev` target declares no resources, so this opt-in is a
   # target rather than a CLI flag (an app `resources` list can't be set via

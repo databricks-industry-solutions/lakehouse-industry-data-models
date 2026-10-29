@@ -1,0 +1,80 @@
+# Taxonomy drafts (backend/taxonomy/drafts.py) live in memory in this single process:
+# do NOT raise --workers or scale replicas, or a draft poll can hit a different process
+# (404). A redeploy/restart drops in-flight drafts; the UI offers "Draft again".
+command: ["uvicorn", "vibe_modeling.backend.app:app", "--workers", "1"]
+env:
+  # The four values below (and the two Domain Taxonomy Builder values at the
+  # end) are rewritten by install/render_app_yaml.py at
+  # install time, driven by install/install.sh's --project / --catalog /
+  # --warehouse-id flags. The defaults checked in here are what a canonical
+  # `install.sh --profile <p>` (no overrides) produces and what local
+  # `apx dev` reads when the .env file isn't overriding.
+  #
+  # LAKEBASE_PROJECT + DATABASE_NAME drive the Postgres connection (the
+  # app's own state DB). DEPLOYMENT_CATALOG + WAREHOUSE_ID seed
+  # AgentConfig on first boot — the lazy get-or-create in the agent
+  # config helper writes them into the row, after which the DB is the
+  # source of truth and these env vars are not consulted again.
+  - name: VIBE_MODELING_LAKEBASE_PROJECT
+    value: "acme-models-01"
+  # Branch within the Lakebase project. "production" is the default; override
+  # to a smoke branch (e.g. v0-6-1-smoke) when validating migration-bearing
+  # deploys without touching production data — per the Lakebase-branching
+  # mandate in CLAUDE.md. NOT in render_app_yaml.py's rewrite list — operator
+  # edits this line directly (or sets the env via `databricks apps update`)
+  # for the duration of a smoke, then reverts.
+  - name: VIBE_MODELING_LAKEBASE_BRANCH
+    value: "production"
+  - name: VIBE_MODELING_DATABASE_NAME
+    value: "acme_models_db"
+  - name: VIBE_MODELING_DEPLOYMENT_CATALOG
+    value: "acme-cat_01"
+  - name: VIBE_MODELING_WAREHOUSE_ID
+    value: "1a2b3c4d5e6f7a8b"
+  # GitHub App read-auth (0.7.0). Source reads authenticate as a GitHub App
+  # installation token (5,000 req/hr, immune to the industry repo's SAML SSO)
+  # when all three are set; empty -> anonymous fallback (60 req/hr, degraded).
+  # App id + installation id are non-secret plain env. The PEM is a Databricks
+  # app secret referenced via `valueFrom` - NEVER a checked-in literal. To wire
+  # it: declare a secret resource on the app (scope `vibe-modeling`, key
+  # `github_app_private_key`) and point `valueFrom` at that resource name, e.g.:
+  #   - name: VIBE_MODELING_GITHUB_APP_PRIVATE_KEY
+  #     valueFrom: "github-app-key"
+  - name: VIBE_MODELING_GITHUB_APP_ID
+    value: ""
+  - name: VIBE_MODELING_GITHUB_APP_INSTALLATION_ID
+    value: ""
+  # C-08: explicitly trust forwarded identity headers in production. The
+  # Databricks Apps reverse proxy sets X-Forwarded-User / X-Forwarded-Email
+  # in front of the app, so they are safe to honour here. Outside this
+  # deploy (local dev / tests) the gate defaults off — see
+  # backend/core/_headers.py.
+  - name: TRUST_FORWARDED_HEADERS
+    value: "1"
+  # Domain Taxonomy Builder (optional, off by default). Both values are
+  # rewritten by install/render_app_yaml.py from install.sh's
+  # --enable-taxonomy-builder / --taxonomy-model-service flags. The model
+  # service (catalog.schema.service, called through the Unity AI Gateway) only
+  # seeds AgentConfig.taxonomy_model_service while that column is empty;
+  # Settings -> Platform owns it after that. The app SP needs USE CATALOG,
+  # USE SCHEMA and EXECUTE on the service.
+  - name: VIBE_MODELING_TAXONOMY_BUILDER_ENABLED
+    value: "true"
+  - name: VIBE_MODELING_TAXONOMY_MODEL_SERVICE
+    value: "main.ai_models.drafting-llm_v2"
+  # In-app bronze assessment (optional, off by default). Both values
+  # are rewritten by install/render_app_yaml.py from install.sh's
+  # --enable-assessment / --assess-reader-sp flags. The reader service
+  # principal (application id) only seeds AssessConfig.reader_application_id
+  # while that column is empty; Settings -> Platform (Optional features) owns it after that.
+  - name: VIBE_MODELING_ASSESSMENT_ENABLED
+    value: "true"
+  - name: VIBE_MODELING_ASSESS_READER_SP
+    value: "0f1e2d3c-4b5a-6978-8a9b-acbdcedfe0f1"
+  # Seed of Settings -> Agent -> "Annotate jobs with run tags" (on by default).
+  # Rewritten by install/render_app_yaml.py; install.sh --no-run-tags renders
+  # "false". It fills the setting when the app creates its settings row, and
+  # once more on the first upgrade to 0.9.0 or later (migration v_0_9_0_2);
+  # Settings own the value after that.
+  - name: VIBE_MODELING_RUN_TAGS_DEFAULT
+    value: "false"

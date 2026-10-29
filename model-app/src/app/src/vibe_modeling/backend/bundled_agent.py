@@ -23,12 +23,21 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class BundledAgent:
-    """A vendored agent notebook and its manifest metadata."""
+    """A vendored agent notebook and its manifest metadata.
+
+    ``pinned_tag`` is the agent release (``__RELEASE_VERSION__``, e.g.
+    ``v0.8.0``) and ``agent_version`` the agent-logic marker
+    (``__AGENT_VERSION__``, e.g. ``5.3.3``), both read from ``VERSIONS.json``
+    (``pinned_tag`` and ``pinned_agent_version``). The manifest is the one
+    source of the bundled marker; a contract test ties it to
+    ``core._defaults.SUPPORTED_AGENT_MARKER``.
+    """
 
     file_path: Path
     file_name: str
     pinned_tag: str
     supported_tags: list[str]
+    agent_version: str
 
 
 def _candidate_roots() -> list[Path]:
@@ -52,6 +61,14 @@ def _candidate_roots() -> list[Path]:
     return roots
 
 
+def vendored_agent_file(name: str) -> Optional[Path]:
+    """A file shipped next to the vendored notebook, or None if absent."""
+    for root in _candidate_roots():
+        if (root / name).is_file():
+            return root / name
+    return None
+
+
 def resolve_bundled_agent() -> Optional[BundledAgent]:
     """Locate the vendored notebook + manifest, or return None if absent."""
     for root in _candidate_roots():
@@ -65,9 +82,10 @@ def resolve_bundled_agent() -> Optional[BundledAgent]:
             continue
         pinned = str(data.get("pinned_tag", "")).strip()
         supported = [str(t) for t in data.get("supported_tags", []) if t]
+        marker = str(data.get("pinned_agent_version", "")).strip().lstrip("vV")
         if not pinned:
             continue
-        notebook = _find_notebook(root, pinned)
+        notebook = _find_notebook(root, pinned, str(data.get("notebook_file", "")).strip())
         if notebook is None:
             continue
         return BundledAgent(
@@ -75,13 +93,17 @@ def resolve_bundled_agent() -> Optional[BundledAgent]:
             file_name=notebook.name,
             pinned_tag=pinned,
             supported_tags=supported,
+            agent_version=marker,
         )
     return None
 
 
-def _find_notebook(root: Path, pinned_tag: str) -> Optional[Path]:
-    # Prefer the exact tagged filename; fall back to any v-prefixed notebook
-    # so a half-refreshed vendor dir still resolves.
+def _find_notebook(root: Path, pinned_tag: str, notebook_file: str = "") -> Optional[Path]:
+    # Prefer the manifest's file name, then the exact tagged filename; fall
+    # back to any v-prefixed notebook so a half-refreshed vendor dir still
+    # resolves.
+    if notebook_file and (root / notebook_file).is_file():
+        return root / notebook_file
     for ext in (".ipynb", ".py"):
         exact = root / f"vibe_modelling_agent_{pinned_tag}{ext}"
         if exact.is_file():

@@ -1,0 +1,207 @@
+{
+  "_source": "Jobs API get_run responses captured on 2026-10-24 for one app-launched New Base Model (agent 5.3.3): step 0 'new base model' (ECM v1) and step 1 'shrink ecm' (MVM v1) of business wt_p0_grain_coop in catalog business_3. Workspace host, workspace id and the app service principal id are replaced by placeholders; nothing else is changed.",
+  "runs": {
+    "new_base_model": {
+      "cleanup_duration": 0,
+      "creator_user_name": "<app-service-principal-id>",
+      "effective_performance_target": "PERFORMANCE_OPTIMIZED",
+      "end_time": 1792815410185,
+      "execution_duration": 1567000,
+      "job_id": 1023950100428137,
+      "job_run_id": 409596894605355,
+      "number_in_job": 409596894605355,
+      "original_attempt_run_id": 409596894605355,
+      "overriding_parameters": {
+        "notebook_params": {
+          "boolean_format": "Boolean (True/False)",
+          "business_description": "A regional grain cooperative that buys grain from member farmers, stores it in silos and sells it to millers.",
+          "business_domains": "",
+          "business_name": "wt_p0_grain_coop",
+          "catalog_prefix": "",
+          "catalog_suffix": "",
+          "cataloging_style": "One Catalog",
+          "classification_levels": "",
+          "context_file": "",
+          "data_model_scopes": "Expanded Coverage Model - ECM",
+          "date_format": "yyyy-MM-dd",
+          "deployment_catalog": "business_3",
+          "generate_samples": "0",
+          "history_tracking_columns": "No",
+          "housekeeping_columns": "No",
+          "industry_alignment": "Agriculture",
+          "model_version": "1",
+          "model_vibes": "Keep the model small: at most 4 domains and at most 30 products in total.",
+          "naming_convention": "snake_case",
+          "operation": "new base model",
+          "org_divisions": "Operations",
+          "primary_key_suffix": "_id",
+          "run_type": "Full Run",
+          "schema_prefix": "ecm_",
+          "schema_suffix": "",
+          "table_id_type": "BIGINT",
+          "tag_prefix": "dbx_",
+          "tag_suffix": "",
+          "timestamp_format": "yyyy-MM-dd HH:mm:ss",
+          "vibe_scope": "All Domains",
+          "vibe_session_id": "296524668168293394"
+        }
+      },
+      "run_duration": 1576140,
+      "run_id": 409596894605355,
+      "run_name": "dbx_vibe_modelling",
+      "run_page_url": "https://<workspace-host>/?o=<workspace-id>#job/1023950100428137/run/409596894605355",
+      "run_type": "JOB_RUN",
+      "setup_duration": 8000,
+      "start_time": 1792813834045,
+      "state": {
+        "life_cycle_state": "TERMINATED",
+        "result_state": "SUCCESS",
+        "state_message": "",
+        "user_cancelled_or_timedout": false
+      },
+      "status": {
+        "state": "TERMINATED",
+        "termination_details": {
+          "code": "SUCCESS",
+          "message": "",
+          "type": "SUCCESS"
+        }
+      },
+      "tasks": [
+        {
+          "attempt_number": 0,
+          "cleanup_duration": 0,
+          "effective_performance_target": "PERFORMANCE_OPTIMIZED",
+          "end_time": 1792815409745,
+          "execution_duration": 1567000,
+          "notebook_task": {
+            "notebook_path": "/Users/<app-service-principal-id>/vibe-modelling-agent/vibe_modelling_agent_v5.3.3.ipynb",
+            "source": "WORKSPACE"
+          },
+          "run_id": 859749179025499,
+          "run_if": "ALL_SUCCESS",
+          "run_page_url": "https://<workspace-host>/?o=<workspace-id>#job/1023950100428137/run/859749179025499",
+          "setup_duration": 8000,
+          "start_time": 1792813834076,
+          "state": {
+            "life_cycle_state": "TERMINATED",
+            "result_state": "SUCCESS",
+            "state_message": "",
+            "user_cancelled_or_timedout": false
+          },
+          "status": {
+            "state": "TERMINATED",
+            "termination_details": {
+              "code": "SUCCESS",
+              "message": "",
+              "type": "SUCCESS"
+            }
+          },
+          "task_key": "run_agent"
+        }
+      ],
+      "trigger": "ONE_TIME"
+    },
+    "shrink_ecm": {
+      "cleanup_duration": 0,
+      "creator_user_name": "<app-service-principal-id>",
+      "effective_performance_target": "PERFORMANCE_OPTIMIZED",
+      "end_time": 1792816194452,
+      "execution_duration": 746000,
+      "job_id": 1023950100428137,
+      "job_run_id": 688767201167426,
+      "number_in_job": 688767201167426,
+      "original_attempt_run_id": 688767201167426,
+      "overriding_parameters": {
+        "notebook_params": {
+          "boolean_format": "Boolean (True/False)",
+          "business_description": "A regional grain cooperative that buys grain from member farmers, stores it in silos and sells it to millers.",
+          "business_domains": "",
+          "business_name": "wt_p0_grain_coop",
+          "catalog_prefix": "",
+          "catalog_suffix": "",
+          "cataloging_style": "One Catalog",
+          "classification_levels": "",
+          "context_file": "",
+          "data_model_scopes": "Minimum Viable Model - MVM",
+          "date_format": "yyyy-MM-dd",
+          "deployment_catalog": "business_3",
+          "generate_samples": "0",
+          "history_tracking_columns": "No",
+          "housekeeping_columns": "No",
+          "industry_alignment": "Agriculture",
+          "model_version": "1",
+          "model_vibes": "",
+          "naming_convention": "snake_case",
+          "operation": "shrink ecm",
+          "org_divisions": "Operations",
+          "primary_key_suffix": "_id",
+          "run_type": "Full Run",
+          "schema_prefix": "mvm_",
+          "schema_suffix": "",
+          "table_id_type": "BIGINT",
+          "tag_prefix": "dbx_",
+          "tag_suffix": "",
+          "timestamp_format": "yyyy-MM-dd HH:mm:ss",
+          "vibe_scope": "All Domains",
+          "vibe_session_id": "9040572270276850933"
+        }
+      },
+      "run_duration": 754320,
+      "run_id": 688767201167426,
+      "run_name": "dbx_vibe_modelling",
+      "run_page_url": "https://<workspace-host>/?o=<workspace-id>#job/1023950100428137/run/688767201167426",
+      "run_type": "JOB_RUN",
+      "setup_duration": 7000,
+      "start_time": 1792815440132,
+      "state": {
+        "life_cycle_state": "TERMINATED",
+        "result_state": "SUCCESS",
+        "state_message": "",
+        "user_cancelled_or_timedout": false
+      },
+      "status": {
+        "state": "TERMINATED",
+        "termination_details": {
+          "code": "SUCCESS",
+          "message": "",
+          "type": "SUCCESS"
+        }
+      },
+      "tasks": [
+        {
+          "attempt_number": 0,
+          "cleanup_duration": 0,
+          "effective_performance_target": "PERFORMANCE_OPTIMIZED",
+          "end_time": 1792816193991,
+          "execution_duration": 746000,
+          "notebook_task": {
+            "notebook_path": "/Users/<app-service-principal-id>/vibe-modelling-agent/vibe_modelling_agent_v5.3.3.ipynb",
+            "source": "WORKSPACE"
+          },
+          "run_id": 742219133377347,
+          "run_if": "ALL_SUCCESS",
+          "run_page_url": "https://<workspace-host>/?o=<workspace-id>#job/1023950100428137/run/742219133377347",
+          "setup_duration": 7000,
+          "start_time": 1792815440164,
+          "state": {
+            "life_cycle_state": "TERMINATED",
+            "result_state": "SUCCESS",
+            "state_message": "",
+            "user_cancelled_or_timedout": false
+          },
+          "status": {
+            "state": "TERMINATED",
+            "termination_details": {
+              "code": "SUCCESS",
+              "message": "",
+              "type": "SUCCESS"
+            }
+          },
+          "task_key": "run_agent"
+        }
+      ],
+      "trigger": "ONE_TIME"
+    }
+  }
+}

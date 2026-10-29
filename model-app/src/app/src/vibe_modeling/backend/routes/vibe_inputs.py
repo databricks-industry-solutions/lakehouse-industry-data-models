@@ -9,6 +9,11 @@ states + progress) lives in ``explorer.py``.
 
 Identity is sourced from ``Dependencies.Headers``; every query is scoped by the
 URL ``business_id`` (no per-row ACL - single-tenant-per-workspace).
+
+Every route declares its role: ``Dependencies.ModelerDeclared`` on writes,
+``Dependencies.ViewerDeclared`` on reads (including the read-only compile
+preview). They do not refuse anyone until
+``core/_roles.VIBE_INPUT_ROLE_GUARDS_ENFORCED`` is True.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ from .._relink import (
 from ..core import Dependencies
 from ..core._vibe_input_create import create_vibe_input_with_anchor
 from ..core._identity import actor_label
+from ..core.anchor_resolve import fk_link_edge_ids
 from ..explorer import product_fqn
 from ..db_models import (
     Attribute,
@@ -88,6 +94,7 @@ def _input_to_out(vi: VibeInput, anchor: VibeInputAnchorOut | None = None) -> Vi
         priority=VibeInputPriority(vi.priority),
         confidence_score=vi.confidence_score,
         consumed=vi.consumed,
+        consumed_by_run_id=vi.consumed_by_run_id,
         selected_for_run=vi.selected_for_run,
         status=VibeInputStatus(vi.status),
         deprecated_by=vi.deprecated_by,
@@ -97,10 +104,13 @@ def _input_to_out(vi: VibeInput, anchor: VibeInputAnchorOut | None = None) -> Vi
     )
 
 
-def _anchor_out(link: VibeInputContextLink, anchor) -> VibeInputAnchorOut:
+def _anchor_out(
+    link: VibeInputContextLink, anchor, fk_edge_ids: dict[str, str],
+) -> VibeInputAnchorOut:
     """Adapt a _compile._Anchor (names + section_path) plus the link's element
     ids into the wire projection. Names come from the resolver (single source
-    of truth); ids are read off the link."""
+    of truth); ids are read off the link; ``fk_edge_ids`` comes from
+    ``anchor_resolve.fk_link_edge_ids``."""
     if anchor.kind == "model_wide":
         return VibeInputAnchorOut(level="model_wide", path=[])
     return VibeInputAnchorOut(
@@ -115,6 +125,7 @@ def _anchor_out(link: VibeInputContextLink, anchor) -> VibeInputAnchorOut:
         attribute_name=anchor.names.get("attribute"),
         fk_link_id=link.fk_link_id,
         fk_label=anchor.names.get("fk"),
+        fk_edge_id=fk_edge_ids.get(link.fk_link_id) if link.fk_link_id else None,
         path=list(anchor.section_path),
     )
 
@@ -176,6 +187,7 @@ def create_vibe_input(
     business_id: str,
     data: VibeInputIn,
     session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
     headers: Dependencies.Headers,
 ):
     """Create a vibe input + materialize its origin context link."""
@@ -220,6 +232,7 @@ def create_vibe_input(
 def list_vibe_inputs(
     business_id: str,
     session: Dependencies.Session,
+    _role: Dependencies.ViewerDeclared,
     origin: VibeInputOrigin | None = None,
     status: VibeInputStatus | None = None,
     consumed: bool | None = None,
@@ -316,11 +329,15 @@ def list_vibe_inputs(
     # the union of ids across all links) instead of a per-link ``session.get``
     # fan-out. ``build_anchor`` then assembles each anchor from these maps.
     elements = _prefetch_anchor_elements(session, links)
+    edge_ids = fk_link_edge_ids(session, list(elements["fk"].values()))
 
     out: list[VibeInputOut] = []
     for vi in rows:
         link = link_by_input.get(vi.id)
-        anchor = _anchor_out(link, _build_anchor_from_maps(link, elements)) if link else None
+        anchor = (
+            _anchor_out(link, _build_anchor_from_maps(link, elements), edge_ids)
+            if link else None
+        )
         out.append(_input_to_out(vi, anchor))
     return out
 
@@ -414,7 +431,8 @@ def _hydrate_single_anchor(session, vi: VibeInput) -> VibeInputAnchorOut | None:
         links[0],
     )
     elements = _prefetch_anchor_elements(session, [link])
-    return _anchor_out(link, _build_anchor_from_maps(link, elements))
+    edge_ids = fk_link_edge_ids(session, list(elements["fk"].values()))
+    return _anchor_out(link, _build_anchor_from_maps(link, elements), edge_ids)
 
 
 @router.get(
@@ -422,7 +440,12 @@ def _hydrate_single_anchor(session, vi: VibeInput) -> VibeInputAnchorOut | None:
     response_model=VibeInputOut,
     operation_id="getVibeInput",
 )
-def get_vibe_input(business_id: str, input_id: str, session: Dependencies.Session):
+def get_vibe_input(
+    business_id: str,
+    input_id: str,
+    session: Dependencies.Session,
+    _role: Dependencies.ViewerDeclared,
+):
     """Single input by id, scoped to the business (anchor hydrated)."""
     vi = _get_input(session, business_id, input_id)
     return _input_to_out(vi, _hydrate_single_anchor(session, vi))
@@ -438,6 +461,7 @@ def update_vibe_input(
     input_id: str,
     data: VibeInputPatchIn,
     session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
 ):
     """Edit text/priority. Status + consumed are driven by dedicated endpoints."""
     vi = _get_input(session, business_id, input_id)
@@ -465,6 +489,7 @@ def delete_vibe_input(
     business_id: str,
     input_id: str,
     session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
     headers: Dependencies.Headers,
 ):
     """Soft-delete: status=deprecated, deprecated_by=<user> (manual)."""
@@ -482,13 +507,22 @@ def delete_vibe_input(
     response_model=VibeInputOut,
     operation_id="restoreVibeInput",
 )
-def restore_vibe_input(business_id: str, input_id: str, session: Dependencies.Session):
-    """Undo a manual soft-delete. 409 if system-deprecated (deprecated_by None)."""
+def restore_vibe_input(
+    business_id: str,
+    input_id: str,
+    session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
+):
+    """Undo a manual soft-delete. 409 if the app deprecated it (deprecated_by None)."""
     vi = _get_input(session, business_id, input_id)
     if vi.status == VibeInputStatus.DEPRECATED.value and vi.deprecated_by is None:
         raise HTTPException(
             status_code=409,
-            detail="System-deprecated input — use the review queue to re-anchor",
+            detail=(
+                "Deprecated by the app: its model element was removed, or its link was "
+                "dismissed in the review queue. It can't be restored; add it again as "
+                "new feedback if you still need it."
+            ),
         )
     vi.status = VibeInputStatus.ACTIVE.value
     vi.deprecated_by = None
@@ -504,7 +538,12 @@ def restore_vibe_input(business_id: str, input_id: str, session: Dependencies.Se
     response_model=VibeInputOut,
     operation_id="consumeVibeInput",
 )
-def consume_vibe_input(business_id: str, input_id: str, session: Dependencies.Session):
+def consume_vibe_input(
+    business_id: str,
+    input_id: str,
+    session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
+):
     """Manually mark consumed (normally set by run completion)."""
     vi = _get_input(session, business_id, input_id)
     vi.consumed = True
@@ -520,7 +559,12 @@ def consume_vibe_input(business_id: str, input_id: str, session: Dependencies.Se
     response_model=VibeInputOut,
     operation_id="unconsumeVibeInput",
 )
-def unconsume_vibe_input(business_id: str, input_id: str, session: Dependencies.Session):
+def unconsume_vibe_input(
+    business_id: str,
+    input_id: str,
+    session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
+):
     """Reset consumed=false + create ONE link to the current head version via
     the re-link tiers. 409 if no head version, or if head context is gone."""
     vi = _get_input(session, business_id, input_id)
@@ -529,6 +573,7 @@ def unconsume_vibe_input(business_id: str, input_id: str, session: Dependencies.
         raise HTTPException(status_code=409, detail="No head version to re-link to")
 
     vi.consumed = False
+    vi.consumed_by_run_id = None
     vi.updated_at = _now()
     session.add(vi)
 
@@ -558,7 +603,10 @@ def unconsume_vibe_input(business_id: str, input_id: str, session: Dependencies.
     operation_id="setVibeInputSelection",
 )
 def set_vibe_input_selection(
-    business_id: str, data: VibeInputSelectionIn, session: Dependencies.Session
+    business_id: str,
+    data: VibeInputSelectionIn,
+    session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
 ):
     """Bulk set ``selected_for_run`` for a set of inputs (single-card toggle or
     select-all-under-a-branch). Business-scoped: ids not on this business are
@@ -612,7 +660,10 @@ def _resolve_head_version(session, business_id: str) -> ModelVersion | None:
     operation_id="listVibeInputLinks",
 )
 def list_vibe_input_links(
-    business_id: str, input_id: str, session: Dependencies.Session
+    business_id: str,
+    input_id: str,
+    session: Dependencies.Session,
+    _role: Dependencies.ViewerDeclared,
 ):
     """All accumulated links for an input (origin first, then by created_at)."""
     _get_input(session, business_id, input_id)
@@ -637,6 +688,7 @@ def add_vibe_input_link(
     input_id: str,
     data: VibeInputContextLinkIn,
     session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
 ):
     """Explicit add/relink of a link for a version. Enforces UNIQUE(input,version);
     never sets is_origin (immutable)."""
@@ -684,7 +736,10 @@ def _get_link(session, business_id: str, link_id: str) -> VibeInputContextLink:
     operation_id="carryForwardInputs",
 )
 def carry_forward_inputs(
-    business_id: str, version_id: str, session: Dependencies.Session
+    business_id: str,
+    version_id: str,
+    session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
 ):
     """Run the re-link tiers for every active input lacking a link to
     ``version_id``. Idempotent."""
@@ -770,6 +825,7 @@ def _anchor_label(session, lk: VibeInputContextLink) -> tuple[str, str]:
 def get_review_queue(
     business_id: str,
     session: Dependencies.Session,
+    _role: Dependencies.ViewerDeclared,
     version_id: str | None = None,
 ):
     """Resumable queue of links needing review (oldest-first), hydrated."""
@@ -807,6 +863,7 @@ def accept_review_link(
     business_id: str,
     link_id: str,
     session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
     headers: Dependencies.Headers,
 ):
     """Confirm the auto-proposed anchor: clear needs_link_review, stamp reviewer."""
@@ -830,6 +887,7 @@ def reanchor_review_link(
     link_id: str,
     data: ReanchorIn,
     session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
     headers: Dependencies.Headers,
 ):
     """Move the link to a user-chosen element on the same version, clear review."""
@@ -879,7 +937,12 @@ def _validate_elements_on_version(session, version_id: str, data) -> None:
     response_model=VibeInputOut,
     operation_id="dismissReviewLink",
 )
-def dismiss_review_link(business_id: str, link_id: str, session: Dependencies.Session):
+def dismiss_review_link(
+    business_id: str,
+    link_id: str,
+    session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
+):
     """Reject the carry. For a user input this deletes the flagged non-origin
     carry link (never its origin); if no active non-origin head link remains
     the input is system-deprecated. For an agent next-vibe the review target
@@ -1079,6 +1142,7 @@ def mark_product_review(
     product_id: str,
     data: ReviewMarkIn,
     session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
     headers: Dependencies.Headers,
 ):
     """Set the review state of a single product (the entity/leaf grain).
@@ -1115,6 +1179,7 @@ def clear_product_review(
     scope: Annotated[str, PathParam(pattern="^(ecm|mvm)$")],
     product_id: str,
     session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
 ):
     """Clear an explicit mark, reverting the product to its computed default.
     The version is addressed by its natural ``(business, version_int, scope)``
@@ -1183,6 +1248,7 @@ def mark_domain_review(
     domain_id: str,
     data: ReviewMarkIn,
     session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
     headers: Dependencies.Headers,
 ):
     """Cascade a review state onto every product in a domain.
@@ -1218,6 +1284,7 @@ def mark_subdomain_review(
     subdomain_id: str,
     data: ReviewMarkIn,
     session: Dependencies.Session,
+    _role: Dependencies.ModelerDeclared,
     headers: Dependencies.Headers,
 ):
     """Cascade a review state onto every product in a subdomain.
@@ -1254,6 +1321,7 @@ def compile_vibe_inputs(
     version_id: str,
     data: CompileIn,
     session: Dependencies.Session,
+    _role: Dependencies.ViewerDeclared,
 ):
     """Serialize the selected inputs anchored to ``version_id`` into one
     markdown doc + provenance blocks. Read-only."""
@@ -1271,4 +1339,6 @@ def compile_vibe_inputs(
     # Preserve the caller's order among the in-business ids.
     in_biz = set(ids)
     ordered = [i for i in data.input_ids if i in in_biz]
-    return compile_inputs(session, version_id, ordered)
+    return compile_inputs(
+        session, version_id, ordered, scope_domains=data.vibe_scope_domains
+    )

@@ -9,6 +9,7 @@ import {
   getArtifactContentByVersion,
   type RunArtifactOut,
 } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-error";
 import { selector } from "@/lib/selector";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -41,7 +42,7 @@ export function ArtifactsTab(props: ArtifactsTabProps) {
             <Card className="border-destructive/40 bg-destructive/5">
               <CardContent className="py-4 space-y-2">
                 <p className="text-sm text-destructive">
-                  Failed to load artifacts: {error instanceof Error ? error.message : String(error)}
+                  Failed to load artifacts: {apiErrorMessage(error, String(error))}
                 </p>
                 <Button size="sm" variant="outline" onClick={resetErrorBoundary}>
                   Try again

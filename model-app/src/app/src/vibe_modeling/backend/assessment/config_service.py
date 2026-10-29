@@ -6,11 +6,11 @@ from datetime import datetime, timezone
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors.base import DatabricksError
-from sqlalchemy import update
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, select
 
 from ... import __version__ as APP_VERSION
+from ..core._settings_seed import get_or_create_settings_row, seed_blank
 from ..db_models import AssessConfig
 from ..error_sanitization import sanitize_error_message
 from .job_sync import SyncResult, sync_assessment_job
@@ -48,25 +48,30 @@ def assess_ready(cfg: AssessConfig, installed: bool) -> tuple[bool, list[str]]:
 
 def get_or_create_assess_config(session: Session, config=None) -> AssessConfig:
     """The singleton row; a new row's reader is seeded from ``AppConfig.assess_reader_sp`` when given."""
-    cfg = session.exec(select(AssessConfig)).first()
-    if cfg is None:
-        cfg = AssessConfig(reader_application_id=getattr(config, "assess_reader_sp", "") or "")
-        session.add(cfg)
-        session.commit()
-        session.refresh(cfg)
-    return cfg
+    reader = (getattr(config, "assess_reader_sp", "") or "").strip()
+    return get_or_create_settings_row(session, AssessConfig, {"reader_application_id": reader})
 
 
-def seed_reader_from_install(session: Session, config) -> None:
-    """Boot: fill an existing row's empty reader from the install default. A Settings value is kept."""
-    reader = getattr(config, "assess_reader_sp", "") or ""
-    if reader:
-        session.exec(update(AssessConfig).where(AssessConfig.reader_application_id == "")
-                     .values(reader_application_id=reader))
+def seed_reader_from_install(session: Session, config) -> int:
+    """Boot: fill an existing row's blank reader from the install default. A Settings value is kept.
+    The caller commits."""
+    return seed_blank(session, AssessConfig.reader_application_id, getattr(config, "assess_reader_sp", ""))
 
 
 class AssessConfigRejected(ValueError):
-    """A read-only Save check failed; nothing was written."""
+    """A read-only Save check refused the value of the ``AssessConfigIn`` field ``key``; nothing was written."""
+
+    def __init__(self, key: str, message: str):
+        super().__init__(message)
+        self.key = key
+
+
+class AssessConfigMissing(Exception):
+    """A setting the Save needs is unset (``key`` is its ``require_config`` key); nothing was written."""
+
+    def __init__(self, key: str):
+        super().__init__(key)
+        self.key = key
 
 
 class AssessReaderLookupFailed(Exception):
@@ -88,27 +93,30 @@ class AssessSyncFailed(Exception):
 
 
 def check_assess_config(ws: WorkspaceClient, body: AssessConfigIn, *, deployment_catalog: str):
-    """Save's read-only checks: the reader and warehouse exist, the deployment catalog is set.
+    """Save's read-only checks: the deployment catalog is set, the reader and warehouse exist.
 
     Returns the resolved reader service principal, which Save hands to the sync so the reader is
-    looked up once. Raises ``AssessConfigRejected`` on a refusal, ``AssessReaderLookupFailed``
-    when the reader lookup itself fails.
+    looked up once. Raises ``AssessConfigMissing`` when the deployment catalog is unset (checked
+    first, before any workspace call), ``AssessConfigRejected`` on a refused value,
+    ``AssessReaderLookupFailed`` when the reader lookup itself fails.
     """
+    # The same predicate as routes/_helpers.require_config's ``metamodel_catalog`` requirement.
+    if not deployment_catalog:
+        raise AssessConfigMissing("metamodel_catalog")
     try:
         sp = find_reader_sp(ws, body.reader_application_id)
     except DatabricksError as e:
         raise AssessReaderLookupFailed(sanitize_error_message(str(e))) from e
     if sp is None:
-        raise AssessConfigRejected(reader_not_found_message(body.reader_application_id))
+        raise AssessConfigRejected("reader_application_id", reader_not_found_message(body.reader_application_id))
     if body.warehouse_id:
         try:
             ws.warehouses.get(body.warehouse_id)
         except DatabricksError as e:
             raise AssessConfigRejected(
+                "warehouse_id",
                 f"SQL warehouse {body.warehouse_id!r} not found or not visible to the app: "
                 f"{sanitize_error_message(str(e))}") from e
-    if not deployment_catalog:
-        raise AssessConfigRejected("Deployment catalog is not configured (Settings → Platform).")
     return sp
 
 

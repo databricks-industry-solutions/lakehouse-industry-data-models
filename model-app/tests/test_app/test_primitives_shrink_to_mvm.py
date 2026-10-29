@@ -8,9 +8,11 @@ for the failure-mode table.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -26,7 +28,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from vibe_modeling.backend.db_models import (
     Domain,
     ModelVersion,
+    Run,
     RunOperation,
+    RunProgressEvent,
 )
 from vibe_modeling.backend.services.operations import (
     OperationDispatchHandle,
@@ -584,3 +588,124 @@ def test_class_attributes_match_contract(primitive):
     op, _ = primitive
     assert op.name == "shrink_to_mvm"
     assert op.produces_version is True
+
+
+# --------------------------------------------------------------------------
+# dispatch: the parent ECM's conventions (agent 5.3.3 shapes, T2 J7 A2)
+# --------------------------------------------------------------------------
+
+_A2 = json.loads(
+    (Path(__file__).resolve().parents[1] / "fixtures" / "vibe_conventions_a2.json").read_text()
+)
+_PARENT_ECM_PATH = "/Volumes/deploy_cat/_metamodel/vol_root/business/test_corp/v1/ecm/model.json"
+
+
+def _ws_serving(path: str, root: dict):
+    ws = make_ws()
+
+    def _download(p):
+        if p != path:
+            raise FileNotFoundError(p)
+        resp = MagicMock()
+        resp.contents.read.return_value = json.dumps(root).encode()
+        return resp
+
+    ws.files.download.side_effect = _download
+    return ws
+
+
+def _dispatch_shrink(engine, op, ws, params=None):
+    session = Session(engine)
+    biz_id, _ = seed_business_and_agent(session)
+    parent_id = parent_version(session, biz_id, scope="ecm", version=1)
+    run_id, op_id = seed_run_with_op(
+        session, business_id=biz_id, operation_name="shrink_to_mvm",
+        parent_version_id=parent_id,
+    )
+    ctx = make_ctx(
+        run_id=run_id, operation_id=op_id, business_id=biz_id,
+        parent_version_id=parent_id,
+        params=params or SHRINK_TO_MVM_VALID_PARAMS,
+    )
+    handle = op.dispatch(ctx, ws, session)
+    return session, ctx, handle
+
+
+def test_dispatch_takes_the_parent_ecm_file_conventions(engine, primitive):
+    """A2: the vibed ECM kept SCREAMING_CASE, Int (0/1), dd/MM/yyyy and the
+    tag suffix _wt; the run asked for the defaults. The MVM follows the ECM;
+    its schema prefix stays mvm_."""
+    op, params_model = primitive
+    ws = _ws_serving(_PARENT_ECM_PATH, _A2["ecm"])
+    params = params_model(**SHRINK_TO_MVM_VALID_PARAMS, housekeeping_columns="Yes").model_dump()
+    session, _, handle = _dispatch_shrink(engine, op, ws, params)
+    session.close()
+
+    widgets = ws.jobs.run_now.call_args.kwargs["notebook_params"]
+    assert widgets["naming_convention"] == "SCREAMING_CASE"
+    assert widgets["boolean_format"] == "Int (0/1)"
+    assert widgets["date_format"] == "dd/MM/yyyy"
+    assert widgets["tag_suffix"] == "_wt"
+    assert widgets["schema_prefix"] == "mvm_"
+    assert widgets["housekeeping_columns"] == "Yes"
+    assert handle.dispatched_widgets["naming_convention"] == "SCREAMING_CASE"
+    assert handle.extra == {}
+
+
+def test_dispatch_keeps_params_and_warns_when_the_parent_file_is_unreadable(engine, primitive):
+    op, params_model = primitive
+    ws = make_ws(download_raises=PermissionError("denied"))
+    params = params_model(**SHRINK_TO_MVM_VALID_PARAMS, naming_convention="camelCase").model_dump()
+    session, ctx, handle = _dispatch_shrink(engine, op, ws, params)
+
+    widgets = ws.jobs.run_now.call_args.kwargs["notebook_params"]
+    assert widgets["naming_convention"] == "camelCase"
+    assert handle.extra["parent_conventions_warning"]
+
+    # Not a progress event: the warning rides the step's rollback state to
+    # the run page's warnings card, once the shrink succeeds.
+    op.observe(handle, ctx, ws, session)
+    session.commit()
+    assert session.exec(select(RunProgressEvent).where(RunProgressEvent.run_id == ctx.run_id)).all() == []
+    session.close()
+
+
+def test_the_conventions_warning_reaches_run_out_warnings_on_success(engine, primitive):
+    from vibe_modeling.backend.routes._helpers import _build_run_out
+    from vibe_modeling.backend.services.operations._protocol import (
+        RUN_WARNINGS_KEY,
+        OperationObservation,
+        OperationResult,
+    )
+    from vibe_modeling.backend.services.operations.shrink_to_mvm import PARENT_CONVENTIONS_UNREAD
+
+    op, params_model = primitive
+    ws = make_ws(download_raises=PermissionError("denied"))
+    params = params_model(**SHRINK_TO_MVM_VALID_PARAMS).model_dump()
+    session, ctx, handle = _dispatch_shrink(engine, op, ws, params)
+
+    done = OperationObservation(
+        progress_percent=100, progress_message="completed", is_terminal=True,
+        terminal_result=OperationResult(True, None, [], {"databricks_run_id": 1}, None),
+    )
+    failed = OperationObservation(
+        progress_percent=100, progress_message="failed", is_terminal=True,
+        terminal_result=OperationResult(False, None, [], {}, "boom"),
+    )
+    with patch("vibe_modeling.backend.services.operations.shrink_to_mvm.observe_generation_op", return_value=done):
+        obs = op.observe(handle, ctx, ws, session)
+    assert obs.terminal_result.rollback_state == {"databricks_run_id": 1, RUN_WARNINGS_KEY: [PARENT_CONVENTIONS_UNREAD]}
+    with patch("vibe_modeling.backend.services.operations.shrink_to_mvm.observe_generation_op", return_value=failed):
+        assert RUN_WARNINGS_KEY not in op.observe(handle, ctx, ws, session).terminal_result.rollback_state
+
+    run = session.get(Run, ctx.run_id)
+    row = session.get(RunOperation, ctx.operation_id)
+    row.status = "succeeded"
+    row.rollback_state_json = json.dumps(obs.terminal_result.rollback_state)
+    session.add(row)
+    session.commit()
+    out = _build_run_out(run, None, session)
+    session.close()
+    assert [(w["message"], w["severity"], w["field_path"]) for w in out.warnings] == [
+        (PARENT_CONVENTIONS_UNREAD, "warning", "(shrink_to_mvm)")
+    ]

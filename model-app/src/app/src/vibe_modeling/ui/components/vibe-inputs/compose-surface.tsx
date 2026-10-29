@@ -1,4 +1,4 @@
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient, QueryErrorResetBoundary } from "@tanstack/react-query";
 import { ErrorBoundary } from "react-error-boundary";
@@ -11,15 +11,20 @@ import {
   useGetModelSummarySuspense,
   useGetReviewQueueSuspense,
   useCreateVibeInput,
+  useRestoreVibeInput,
   useUpdateVibeInput,
-  useSetVibeInputSelection,
+  compileVibeInputs,
   deleteVibeInput,
-  listVibeInputsKey,
   VibeInputPriority,
   type VibeInputOut,
 } from "@/lib/api";
 import { selector } from "@/lib/selector";
+import { liveDomainOptions } from "@/lib/domain-options";
 import { useDebouncedValue } from "@/lib/hooks";
+import { useRunChangeReviewEnabled } from "@/lib/features";
+import { joinCommaList } from "@/lib/comma-list";
+import { RequestTimeoutError, withRequestTimeout } from "@/lib/request-timeout";
+import { feedbackScopeDomains, feedbackScopePrefill } from "@/lib/vibe-scope";
 import {
   FiltersBar,
   DEFAULT_FILTERS,
@@ -33,8 +38,12 @@ import { FollowingPane } from "./following-pane";
 import { InputMarkdownEditorDialog } from "./input-markdown-editor-dialog";
 import { ReviewQueueDialog } from "./review-queue-dialog";
 import { invalidateVibeInputQueries } from "./query-keys";
+import { SELECTION_SAVING_MESSAGE, useIsSelectionSaving, useVibeInputSelection } from "./use-vibe-input-selection";
 import { invalidateEntityLists } from "@/lib/delete-invalidation";
 import type { SectionAnchorIds } from "./section-tree-model";
+
+/** Bound on the Start run compile (a database read on a healthy server). */
+const PREFILL_TIMEOUT_MS = 10_000;
 
 export interface ComposeSurfaceProps {
   businessId: string;
@@ -71,6 +80,7 @@ export function ComposeSurface(props: ComposeSurfaceProps) {
 function ComposeSurfaceContent({ businessId, version, scope, versionId }: ComposeSurfaceProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const reviewEnabled = useRunChangeReviewEnabled();
 
   const [filters, setFilters] = useState<InputFilters>(DEFAULT_FILTERS);
   const debouncedQ = useDebouncedValue(filters.q, 250);
@@ -91,47 +101,17 @@ function ComposeSurfaceContent({ businessId, version, scope, versionId }: Compos
     params: { business_id: businessId, version_int: Number(version), scope },
     ...selector(),
   });
-  const domains = useMemo(
-    () =>
-      (model.domains ?? [])
-        .filter((d: any) => d.change_status !== "deleted")
-        .map((d: any) => ({ name: d.name, division: d.division ?? "" })),
-    [model],
-  );
+  const domains = useMemo(() => liveDomainOptions(model.domains), [model]);
 
   const create = useCreateVibeInput();
   const update = useUpdateVibeInput();
 
-  // Selection lives on the server (`selected_for_run`). The single-card toggle
-  // and the select-all-under-branch action share one mutation key and reconcile
-  // via a whole-list invalidate on settle, so a bulk call never clobbers an
-  // in-flight single toggle.
-  const inputsKey = listVibeInputsKey({ business_id: businessId, version_id: versionId });
-  const selection = useSetVibeInputSelection({
-    mutation: {
-      mutationKey: ["set-vibe-input-selection", businessId, versionId],
-      onMutate: async ({ data }) => {
-        await queryClient.cancelQueries({ queryKey: inputsKey });
-        const previous = queryClient.getQueryData<{ data: VibeInputOut[] }>(inputsKey);
-        const ids = new Set(data.input_ids);
-        queryClient.setQueryData<{ data: VibeInputOut[] }>(inputsKey, (curr) =>
-          curr
-            ? {
-                data: curr.data.map((i) =>
-                  ids.has(i.id) ? { ...i, selected_for_run: data.selected } : i,
-                ),
-              }
-            : curr,
-        );
-        return { previous };
-      },
-      onError: (_err, _vars, context) => {
-        const prev = (context as { previous?: { data: VibeInputOut[] } } | undefined)?.previous;
-        if (prev) queryClient.setQueryData(inputsKey, prev);
-      },
-      onSettled: () => invalidateVibeInputQueries(queryClient, businessId),
-    },
-  });
+  // Selection lives on the server (`selected_for_run`). Every selection write
+  // (single toggle, select-all under a branch, the run report's "Select
+  // these") goes through one hook whose mutations are serialized per business,
+  // so the server ends in the state the clicks produced.
+  const selection = useVibeInputSelection(businessId);
+  const selectionSaving = useIsSelectionSaving(businessId);
 
   // The selected set is the single source of truth for the count, the compiled
   // preview, the branch select-all state, and the Start-run CTA.
@@ -177,7 +157,44 @@ function ComposeSurfaceContent({ businessId, version, scope, versionId }: Compos
   const toggleInclude = (input: VibeInputOut, included: boolean) =>
     setSelection([input.id], included);
 
-  const startRun = () => {
+  // The run opens scoped to the domains of the selected feedback. The backend
+  // compile maps each item to its scope domain with the rule the scoped
+  // compile filters by, so the pre-fill and the filter cannot disagree. If the
+  // compile fails or takes longer than PREFILL_TIMEOUT_MS, the run form opens
+  // on All domains and says so. The ref closes the double-click gap that
+  // state alone leaves (two clicks in one task see the same render).
+  const [starting, setStarting] = useState(false);
+  const startingRef = useRef(false);
+  const startRun = async () => {
+    if (startingRef.current || selectionSaving) return;
+    startingRef.current = true;
+    setStarting(true);
+    let prefill: string[] = [];
+    try {
+      const ids = [...selectedIds];
+      const { data } = await withRequestTimeout(PREFILL_TIMEOUT_MS, (signal) =>
+        compileVibeInputs(
+          { business_id: businessId, version_id: versionId },
+          { input_ids: ids },
+          { signal },
+        ),
+      );
+      prefill = feedbackScopePrefill(
+        feedbackScopeDomains(data.input_scope_domains, ids),
+        domains.map((d) => d.name),
+      );
+    } catch (err) {
+      notifyError(
+        err instanceof RequestTimeoutError
+          ? new Error("Pre-filling the run's scope took too long. Choose the scope on the run form.")
+          : err,
+        {
+          fallback: "Couldn't pre-fill the run's scope from your feedback. Choose the scope on the run form.",
+        },
+      );
+    }
+    startingRef.current = false;
+    setStarting(false);
     navigate({
       to: "/businesses/$businessId/runs/new",
       params: { businessId },
@@ -185,6 +202,9 @@ function ComposeSurfaceContent({ businessId, version, scope, versionId }: Compos
         operationType: "vibe modeling of version",
         sourceVersion: Number(version),
         sourceScope: scope,
+        ...(prefill.length > 0
+          ? { scopeDomains: joinCommaList(prefill), scopeFrom: "feedback" as const }
+          : {}),
       },
     });
   };
@@ -234,7 +254,8 @@ function ComposeSurfaceContent({ businessId, version, scope, versionId }: Compos
         <span className="text-sm font-semibold tracking-tight">Compose inputs</span>
         <Button
           size="sm"
-          disabled={selectedCount === 0}
+          disabled={selectedCount === 0 || starting || selectionSaving}
+          title={selectionSaving ? SELECTION_SAVING_MESSAGE : undefined}
           onClick={startRun}
           data-testid="start-run-cta"
         >
@@ -249,6 +270,7 @@ function ComposeSurfaceContent({ businessId, version, scope, versionId }: Compos
             filters={filters}
             onChange={setFilters}
             domains={domainOptions}
+            offerRejectedOrigin={reviewEnabled}
             shown={filtered.length}
             total={
               filters.state === "deprecated"
@@ -257,26 +279,30 @@ function ComposeSurfaceContent({ businessId, version, scope, versionId }: Compos
             }
           />
           <div className="min-h-0 flex-1 overflow-auto p-2">
-            <SectionTree
-              inputs={filtered}
-              includedIds={selectedIds}
-              filterActive={filterActive}
-              onToggleInclude={toggleInclude}
-              onCommitText={commitText}
-              onOpenInModel={openInModel}
-              onExpand={setEditorInput}
-              onResolveReview={() => setReviewOpen(true)}
-              onFocus={(i) => setFocusedId(i.id)}
-              onAddInput={addInput}
-              onSelectSubtree={setSelection}
-              onDelete={removeInput}
-            />
-            {/* The Deprecated filter routes deprecated inputs into the tree
-                above, so the standalone group would duplicate them — only
-                show it when the filter is NOT scoped to deprecated. */}
+            {/* Deprecated is an exclusive facet: the section tree never holds
+                deprecated inputs, so under the facet the list below is the
+                whole view and the count in the filter bar matches it. */}
             {filters.state !== "deprecated" && (
-              <DeprecatedSection inputs={allInputs} />
+              <SectionTree
+                inputs={filtered}
+                includedIds={selectedIds}
+                filterActive={filterActive}
+                onToggleInclude={toggleInclude}
+                onCommitText={commitText}
+                onOpenInModel={openInModel}
+                onExpand={setEditorInput}
+                onResolveReview={() => setReviewOpen(true)}
+                onFocus={(i) => setFocusedId(i.id)}
+                onAddInput={addInput}
+                onSelectSubtree={setSelection}
+                onDelete={removeInput}
+              />
             )}
+            <DeprecatedSection
+              businessId={businessId}
+              inputs={filters.state === "deprecated" ? filtered : allInputs}
+              forceOpen={filters.state === "deprecated"}
+            />
           </div>
         </div>
 
@@ -392,25 +418,76 @@ function SegButton({
   );
 }
 
-/** Deprecated section — collapsed group at the bottom; only when non-empty. */
-function DeprecatedSection({ inputs }: { inputs: readonly VibeInputOut[] }) {
+/** Deprecated section - collapsed group at the bottom, open when it is the
+ *  whole view (the Deprecated facet). Only when non-empty. A manual delete can
+ *  be restored; an input the app deprecated cannot (the server answers 409), so
+ *  it gets no button and a note that says why. */
+function DeprecatedSection({
+  businessId,
+  inputs,
+  forceOpen,
+}: {
+  businessId: string;
+  inputs: readonly VibeInputOut[];
+  forceOpen: boolean;
+}) {
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
+  const restore = useRestoreVibeInput({
+    mutation: {
+      onSuccess: () => invalidateVibeInputQueries(queryClient, businessId),
+      onError: (e) => notifyError(e, { fallback: "Couldn't restore the input" }),
+    },
+  });
   const deprecated = inputs.filter((i) => i.status === "deprecated");
-  if (deprecated.length === 0) return null;
+  if (deprecated.length === 0) {
+    return forceOpen ? (
+      <p className="px-2 py-4 text-sm text-muted-foreground" data-testid="deprecated-empty">
+        No deprecated feedback matches the filters.
+      </p>
+    ) : null;
+  }
+  const expanded = forceOpen || open;
+  const heading = `Deprecated (${deprecated.length})`;
+  const headingClass = "text-xs font-semibold uppercase tracking-wide text-muted-foreground";
   return (
-    <div className="mt-4 border-t border-border pt-2">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className="text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-      >
-        Deprecated ({deprecated.length})
-      </button>
-      {open && (
+    <div className={forceOpen ? "" : "mt-4 border-t border-border pt-2"} data-testid="deprecated-section">
+      {forceOpen ? (
+        <h3 className={headingClass}>{heading}</h3>
+      ) : (
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className={headingClass}>
+          {heading}
+        </button>
+      )}
+      {expanded && (
         <div className="mt-2 space-y-1">
           {deprecated.map((i) => (
-            <div key={i.id} className="rounded-md border border-border bg-muted p-2 text-sm text-muted-foreground line-through">
-              {i.text}
+            <div
+              key={i.id}
+              className="flex items-start justify-between gap-2 rounded-md border border-border bg-muted p-2 text-sm text-muted-foreground"
+              data-testid="deprecated-item"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="line-through">{i.text}</div>
+                {i.deprecated_by == null && (
+                  <div className="mt-1 text-xs">
+                    Deprecated by the app: its model element was removed, or its link was dismissed in
+                    the review queue. It can't be restored; add it again as new feedback if you still
+                    need it.
+                  </div>
+                )}
+              </div>
+              {i.deprecated_by != null && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-foreground"
+                  disabled={restore.isPending && restore.variables?.params.input_id === i.id}
+                  onClick={() => restore.mutate({ params: { business_id: businessId, input_id: i.id } })}
+                >
+                  Restore
+                </Button>
+              )}
             </div>
           ))}
         </div>

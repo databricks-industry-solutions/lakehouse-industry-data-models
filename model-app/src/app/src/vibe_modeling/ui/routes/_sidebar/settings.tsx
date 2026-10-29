@@ -26,6 +26,7 @@ import {
   Database,
   Factory,
   Github,
+  Info,
   LayoutGrid,
   Pencil,
   Plus,
@@ -100,15 +101,17 @@ import { useAgentReady, agentReadyQueryKey } from "@/lib/hooks";
 import type { SectorOut } from "@/lib/api";
 import { selector } from "@/lib/selector";
 import { useBreadcrumbs } from "@/components/explorer/breadcrumb-context";
-import { InstallBundledAgentButton } from "@/components/settings/install-bundled-agent-button";
-import { AgentReleaseCard } from "@/components/settings/agent-release-card";
+import { AgentStatusRow } from "@/components/settings/agent-status-row";
 import { SourceAuthBanner } from "@/components/source-explorer/source-auth-banner";
-import { AssessSettings } from "@/components/assessment/assess-settings";
-import { AssessBoundary } from "@/components/assessment/assess-boundary";
-import { useAssessReady } from "@/lib/assessment";
 import { AdminGate } from "@/components/settings/admin-gate";
 import { SavedNotice, SaveErrorBox, StatusLine } from "@/components/settings/status-line";
-import { TaxonomyBuilderCard } from "@/components/settings/taxonomy-builder-card";
+import {
+  RUNTIME_BUDGET_SETTINGS_HINT,
+  runtimeBudgetBoundsError,
+  runtimeBudgetBoundsText,
+  parseRuntimeBudgetInput,
+} from "@/lib/runtime-budget";
+import { OptionalFeaturesSection } from "@/components/settings/optional-features";
 import { useQueryClient } from "@tanstack/react-query";
 
 // Re-exported so existing imports (`@/routes/_sidebar/settings`) and tests keep
@@ -119,14 +122,14 @@ const validTabs = [
   "agent",
   "platform",
   "sources",
-  "assessment",
   "sectors",
   "preferences",
 ] as const;
 type SettingsTab = (typeof validTabs)[number];
 
-// Legacy deep-links from the pre-0.6.6 tab layout still circulate (bookmarks,
-// docs, in-app links). Map the retired tab names onto their new homes so those
+// Deep links to retired tab names still circulate (bookmarks, docs, in-app
+// links; `assessment` is now the Platform tab's Optional features section).
+// Map the retired tab names onto their new homes so those
 // URLs keep landing on the right section instead of silently falling back to
 // "agent". Resolved inside validateSearch so the redirect happens at parse
 // time, before any component renders.
@@ -134,6 +137,7 @@ const legacyTabRedirects: Record<string, SettingsTab> = {
   diagram: "preferences",
   warehouse: "platform",
   github: "sources",
+  assessment: "platform",
 };
 
 export const Route = createFileRoute("/_sidebar/settings")({
@@ -149,10 +153,6 @@ export const Route = createFileRoute("/_sidebar/settings")({
   component: () => {
     const navigate = useNavigate();
     const { tab } = useSearch({ from: "/_sidebar/settings" });
-    // The Assessment tab exists only when the optional skill is installed
-    // (same rule as the taxonomy builder's Settings card).
-    const { installed: assessInstalled } = useAssessReady();
-    const activeTab = tab === "assessment" && !assessInstalled ? "agent" : tab;
 
     const setTab = (value: string) => {
       navigate({ to: ".", search: { tab: value as SettingsTab }, replace: true });
@@ -166,7 +166,7 @@ export const Route = createFileRoute("/_sidebar/settings")({
           <Settings className="h-5 w-5" />
           <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         </div>
-        <Tabs value={activeTab} onValueChange={setTab}>
+        <Tabs value={tab} onValueChange={setTab}>
           <TabsList>
             <TabsTrigger value="agent">Agent</TabsTrigger>
             <TabsTrigger value="platform">
@@ -177,7 +177,6 @@ export const Route = createFileRoute("/_sidebar/settings")({
               <Github className="h-4 w-4 mr-1.5" />
               Sources
             </TabsTrigger>
-            {assessInstalled && <TabsTrigger value="assessment">Assessment</TabsTrigger>}
             <TabsTrigger value="sectors">
               <Factory className="h-4 w-4 mr-1.5" />
               Sectors
@@ -202,15 +201,6 @@ export const Route = createFileRoute("/_sidebar/settings")({
               <SourcesSection />
             </AdminGate>
           </TabsContent>
-          {assessInstalled && (
-            <TabsContent value="assessment">
-              <AdminGate scope="app">
-                <AssessBoundary>
-                  <AssessSettings />
-                </AssessBoundary>
-              </AdminGate>
-            </TabsContent>
-          )}
           <TabsContent value="sectors">
             <AdminGate scope="business">
               <Suspense fallback={<Skeleton className="h-96 w-full" />}>
@@ -258,7 +248,14 @@ export function AgentConfigSection() {
   const [maxConcurrentRunsError, setMaxConcurrentRunsError] = useState<
     string | null
   >(null);
-  const [collectStatistics, setCollectStatistics] = useState<boolean>(false);
+  const [runTags, setRunTags] = useState<boolean>(true);
+  // Settings default run time budget, whole hours. The bounds come from the
+  // API (AgentConfigOut), never from literals here; until the config loads
+  // there is nothing to edit.
+  const budgetMin = config?.runtime_budget_min_hours;
+  const budgetMax = config?.runtime_budget_max_hours;
+  const [runtimeBudgetHours, setRuntimeBudgetHours] = useState<number | null>(null);
+  const [runtimeBudgetError, setRuntimeBudgetError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [initialized, setInitialized] = useState(false);
@@ -281,7 +278,8 @@ export function AgentConfigSection() {
   if (config && !initialized) {
     setNotebookPath(config.notebook_path);
     setMaxConcurrentRuns(config.max_concurrent_runs ?? MIN_CONCURRENT_RUNS);
-    setCollectStatistics(config.collect_vibe_run_statistics ?? false);
+    setRunTags(config.collect_vibe_run_statistics ?? true);
+    setRuntimeBudgetHours(config.runtime_budget_hours ?? null);
     setInitialized(true);
     if (config.notebook_path.trim()) {
       // Defer so the update happens after the current render cycle.
@@ -299,12 +297,14 @@ export function AgentConfigSection() {
   const persistedNotebook = config?.notebook_path ?? "";
   const persistedMaxConcurrent =
     config?.max_concurrent_runs ?? MIN_CONCURRENT_RUNS;
-  const persistedCollectStatistics = config?.collect_vibe_run_statistics ?? false;
+  const persistedRunTags = config?.collect_vibe_run_statistics ?? true;
+  const persistedRuntimeBudget = config?.runtime_budget_hours ?? null;
   const dirty =
     initialized &&
     (notebookPath !== persistedNotebook ||
       maxConcurrentRuns !== persistedMaxConcurrent ||
-      collectStatistics !== persistedCollectStatistics);
+      runTags !== persistedRunTags ||
+      runtimeBudgetHours !== persistedRuntimeBudget);
 
   const runNotebookCheck = async (path: string) => {
     if (!path.trim()) {
@@ -335,13 +335,18 @@ export function AgentConfigSection() {
     } catch (e) {
       setNotebookCheck({
         status: "error",
-        reason: e instanceof Error ? e.message : String(e),
+        reason: apiErrorMessage(e, String(e)),
       });
     }
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    // The form is noValidate, so the notebook path's `required` is checked here.
+    if (!notebookPath.trim()) {
+      setSaveError("Notebook Path is required.");
+      return;
+    }
     // Client-side floor enforcement. Mirrors AgentConfigIn(ge=3); the
     // backend would 422 anyway, but the inline error reads better than
     // the parsed-422 banner.
@@ -355,6 +360,12 @@ export function AgentConfigSection() {
       return;
     }
     setMaxConcurrentRunsError(null);
+    const budgetMessage = runtimeBudgetBoundsError(runtimeBudgetHours, budgetMin, budgetMax);
+    if (budgetMessage) {
+      setRuntimeBudgetError(budgetMessage);
+      return;
+    }
+    setRuntimeBudgetError(null);
     // Confirm-on-warning: if the path is reachable but the version
     // marker wasn't found (or some other warning was returned by the
     // check endpoint), the user has the authority to ignore it. Show a
@@ -379,15 +390,17 @@ export function AgentConfigSection() {
       const notebookChanged = notebookPath !== persistedNotebook;
       const maxConcurrentChanged =
         maxConcurrentRuns !== persistedMaxConcurrent;
-      const collectStatisticsChanged =
-        collectStatistics !== persistedCollectStatistics;
-      if (notebookChanged || maxConcurrentChanged || collectStatisticsChanged) {
+      const runTagsChanged =
+        runTags !== persistedRunTags;
+      const runtimeBudgetChanged = runtimeBudgetHours !== persistedRuntimeBudget;
+      if (notebookChanged || maxConcurrentChanged || runTagsChanged || runtimeBudgetChanged) {
         await saveConfig({
           params: {},
           data: {
             notebook_path: notebookPath,
             max_concurrent_runs: maxConcurrentRuns,
-            collect_vibe_run_statistics: collectStatistics,
+            collect_vibe_run_statistics: runTags,
+            ...(runtimeBudgetHours !== null ? { runtime_budget_hours: runtimeBudgetHours } : {}),
           },
         });
       }
@@ -436,11 +449,10 @@ export function AgentConfigSection() {
         <CardTitle>Agent Configuration</CardTitle>
       </CardHeader>
       <CardContent>
-        {/* Persistent readiness banner. Folds in every "runs are blocked"
-            reason (no config, no job, SP lost access to the saved notebook)
-            so the user sees the same signal here as on the business page,
-            without having to touch the input first. */}
-        {agentReady && !agentReady.ready && (
+        {/* Readiness banner: every "runs are blocked" reason (no job, the SP
+            lost access to the saved notebook) except "no notebook", which
+            the status line below already says with its fix. */}
+        {agentReady && !agentReady.ready && persistedNotebook.trim() !== "" && (
           <div className="mb-4 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-xs">
             <AlertTriangle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
             <span className="text-warning">
@@ -449,43 +461,47 @@ export function AgentConfigSection() {
             </span>
           </div>
         )}
-        {supported && (
-          <div className="mb-4 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs flex items-start gap-2">
-            <Badge variant="outline" className="shrink-0">
-              {supported.version}
-            </Badge>
-            <span className="text-muted-foreground">
-              This app is pinned to agent{" "}
-              <a
-                href={supported.repo_tag_url || supported.repo}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="font-mono underline hover:text-foreground"
-              >
-                {supported.version}
-              </a>
-              . The notebook's{" "}
-              <span className="font-mono">__RELEASE_VERSION__</span> is verified
-              on save; the agent build (
-              <span className="font-mono">__AGENT_VERSION__</span>) can move
-              within a release without a re-pin.
-            </span>
-          </div>
-        )}
-        <AgentReleaseCard />
-
-        <div className="mb-4">
-          <InstallBundledAgentButton
-            onInstalled={(path) => {
-              setNotebookPath(path);
-              setNotebookCheck({ status: "idle" });
-            }}
-          />
-        </div>
-        <form onSubmit={handleSave} className="space-y-4">
+        <AgentStatusRow
+          hasNotebook={persistedNotebook.trim() !== ""}
+          onSwitched={(path) => {
+            setNotebookPath(path);
+            setInitialized(false);
+            setNotebookCheck({ status: "idle" });
+          }}
+        />
+        {/* noValidate: the browser's own bubbles would replace the inline
+            errors handleSave shows for each field. */}
+        <form onSubmit={handleSave} className="space-y-4" noValidate data-testid="agent-config-form">
           <div className="space-y-2">
-            <label className="text-sm font-medium">Notebook Path *</label>
+            <div className="flex items-center gap-1.5">
+              <label className="text-sm font-medium" htmlFor="agent-notebook-path">
+                Notebook Path *
+              </label>
+              {supported && (
+                <TooltipProvider delayDuration={200}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        aria-label="About the agent version"
+                        className="text-muted-foreground hover:text-foreground"
+                        data-testid="notebook-path-pin-help"
+                      >
+                        <Info className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent className="max-w-sm text-xs">
+                      This app is pinned to agent {supported.version}. The notebook's{" "}
+                      <span className="font-mono">__RELEASE_VERSION__</span> is verified on
+                      save; the agent build (<span className="font-mono">__AGENT_VERSION__</span>)
+                      can move within a release without a re-pin.
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+            </div>
             <Input
+              id="agent-notebook-path"
               value={notebookPath}
               onChange={(e) => {
                 setNotebookPath(e.target.value);
@@ -526,6 +542,12 @@ export function AgentConfigSection() {
               type="number"
               min={MIN_CONCURRENT_RUNS}
               step={1}
+              aria-invalid={maxConcurrentRunsError !== null}
+              aria-describedby={
+                maxConcurrentRunsError
+                  ? "max-concurrent-runs-error max-concurrent-runs-hint"
+                  : "max-concurrent-runs-hint"
+              }
               value={maxConcurrentRuns}
               onChange={(e) => {
                 const next = parseInt(e.target.value, 10);
@@ -534,14 +556,54 @@ export function AgentConfigSection() {
               }}
             />
             {maxConcurrentRunsError && (
-              <StatusLine tone="error">{maxConcurrentRunsError}</StatusLine>
+              <StatusLine tone="error" id="max-concurrent-runs-error">
+                {maxConcurrentRunsError}
+              </StatusLine>
             )}
-            <p className="text-xs text-muted-foreground">
+            <p id="max-concurrent-runs-hint" className="text-xs text-muted-foreground">
               Minimum {MIN_CONCURRENT_RUNS}. The agent job needs slack for the
               unified-pipeline phase transition and cancel-with-rollback
               cleanup overlaps.
             </p>
           </div>
+
+          {runtimeBudgetHours !== null && budgetMin !== undefined && budgetMax !== undefined && (
+            <div className="space-y-2">
+              <label className="text-sm font-medium" htmlFor="runtime-budget-hours">
+                Run time budget (hours)
+              </label>
+              <Input
+                id="runtime-budget-hours"
+                type="number"
+                min={budgetMin}
+                max={budgetMax}
+                step={1}
+                aria-invalid={runtimeBudgetError !== null}
+                aria-describedby={
+                  runtimeBudgetError
+                    ? "runtime-budget-hours-error runtime-budget-hours-hint"
+                    : "runtime-budget-hours-hint"
+                }
+                value={Number.isNaN(runtimeBudgetHours) ? "" : runtimeBudgetHours}
+                onChange={(e) => {
+                  setRuntimeBudgetHours(parseRuntimeBudgetInput(e.target.value));
+                  setRuntimeBudgetError(null);
+                }}
+              />
+              {runtimeBudgetError && (
+                <StatusLine tone="error" id="runtime-budget-hours-error">
+                  {runtimeBudgetError}
+                </StatusLine>
+              )}
+              <p
+                id="runtime-budget-hours-hint"
+                className="text-xs text-muted-foreground"
+                data-testid="runtime-budget-hint"
+              >
+                {RUNTIME_BUDGET_SETTINGS_HINT} {runtimeBudgetBoundsText(budgetMin, budgetMax)}
+              </p>
+            </div>
+          )}
 
           <div className="space-y-2">
             <TooltipProvider delayDuration={200}>
@@ -549,15 +611,18 @@ export function AgentConfigSection() {
                 <TooltipTrigger asChild>
                   <label className="flex items-center gap-2 text-sm font-medium cursor-help">
                     <Checkbox
-                      checked={collectStatistics}
-                      onCheckedChange={(v) => setCollectStatistics(v === true)}
+                      checked={runTags}
+                      onCheckedChange={(v) => setRunTags(v === true)}
                     />
-                    Collect vibe run statistics
+                    Annotate jobs with run tags
                   </label>
                 </TooltipTrigger>
                 <TooltipContent className="max-w-sm text-xs">
-                  Anonymous usage statistics for product improvement. No
-                  sensitive information is collected.
+                  Each run tags the agent job with the business name, the
+                  run's session ID and the notebook file name, so you can tell
+                  which business and run used the job. Operational tags (app,
+                  app version, operation, model scope, element counts and
+                  launcher) are always added.
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -608,8 +673,9 @@ export function AgentConfigSection() {
 
 // Platform tab: installation-wide platform settings an admin controls - the
 // metamodel catalog (concern A), the SQL warehouse used for progress
-// polling + model sync, and (only when installed) the Domain Taxonomy
-// Builder's model service.
+// polling + model sync, and the "Optional features" section (the Domain
+// Taxonomy Builder and the bronze assessment: installed or not, ready or not,
+// last saved by, and the settings of each installed one).
 export function PlatformSection() {
   return (
     <div className="space-y-4">
@@ -617,7 +683,7 @@ export function PlatformSection() {
       <Suspense fallback={<Skeleton className="h-64 w-full max-w-4xl" />}>
         <WarehouseSection />
       </Suspense>
-      <TaxonomyBuilderCard />
+      <OptionalFeaturesSection />
     </div>
   );
 }

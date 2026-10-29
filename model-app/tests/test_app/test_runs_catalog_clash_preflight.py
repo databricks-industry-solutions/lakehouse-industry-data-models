@@ -31,7 +31,9 @@ from vibe_modeling.backend.db_models import (
 )
 
 
-def _seed_business(engine, *, name="clash-biz") -> str:
+def _seed_business(engine, *, name="overlap-biz") -> str:
+    # The name must not contain "clash": a response that echoes the run's
+    # parameters would match the assertions that no clash is reported.
     with Session(engine) as s:
         ind = Industry(name="Test", short_name="test", description="x")
         s.add(ind)
@@ -232,3 +234,68 @@ def test_listing_failure_does_not_block(client, engine, biz_id, mock_ws):
         "clash" in (b.get("message") or "").lower()
         for b in blockers
     ), blockers
+
+
+def _seed_mvm_lineage(engine, biz_id: str) -> str:
+    """ECM v1 -> MVM v1 -> MVM v2, as agent 5.3.3 names their schemas; v2's
+    vibe added a domain that maps from no ECM domain. Returns MVM v2's id."""
+    from vibe_modeling.backend.db_models import Domain, Run
+
+    with Session(engine) as s:
+        ecm1 = ModelVersion(business_id=biz_id, version=1, scope="ecm", status="completed")
+        mvm1 = ModelVersion(business_id=biz_id, version=1, scope="mvm", status="completed")
+        mvm2 = ModelVersion(business_id=biz_id, version=2, scope="mvm", status="completed")
+        s.add_all([ecm1, mvm1, mvm2])
+        s.flush()
+        s.add(Domain(version_id=ecm1.id, name="Sales", database_name="ecm_sales"))
+        s.add(Domain(version_id=mvm1.id, name="Sales", database_name="mvm_ecm_sales"))
+        s.add(Domain(version_id=mvm2.id, name="Sales", database_name="mvm_ecm_sales"))
+        s.add(Domain(version_id=mvm2.id, name="Logistics", database_name="mvm_logistics"))
+        s.add(Run(business_id=biz_id, intent="new-base-model", status="completed",
+                  parameters_json='{"deployment_catalog": "vibe_modeling_test"}'))
+        s.commit()
+        return mvm2.id
+
+
+def test_vibe_of_an_mvm_with_its_own_mvm_schemas_is_not_a_clash(
+    client_with_agent, engine, biz_id, mock_ws
+):
+    """The run form sends the base's locked ``schema_prefix`` ``mvm_``. The
+    schemas under it are the MVM's own (one from a vibe-added domain), so
+    neither validate nor create refuses: ownership is read on the base's
+    scope, and the agent skips early clash detection for a vibe (nb
+    8117-8125)."""
+    mvm2 = _seed_mvm_lineage(engine, biz_id)
+    _stub_schemas(mock_ws, ["mvm_ecm_sales", "mvm_logistics"])
+    body = {
+        "intent": "vibe-iterate",
+        "version_id": mvm2,
+        "catalog": "vibe_modeling_test",
+        "cataloging_style": "One Catalog",
+        "schema_prefix": "mvm_",
+        "vibe_instructions": "tweak something",
+    }
+    validated = client_with_agent.post(f"/api/businesses/{biz_id}/runs/validate", json=body)
+    assert validated.status_code == 200, validated.text
+    assert not any("clash" in (b.get("message") or "").lower() for b in validated.json()["blockers"])
+    created = client_with_agent.post(f"/api/businesses/{biz_id}/runs", json=body)
+    assert created.status_code == 200, created.text
+    assert "clash" not in created.text.lower(), created.text
+
+
+def test_vibe_of_an_mvm_still_blocks_on_a_schema_it_does_not_own(
+    client_with_agent, engine, biz_id, mock_ws
+):
+    mvm2 = _seed_mvm_lineage(engine, biz_id)
+    _stub_schemas(mock_ws, ["mvm_ecm_sales", "mvm_someone_elses"])
+    body = {
+        "intent": "vibe-iterate",
+        "version_id": mvm2,
+        "catalog": "vibe_modeling_test",
+        "cataloging_style": "One Catalog",
+        "schema_prefix": "mvm_",
+        "vibe_instructions": "tweak something",
+    }
+    resp = client_with_agent.post(f"/api/businesses/{biz_id}/runs/validate", json=body)
+    assert resp.status_code == 200, resp.text
+    assert any("mvm_someone_elses" in (b.get("message") or "") for b in resp.json()["blockers"])

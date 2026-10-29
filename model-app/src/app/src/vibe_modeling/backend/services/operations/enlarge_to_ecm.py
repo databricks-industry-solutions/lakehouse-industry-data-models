@@ -35,6 +35,7 @@ from ._generation_common import (
     observe_generation_op,
     rollback_generation_op,
 )
+from ._deployment_widgets import CATALOG_NAME_PATTERN, SCHEMA_PREFIX_PATTERN
 from ._protocol import (
     Operation,
     OperationContext,
@@ -55,11 +56,11 @@ class EnlargeToEcmParams(BaseModel):
     # absent. See ``shrink_to_mvm`` for the same rationale.
     parent_mvm_version_int: Optional[int] = Field(default=None, ge=1)
     business_name: str = Field(pattern=r"^[a-z][a-z0-9_]+$")
-    deployment_catalog: str = Field(pattern=r"^[a-z][a-z0-9_]+$")
+    deployment_catalog: str = Field(pattern=CATALOG_NAME_PATTERN)
     cataloging_style: Literal[
         "One Catalog", "Catalog per Division", "Catalog per Domain",
     ]
-    schema_prefix: str = Field(default="ecm_", pattern=r"^[a-z][a-z0-9_]*_$|^$", max_length=32)
+    schema_prefix: str = Field(default="ecm_", pattern=SCHEMA_PREFIX_PATTERN, max_length=32)
     business_description: str = ""
     context_file: str = ""
     model_vibes: str = ""
@@ -80,8 +81,6 @@ class EnlargeToEcmParams(BaseModel):
     history_tracking_columns: str = DEFAULT_HISTORY_TRACKING_COLUMNS
     catalog_prefix: str = ""
     catalog_suffix: str = ""
-    generate_samples: bool = False
-    model_folder: str = ""
 
 
 class EnlargeToEcm(Operation):
@@ -155,6 +154,7 @@ class EnlargeToEcm(Operation):
             ws=ws,
             session=session,
             scope_short="ecm",
+            agent_operation=AGENT_OP_ENLARGE_MVM,
         )
 
     def rollback(

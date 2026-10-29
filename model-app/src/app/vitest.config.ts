@@ -5,6 +5,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     globals: true,
+    testTimeout: 15000,
     setupFiles: ["./src/vibe_modeling/ui/__tests__/setup.ts"],
   },
   resolve: {

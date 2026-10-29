@@ -17,10 +17,8 @@
  "genie_model_service": "system.ai.gpt-5-6-sol",
  "skills_repo": "databricks-industry-solutions/lakehouse-industry-data-models",
  "skills_subdir": "model-genie-skills/skills",
- "skills_ref": "dev:fix/assessment-grading-calibration@6e08f54",
- "skills_version": "0.4.0",
- "release_skills_ref": "4c709f704d4e4bc977aeb4379409fb709f2ab7e4",
- "release_skills_version": "0.4.0",
+ "skills_ref": "1b75c63ed7b920a255e3b86c61652a4cd3d4a661",
+ "skills_version": "0.5.0",
  "staged_skills": [
   "domain-model-assessment",
   "autonomous-validation"

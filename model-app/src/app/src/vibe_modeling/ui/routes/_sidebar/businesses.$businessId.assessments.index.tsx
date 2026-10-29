@@ -9,7 +9,7 @@ import { useBreadcrumbs } from "@/components/explorer/breadcrumb-context";
 import { RelaunchButton } from "@/components/assessment/relaunch-button";
 import { AssessBoundary } from "@/components/assessment/assess-boundary";
 import { AssessedDomains } from "@/components/assessment/assessed-domains";
-import { AssessNotReady } from "@/components/assessment/assess-gate";
+import { FeatureNotReady } from "@/components/feature-gate";
 import { useAssessReady } from "@/lib/assessment";
 
 export const Route = createFileRoute("/_sidebar/businesses/$businessId/assessments/")({
@@ -25,7 +25,7 @@ function AssessmentsContent({ businessId }: { businessId: string }) {
     params: { business_id: businessId },
     ...selector(),
   });
-  const { ready, missing } = useAssessReady();
+  const { ready } = useAssessReady();
   useBreadcrumbs([
     { label: business.name, to: "/businesses/$businessId", params: { businessId } },
     { label: "Assessments" },
@@ -42,7 +42,7 @@ function AssessmentsContent({ businessId }: { businessId: string }) {
           </Button>
         )}
       </div>
-      {!ready && <AssessNotReady missing={missing} />}
+      {!ready && <FeatureNotReady feature="assessment" />}
       {batches.length === 0 ? (
         <p className="text-sm text-muted-foreground">No assessments yet.</p>
       ) : (

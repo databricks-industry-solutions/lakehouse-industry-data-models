@@ -16,6 +16,13 @@ export function entityKindLabel(kind: BusinessKind | undefined | null): string {
   return kind === BusinessKind.industry ? "Industry" : "Business";
 }
 
+/** Singular noun with its indefinite article, lowercase - "an industry" / "a business". */
+export function entityKindWithArticle(
+  kind: BusinessKind | undefined | null,
+): string {
+  return `${kind === BusinessKind.industry ? "an" : "a"} ${entityKindLabelLower(kind)}`;
+}
+
 /** Singular noun, lowercase — for mid-sentence use. */
 export function entityKindLabelLower(
   kind: BusinessKind | undefined | null,

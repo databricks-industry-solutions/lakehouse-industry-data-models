@@ -27,8 +27,10 @@ vi.mock("sonner", () => ({
 import { toast } from "sonner";
 import { ApiError } from "@/lib/api";
 import { parseConfigMissing } from "@/lib/api-error";
-import { ConfigMissingNotice } from "@/components/config-missing-notice";
-import { notifyConfigMissing } from "@/lib/notify";
+import { ConfigMissingNotice, toLinkTarget } from "@/components/config-missing-notice";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { getAssessConfigKey, getTaxonomyConfigKey } from "@/lib/api";
+import { notifyConfigMissing, notifyError } from "@/lib/notify";
 
 const MISSING = [
   { key: "metamodel_catalog", label: "Metamodel catalog", settings_url: "/settings?tab=platform" },
@@ -100,6 +102,59 @@ describe("ConfigMissingNotice", () => {
   });
 });
 
+describe("toLinkTarget", () => {
+  it("splits path, search and hash", () => {
+    expect(toLinkTarget("/settings?tab=platform#feature-taxonomy")).toEqual({
+      to: "/settings", search: { tab: "platform" }, hash: "feature-taxonomy",
+    });
+    expect(toLinkTarget("/settings?tab=platform")).toEqual({ to: "/settings", search: { tab: "platform" } });
+    expect(toLinkTarget("/settings#feature-assessment")).toEqual({ to: "/settings", search: {}, hash: "feature-assessment" });
+  });
+});
+
+describe("ConfigMissingNotice for a feature setting", () => {
+  const refusedItem = [{ key: "taxonomy_llm", label: "Domain Taxonomy Builder model service", settings_url: "/settings?tab=platform#feature-taxonomy" }];
+
+  it("links to the feature's card, with the link text kept on one line", async () => {
+    wrap(<ConfigMissingNotice missing={refusedItem} message="Refused." />);
+    const link = await screen.findByRole("link", { name: "Configure" });
+    expect(link.getAttribute("href")).toBe("/settings?tab=platform#feature-taxonomy");
+    expect(link.className).toContain("whitespace-nowrap");
+  });
+
+  it("refreshes the named feature's readiness, and only that one", async () => {
+    const qc = new QueryClient();
+    qc.setQueryData(getTaxonomyConfigKey(), { data: { ready: true } });
+    qc.setQueryData(getAssessConfigKey(), { data: { ready: true } });
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    const rootRoute = createRootRoute({ component: () => <Outlet /> });
+    const indexRoute = createRoute({
+      getParentRoute: () => rootRoute, path: "/",
+      component: () => <ConfigMissingNotice missing={refusedItem} message="Refused." />,
+    });
+    const router = createRouter({ routeTree: rootRoute.addChildren([indexRoute]), history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<QueryClientProvider client={qc}><RouterProvider router={router as any} /></QueryClientProvider>);
+    await screen.findByText("Refused.");
+    await waitFor(() => expect(qc.getQueryState(getTaxonomyConfigKey())?.isInvalidated).toBe(true));
+    expect(qc.getQueryState(getAssessConfigKey())?.isInvalidated).toBe(false);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a config_missing of platform settings refreshes no feature", async () => {
+    const qc = new QueryClient();
+    qc.setQueryData(getTaxonomyConfigKey(), { data: { ready: true } });
+    const rootRoute = createRootRoute({ component: () => <Outlet /> });
+    const indexRoute = createRoute({
+      getParentRoute: () => rootRoute, path: "/",
+      component: () => <ConfigMissingNotice missing={MISSING} message="Finish setup." />,
+    });
+    const router = createRouter({ routeTree: rootRoute.addChildren([indexRoute]), history: createMemoryHistory({ initialEntries: ["/"] }) });
+    render(<QueryClientProvider client={qc}><RouterProvider router={router as any} /></QueryClientProvider>);
+    await screen.findByText("Finish setup.");
+    expect(qc.getQueryState(getTaxonomyConfigKey())?.isInvalidated).toBe(false);
+  });
+});
+
 describe("notifyConfigMissing", () => {
   it("raises the shared toast and returns true for config_missing", () => {
     expect(notifyConfigMissing(configMissingError())).toBe(true);
@@ -112,5 +167,27 @@ describe("notifyConfigMissing", () => {
   it("does nothing and returns false for other errors", () => {
     expect(notifyConfigMissing(new Error("nope"))).toBe(false);
     expect(vi.mocked(toast.error)).not.toHaveBeenCalled();
+  });
+
+  it("raises the same toast for a refused taxonomy model service, linking to its setting", () => {
+    const refused = new ApiError(400, "Bad Request", {
+      detail: { error: "model_service_refused", key: "taxonomy_llm", status: "denied", message: "The app's service principal may not use it." },
+    });
+    expect(notifyConfigMissing(refused)).toBe(true);
+    const arg = vi.mocked(toast.error).mock.calls[0][0] as { type?: unknown; props: { message: string; missing: { key: string; settings_url: string }[] } };
+    expect(arg.type).toBe(ConfigMissingNotice);
+    expect(arg.props.message).toBe("The app's service principal may not use it.");
+    expect(arg.props.missing).toEqual([
+      { key: "taxonomy_llm", label: "Domain Taxonomy Builder model service", settings_url: "/settings?tab=platform#feature-taxonomy" },
+    ]);
+  });
+
+  it("notifyError routes a refused model service through it too", () => {
+    const refused = new ApiError(400, "Bad Request", {
+      detail: { error: "model_service_refused", key: "taxonomy_llm", status: "not_found", message: "Not found." },
+    });
+    notifyError(refused, { fallback: "Couldn't start drafting" });
+    expect(vi.mocked(toast.error)).toHaveBeenCalledTimes(1);
+    expect((vi.mocked(toast.error).mock.calls[0][0] as { type?: unknown }).type).toBe(ConfigMissingNotice);
   });
 });

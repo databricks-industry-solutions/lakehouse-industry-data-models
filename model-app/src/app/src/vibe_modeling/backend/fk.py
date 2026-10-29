@@ -33,6 +33,36 @@ def product_fqn(domain_name: str, product_name: str) -> str:
     return build_fqn(domain_name, product_name)
 
 
+def fk_edge_id(source_node: str, source_column: str,
+               target_node: str, target_column: str) -> str:
+    """The diagram's FK edge id ``fk:<src_node>.<src_col>><tgt_node>.<tgt_col>``.
+
+    Nodes are product FQNs. ``source_column`` is the source attribute's
+    ``column_name`` (what the diagram draws); ``target_column`` is the column
+    named in ``foreign_key_to``. The FE echoes the id back as
+    ``selected_edge_id``; :func:`parse_fk_edge_id` reads it."""
+    return f"fk:{source_node}.{source_column}>{target_node}.{target_column}"
+
+
+def parse_fk_edge_id(
+    edge_id: str,
+) -> Optional[tuple[str, str, Optional[str], str, str, Optional[str]]]:
+    """Parse an :func:`fk_edge_id` into ``(src_domain, src_product, src_column,
+    tgt_domain, tgt_product, tgt_column)``. A side without a column gives None
+    for it; an id that doesn't parse gives None."""
+    if not edge_id.startswith("fk:") or ">" not in edge_id:
+        return None
+    src_part, tgt_part = edge_id[3:].split(">", 1)
+    src_bits = src_part.split(".", 2)
+    tgt_bits = tgt_part.split(".", 2)
+    if len(src_bits) < 2 or len(tgt_bits) < 2:
+        return None
+    return (
+        src_bits[0], src_bits[1], src_bits[2] if len(src_bits) == 3 else None,
+        tgt_bits[0], tgt_bits[1], tgt_bits[2] if len(tgt_bits) == 3 else None,
+    )
+
+
 class FkTarget(NamedTuple):
     """Parsed ``foreign_key_to`` target. ``domain`` is ``None`` for the 2-part
     ``"table.column"`` shape (the caller then infers the domain)."""

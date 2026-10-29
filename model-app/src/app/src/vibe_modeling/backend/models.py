@@ -2,11 +2,17 @@
 
 from datetime import datetime
 from enum import Enum
-from typing import Literal, Optional, get_args
+from typing import Any, Literal, Optional, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .. import __version__
+from .runtime_budget import (
+    RUNTIME_BUDGET_DEFAULT_HOURS,
+    RUNTIME_BUDGET_HOURS_DESCRIPTION,
+    RUNTIME_BUDGET_MAX_HOURS,
+    RUNTIME_BUDGET_MIN_HOURS,
+)
 
 # Business.name flows into Delta SQL WHERE/UPDATE clauses via f-strings in
 # progress_tracker and model_sync (properly escaped at the call site, but
@@ -21,6 +27,42 @@ BUSINESS_NAME_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9 _\-&.,'()]{0,127}$"
 # The agent's ``org_divisions`` widget presets (dropdown values, verbatim).
 OrgDivisions = Literal["Operations", "Operations and Business", "Operations, Business and Corporate"]
 ORG_DIVISIONS_PRESETS: tuple[str, ...] = get_args(OrgDivisions)
+
+# The agent's ``boolean_format`` widget values (dropdown values, verbatim).
+BooleanFormat = Literal["Boolean (True/False)", "Int (0/1)", "String (Y/N)"]
+BOOLEAN_FORMATS: tuple[str, ...] = get_args(BooleanFormat)
+# Lower-cased spellings that mean one of the three: the agent's own legacy
+# aliases (its ``_normalize_boolean_format_label``) and the labels earlier app
+# forms sent. The agent maps any other value to "Boolean (True/False)" without
+# saying so, which is why the app normalizes before dispatch.
+_BOOLEAN_FORMAT_ALIASES: dict[str, str] = {
+    **{label.lower(): label for label in BOOLEAN_FORMATS},
+    "boolean": "Boolean (True/False)",
+    "bool": "Boolean (True/False)",
+    "true/false": "Boolean (True/False)",
+    "tinyint": "Int (0/1)",
+    "bit": "Int (0/1)",
+    "1/0": "Int (0/1)",
+    "integer (1/0)": "Int (0/1)",
+    "yes/no": "String (Y/N)",
+    "y/n": "String (Y/N)",
+    "string (yes/no)": "String (Y/N)",
+}
+
+
+def normalize_boolean_format(value: str) -> str:
+    """Return the agent's ``boolean_format`` label for ``value``.
+
+    Accepts the agent's three labels in any case plus the aliases in
+    ``_BOOLEAN_FORMAT_ALIASES``; raises ``ValueError`` for anything else, so a
+    value the agent would silently replace with Boolean fails at the API.
+    """
+    label = _BOOLEAN_FORMAT_ALIASES.get(str(value).strip().lower())
+    if label is None:
+        raise ValueError(
+            f"boolean_format must be one of {', '.join(BOOLEAN_FORMATS)}; got {value!r}"
+        )
+    return label
 
 
 def validate_business_description(value: str) -> str:
@@ -62,6 +104,8 @@ class RunStatus(str, Enum):
 class VibeInputOrigin(str, Enum):
     USER = "user"
     AGENT_NEXT_VIBE = "agent_next_vibe"
+    # Feedback the modeler made from a rejected run change (run_change_decisions).
+    CHANGE_REJECTION = "change_rejection"
 
 class VibeInputPriority(str, Enum):
     """Canonical priority vocabulary. ``NextVibeItem.priority`` is typed to
@@ -120,6 +164,22 @@ class Intent(str, Enum):
     INSTALL = "install"
     UNINSTALL = "uninstall"
     GENERATE_SAMPLES = "generate-samples"
+
+
+# Intents the app no longer starts. The enum values stay so old run rows still
+# read and render; ``RunIn`` treats them like any unknown value.
+RETIRED_INTENTS: frozenset[Intent] = frozenset({Intent.REVERT, Intent.GENERATE_SAMPLES})
+
+class VibeScope(str, Enum):
+    """Scope for a scoped vibe iteration (VOV). See design §5.1 and §16.2.
+
+    - ``ALL_DOMAINS`` — no scope restriction; run touches all domains.
+    - ``SOME_DOMAINS`` — run is restricted to specified domains only.
+    - ``SOME_SUBDOMAINS`` — accepted by the enum; rejected by preflight in phase 1.
+    """
+    ALL_DOMAINS = "all_domains"
+    SOME_DOMAINS = "some_domains"
+    SOME_SUBDOMAINS = "some_subdomains"
 
 class DeploymentStatus(str, Enum):
     DRAFT = "draft"
@@ -203,10 +263,11 @@ _MAX_CONCURRENT_RUNS_DESCRIPTION = (
     f"Minimum {_MAX_CONCURRENT_RUNS_MIN} — slack for the unified-pipeline "
     "phase transition and cancel-with-rollback cleanup overlaps."
 )
-_COLLECT_STATISTICS_DESCRIPTION = (
-    "Anonymous usage statistics for product improvement. "
-    "No sensitive information is collected."
+_RUN_TAGS_DESCRIPTION = (
+    "When true, runs add identity tags to the agent job: business name, "
+    "run session id and notebook file name. Operational tags are always added."
 )
+_RUN_TAGS_IN_DESCRIPTION = _RUN_TAGS_DESCRIPTION + " Omit to keep the stored value."
 
 
 class AgentConfigIn(BaseModel):
@@ -216,9 +277,15 @@ class AgentConfigIn(BaseModel):
         ge=_MAX_CONCURRENT_RUNS_MIN,
         description=_MAX_CONCURRENT_RUNS_DESCRIPTION,
     )
-    collect_vibe_run_statistics: bool = Field(
-        default=False,
-        description=_COLLECT_STATISTICS_DESCRIPTION,
+    collect_vibe_run_statistics: Optional[bool] = Field(
+        default=None,
+        description=_RUN_TAGS_IN_DESCRIPTION,
+    )
+    runtime_budget_hours: Optional[int] = Field(
+        default=None,
+        ge=RUNTIME_BUDGET_MIN_HOURS,
+        le=RUNTIME_BUDGET_MAX_HOURS,
+        description=RUNTIME_BUDGET_HOURS_DESCRIPTION + " Omit to keep the stored value.",
     )
 
 class AgentConfigOut(BaseModel):
@@ -242,9 +309,16 @@ class AgentConfigOut(BaseModel):
         description=_MAX_CONCURRENT_RUNS_DESCRIPTION,
     )
     collect_vibe_run_statistics: bool = Field(
-        default=False,
-        description=_COLLECT_STATISTICS_DESCRIPTION,
+        default=True,
+        description=_RUN_TAGS_DESCRIPTION,
     )
+    runtime_budget_hours: int = Field(
+        default=RUNTIME_BUDGET_DEFAULT_HOURS,
+        description="Settings default for new runs. " + RUNTIME_BUDGET_HOURS_DESCRIPTION,
+    )
+    # The bounds the API enforces, so the UI never copies them.
+    runtime_budget_min_hours: int = RUNTIME_BUDGET_MIN_HOURS
+    runtime_budget_max_hours: int = RUNTIME_BUDGET_MAX_HOURS
     created_at: datetime
     updated_at: datetime
     # Pre-built workspace URL for the persistent agent job — backend has the
@@ -273,34 +347,40 @@ class DeploymentCatalogIn(BaseModel):
     deployment_catalog: str
 
 
+class DeploymentCatalogCheckOut(BaseModel):
+    """``GET .../deployment/catalog-check``. ``verification_error`` is the
+    sanitized reason the catalog could not be checked, else ``None``."""
+    exists: bool
+    catalog: str
+    error: Optional[str] = None
+    verification_error: Optional[str] = None
+
+
+class DeployedUcSchemaOut(BaseModel):
+    """``GET .../deployment/uc-schema``: the deployed tables, columns and keys
+    as ``deployment_verifier.get_uc_schema`` reads them. When a query failed,
+    every list is empty and ``verification_error`` says why."""
+    tables: list[dict[str, Any]] = Field(default_factory=list)
+    columns: list[dict[str, Any]] = Field(default_factory=list)
+    primary_keys: list[dict[str, Any]] = Field(default_factory=list)
+    foreign_keys: list[dict[str, Any]] = Field(default_factory=list)
+    verification_error: Optional[str] = None
+
+
+class DeploymentVerificationOut(BaseModel):
+    """``GET .../deployment/compare``: the logical model against the deployed
+    UC schema. When the deployed schema could not be read, nothing is
+    compared (no table is model-only) and ``verification_error`` says why."""
+    tables: dict[str, list[dict[str, Any]]]
+    summary: dict[str, int]
+    verification_error: Optional[str] = None
+
+
 class MetamodelCatalogIn(BaseModel):
     """Concern-A metamodel catalog input for the renamed /config/metamodel-catalog
     endpoints. Same underlying column as DeploymentCatalogIn (deployment_catalog),
     exposed under the concern-A vocabulary."""
     metamodel_catalog: str
-
-
-class BundledAgentInfoOut(BaseModel):
-    """Describes the vibe-modelling-agent notebook bundled inside the app wheel.
-
-    The first-run gate surfaces this so admins can install the shipped
-    notebook with one click instead of hunting for the right upstream tag.
-    """
-    available: bool
-    pinned_tag: str = ""
-    supported_tags: list[str] = []
-    file_name: str = ""
-
-
-class InstallBundledAgentOut(BaseModel):
-    """Response from POST /admin/install-bundled-agent.
-
-    `path` is the workspace path the notebook was uploaded to (what the UI
-    should then write into AgentConfig.notebook_path).
-    """
-    path: str
-    version: str
-    overwritten: bool
 
 
 class AgentCompatChange(BaseModel):
@@ -314,6 +394,13 @@ class AgentCompatChange(BaseModel):
     severity: str  # "breaking" | "info"
     area: str
     summary: str
+
+
+InstalledVsBundled = Literal["same", "older", "newer", "unknown"]
+"""The configured notebook against the bundled agent: ``same``; ``older`` (the
+bundled agent is newer); ``newer`` (the notebook is newer than the bundled
+agent); ``unknown`` (the identity is not known: not read yet, read from
+another path, the read failed or found no markers, or no bundled agent)."""
 
 
 class AgentCompatOut(BaseModel):
@@ -360,6 +447,24 @@ class AgentCompatOut(BaseModel):
     install_offered: bool = False
     checked_at: Optional[datetime] = None
     check_error: Optional[str] = None
+    # The configured notebook's own identity (the ``agent_config.installed_*``
+    # cache) next to the bundled agent's marker. ``agent_owner`` is ``app``
+    # when the notebook sits in the app's own agent folder (upgraded on boot)
+    # and ``admin`` otherwise. ``installed_vs_bundled`` compares the installed
+    # (release, marker) with the bundled one, release first: ``older`` means
+    # the bundled agent is newer. All None while no notebook is configured.
+    installed_release_version: Optional[str] = None
+    installed_agent_version: Optional[str] = None
+    installed_checked_at: Optional[datetime] = None
+    installed_checked_path: Optional[str] = None
+    installed_check_error: Optional[str] = None
+    bundled_agent_marker: Optional[str] = None
+    installed_vs_bundled: Optional[InstalledVsBundled] = None
+    agent_owner: Optional[Literal["app", "admin"]] = None
+    # Whether the configured notebook's cached marker supports scoped and Dry
+    # runs (``core._vibe_scope.MIN_AGENT_MARKER_FOR_SCOPE``); None when the
+    # marker is not known.
+    scope_supported: Optional[bool] = None
 
 # --- GitHub config (ADR D-049) ---
 
@@ -550,6 +655,34 @@ class ModelVersionOut(BaseModel):
     # NULL for pre-existing rows and Delta-only payloads.
     agent_version: Optional[str] = None
     release_version: Optional[str] = None
+    # Version lifecycle (see db_models.ModelVersion). ``replaced_at`` set means
+    # an install replaced this version; ``replaced_by_version_id`` names the
+    # replacer while it exists. ``files_catalog`` is where the version's files
+    # live; ``uc_catalog`` is where it is installed now.
+    dry_run: bool = False
+    promoted_at: Optional[datetime] = None
+    promoted_by_run_id: Optional[str] = None
+    replaced_by_version_id: Optional[str] = None
+    replaced_at: Optional[datetime] = None
+    files_catalog: Optional[str] = None
+    scope_fence_mode: Optional[str] = None
+    # Derived by the versions list route, one head per (business, scope):
+    # ``is_head`` marks the scope's current version; ``draft_state`` is
+    # ``ready`` for a Dry Run draft on the head and ``older_base`` for one on
+    # an older base. None where the route does not compute them.
+    is_head: Optional[bool] = None
+    draft_state: Optional[Literal["ready", "older_base"]] = None
+    # The Run a link recorded for an imported version (``run_link``); set by
+    # the versions list route only.
+    linked_run_id: Optional[str] = None
+    # Whether the version was imported (``run_link.import_sources``): an
+    # import dialog, an industry download, a Volume recovery import or an
+    # out-of-band import, as opposed to a run of the app producing it (a Run
+    # with a RunOperation that output it; ``Run.version_id`` is only a
+    # target or parent, so an install or a vibe of the version does not
+    # count). Only an imported version can be linked to its run. None where
+    # the route does not compute it.
+    is_imported: Optional[bool] = None
     created_at: datetime
 
 
@@ -567,6 +700,12 @@ class InstallationStatusOut(BaseModel):
     see ``skipped_reason``) and is deliberately distinct from ``True``
     ("checked, and it's fine"). A skipped probe must never read as
     healthy.
+
+    ``deployment_catalog`` is the latest install catalog (``uc_catalog``);
+    the schema lists are for it. ``also_installed_in`` lists the other
+    catalogs with an open install row; each is probed too, a schema missing
+    there is listed in ``missing_schemas`` as ``<catalog>.<schema>`` and
+    makes ``in_sync`` False.
     """
     version_id: str
     deployment_catalog: str
@@ -578,6 +717,7 @@ class InstallationStatusOut(BaseModel):
     in_sync: Optional[bool]
     checked_at: datetime
     skipped_reason: Optional[str] = None
+    also_installed_in: list[str] = Field(default_factory=list)
 
 
 class ReconcileInstallationOut(BaseModel):
@@ -603,6 +743,19 @@ class RunIn(BaseModel):
     # it is sourced from the URL path on every run-related route and
     # threaded into helpers as a separate parameter.
     intent: Intent = Intent.NEW_BASE_MODEL
+
+    @field_validator("intent", mode="before")
+    @classmethod
+    def _intent_is_startable(cls, value: Any) -> Any:
+        """A retired intent is refused with the same error as an unknown one."""
+        try:
+            intent = Intent(value)
+        except (ValueError, TypeError):
+            intent = None
+        if intent is None or intent in RETIRED_INTENTS:
+            raise ValueError("intent not recognized")
+        return value
+
     version_id: Optional[str] = None
     parent_version_id: Optional[str] = None
     context_id: Optional[str] = None
@@ -632,6 +785,8 @@ class RunIn(BaseModel):
     sample_count: Optional[int] = None
     vibe_instructions: str = ""
     model_size: str = "small model"
+    # Accepted for older clients and the smoke scripts, and ignored: agent
+    # 5.3.3 has no ``generate_samples`` widget, so nothing reads or stores it.
     generate_samples: bool = False
     business_context_path: str = ""
     business_context_text: str = ""
@@ -673,6 +828,96 @@ class RunIn(BaseModel):
     # compiles them via compile_inputs and dispatches the resulting markdown
     # through the vibe_instructions widget.
     input_ids: list[str] = []
+    # Agent widget 06a. Only intent=vibe-iterate accepts a value other than
+    # all_domains (phase 1). See design §5.1.
+    vibe_scope: VibeScope = VibeScope.ALL_DOMAINS
+    # Scope list under some_domains. Names are matched against the base
+    # version's domains with the agent's normalization; the preflight rewrites
+    # them to the canonical stored names. See design §5.1.
+    vibe_scope_domains: list[str] = []
+    # Agent widget 03a ("Dry Run" when True). Only intent=vibe-iterate in
+    # phase 1. See design §5.1.
+    dry_run: bool = False
+    # Subject keys of the ``confirm`` issues the user accepted (see
+    # ``IssueOut.subject``). Create recomputes the issues and refuses any
+    # subject not listed here.
+    confirmed_issues: list[str] = []
+    # Install only: after a successful install, delete the versions it
+    # replaced. BusinessAdmin only, like deleting a version directly.
+    also_delete_replaced: bool = False
+    # This run's agent budget; omitted means the Settings default. Create
+    # stores the resolved hours in ``Run.parameters_json`` for runs that
+    # dispatch generation (see ``backend/runtime_budget.py``).
+    runtime_budget_hours: Optional[int] = Field(
+        default=None,
+        ge=RUNTIME_BUDGET_MIN_HOURS,
+        le=RUNTIME_BUDGET_MAX_HOURS,
+        description=(
+            RUNTIME_BUDGET_HOURS_DESCRIPTION
+            + " Omit for the Settings default. Install and uninstall runs ignore it."
+        ),
+    )
+
+    @field_validator("boolean_format")
+    @classmethod
+    def _normalize_boolean_format(cls, value: Optional[str]) -> Optional[str]:
+        """Rewrite to the agent's label; blank keeps today's "use the default"."""
+        if value is None or not value.strip():
+            return value
+        return normalize_boolean_format(value)
+
+
+# The ``RunIn`` Advanced Options the generation steps take as they are: the
+# DAG factories forward each one the request sets, and create records the
+# non-empty ones in ``Run.parameters_json``.
+RUN_CONVENTION_FIELDS: tuple[str, ...] = (
+    "naming_convention",
+    "primary_key_suffix",
+    "schema_suffix",
+    "tag_prefix",
+    "tag_suffix",
+    "table_id_type",
+    "boolean_format",
+    "date_format",
+    "timestamp_format",
+    "catalog_prefix",
+    "catalog_suffix",
+    "org_divisions",
+    "business_domains",
+    "classification_levels",
+    "housekeeping_columns",
+    "history_tracking_columns",
+)
+
+
+class RunDefaultFieldOut(BaseModel):
+    """One Advanced Options value a vibe of a base version starts from.
+
+    ``source``: ``base_file`` (the base's ``model.json``), ``base_run`` (the
+    widgets the run that made the base dispatched), ``default`` (the app
+    default) or ``unknown`` (the base's file could not be read; ``value`` is
+    then ``None`` and the form sends nothing for the field).
+    ``locked`` / ``locked_scoped``: the agent keeps the base's value on an
+    All domains vibe (and Vibe ECM + MVM) / on a Some domains vibe, whatever
+    the request sends.
+    """
+
+    value: Optional[str] = None
+    source: Literal["base_file", "base_run", "default", "unknown"]
+    locked: bool = False
+    locked_scoped: bool = False
+
+
+class RunDefaultsOut(BaseModel):
+    """``getRunDefaults``: the Advanced Options a vibe of ``base_version_id``
+    starts from, keyed by ``RunIn`` field (``schema_prefix`` is the base's
+    prefix; the form sends it as ``ecm_schema_prefix`` on Vibe ECM + MVM).
+    ``file_read`` is False when the base's ``model.json`` could not be read."""
+
+    base_version_id: str
+    file_read: bool
+    fields: dict[str, RunDefaultFieldOut]
+
 
 class WatchdogState(str, Enum):
     """D-09 user-visible watchdog state, derived from Run.status + warm-up."""
@@ -721,15 +966,23 @@ class RunOut(BaseModel):
     # never reached the launched-tracker step). Rounded down.
     elapsed_seconds: int = 0
     # Spec §2.4 + §8: ``warnings`` is a non-optional list — empty on the
-    # trivial happy path, populated when the validator emitted
-    # warning-severity issues. Each entry mirrors the ``Issue`` envelope
-    # used by ``POST /runs/validate`` and the 400 blocker payload:
-    # ``{"field_path", "step_index", "message", "severity"}``.
+    # trivial happy path. Each entry mirrors the ``Issue`` envelope used by
+    # ``POST /runs/validate`` and the 400 blocker payload:
+    # ``{"field_path", "step_index", "message", "severity"}``. ``POST /runs``
+    # returns the validator's warning-severity issues; every response then
+    # adds the warnings the run's succeeded steps reported
+    # (``RUN_WARNINGS_KEY`` in their rollback state, e.g. the schemas an
+    # uninstall left behind), with ``field_path`` ``(<operation>)`` and the
+    # step's ``step_index``. The run page shows them.
     warnings: list[dict] = []
     # Agent-emitted Version Resolution events for this run (auto-collision
     # resolves). Empty on the happy path. Derived from the run's
     # RunProgressEvent rows — see ``backend.version_resolution_parser``.
     version_resolutions: list["VersionResolutionOut"] = []
+    # Set when the run was recorded by linking an imported version to its
+    # Databricks run; ``link_evidence`` says how the match was verified.
+    linked_at: Optional[datetime] = None
+    link_evidence: Optional[str] = None
 
 
 class VersionResolutionOut(BaseModel):
@@ -859,15 +1112,30 @@ class IssueOut(BaseModel):
     ``POST /runs`` (per spec §2.4 + §2.4.1).
 
     ``severity`` distinguishes ``"warning"`` (soft — UI surfaces a
-    "Submit anyway" confirmation, run is still created) from
+    "Submit anyway" confirmation, run is still created; in ``RunOut.warnings``
+    also something a succeeded step reported after it ran) from
     ``"blocker"`` (hard — ``POST /runs`` 400s; ``POST /runs/validate``
-    flags the offending field inline).
+    flags the offending field inline), ``"confirm"`` (the run is created
+    only when ``RunIn.confirmed_issues`` lists this issue's ``subject``) and
+    ``"prepare"`` (validate only: a step create performs itself before it
+    records the run, e.g. setting up ``_metamodel``).
+
+    ``subject`` is set on ``confirm`` issues only: a key bound to what the
+    confirmation is about, e.g. ``install_over_newer:<head version id>`` or
+    ``install_replaces_in_catalog:<occupying version id>``, so a confirmation
+    given for one version never covers another.
+
+    ``versions`` lists the version numbers the issue names, when it names
+    some: the versions an ``install_over_newer`` install replaces, and the
+    versions a ``vibe_scope_base`` blocker asks to delete first.
     """
 
     field_path: str
     step_index: int
     message: str
-    severity: str
+    severity: Literal["warning", "blocker", "confirm", "prepare"]
+    subject: Optional[str] = None
+    versions: list[int] = Field(default_factory=list)
 
 
 class ValidateRunOut(BaseModel):
@@ -1109,27 +1377,60 @@ class UserPreferenceDeleteOut(BaseModel):
     deleted: bool
 
 
+class MetamodelCleanupSummaryOut(BaseModel):
+    """How many ``_metamodel`` cleanup rows a delete left in each state."""
+
+    done: int = 0
+    pending: int = 0
+    failed: int = 0
+
+
+class MetamodelCleanupOut(BaseModel):
+    """One ``metamodel_cleanups`` row: removal of a deleted version's
+    ``_metamodel`` rows from one catalog. ``status`` pending | done | failed;
+    ``reason`` version_delete | business_delete | post_install_delete |
+    orphan_drop."""
+
+    id: str
+    business_segment: str
+    version: int
+    scope: str
+    catalog: str
+    reason: str
+    status: str
+    attempts: int = 0
+    last_error: Optional[str] = None
+    updated_at: datetime
+
+
+class BusinessDeleteOut(BaseModel):
+    """Response shape for ``DELETE /businesses/{id}``."""
+
+    ok: bool
+    cascaded: bool
+    metamodel_cleanup: MetamodelCleanupSummaryOut = Field(default_factory=MetamodelCleanupSummaryOut)
+
+
 class DeleteVersionOut(BaseModel):
     """Response shape for ``DELETE /businesses/{id}/versions/{vid}``.
 
-    The route always deletes the target version's rows (Lakebase + Delta
-    ``_metamodel.*``); when ``reinstall_previous=true`` it also dispatches
-    an uninstall→install orchestrator DAG to revive the prior version.
+    The route deletes one version's Lakebase rows and records the removal of
+    its ``_metamodel.*`` rows per catalog (``metamodel_cleanup``); it starts
+    no run.
     """
 
     deleted_version: int
-    # ``previous_version`` is the same-scope predecessor's version number
-    # (the one a follow-up reinstall would target). NULL when the deleted
-    # row was the only same-scope version.
+    # When the deleted version was the scope head: the head after the delete
+    # (its restored predecessor), else NULL.
     previous_version: Optional[int] = None
-    # Populated only when ``reinstall_previous=true`` and the orchestrator
-    # dispatch succeeded.
-    run_id: Optional[str] = None
-    reinstall_dispatched: bool = False
-    # True iff the agent's ``_metamodel.business`` table actually carried a
-    # row for this version that we cleaned. False for import-only versions
-    # that were never written to Delta.
+    # True iff a cleanup found registry rows of this version and removed
+    # them. False when none was found (e.g. never written to Delta).
     metamodel_rows_cleaned: bool = False
+    # Outcome of the ``_metamodel`` cleanup rows the delete wrote, one per
+    # catalog, after its post-commit attempt.
+    metamodel_cleanup: MetamodelCleanupSummaryOut = Field(default_factory=MetamodelCleanupSummaryOut)
+    # Feedback items the deleted version had applied that are open again.
+    reopened_input_count: int = 0
     message: str
 
 class VersionTreeOut(BaseModel):
@@ -1143,6 +1444,8 @@ class VersionTreeOut(BaseModel):
     scope: str = ""
     created_at: datetime
     is_base: bool = True
+    # A shrink/enlarge output whose lineage parent was deleted: Vibed, labelled so.
+    parent_deleted: bool = False
 
 # --- ER Diagram ---
 
@@ -1255,17 +1558,19 @@ class RelationshipAnalysisOut(BaseModel):
 # --- Feedback ---
 
 class FeedbackContext(BaseModel):
-    """Captured view state at the moment feedback was submitted.
+    """The model element an "Add feedback" surface is about, by name.
 
-    Kept as a structured model for type safety; serialized to context_json in DB.
+    Feedback is about the model, so this carries model coordinates only and
+    no view state (tab, column mode, filters). It is not stored: the create
+    endpoint resolves it against the viewed version into the input's anchor
+    (``core/anchor_resolve.resolve_feedback_anchor``). The lowest coordinate
+    set wins: attribute (with ``selected_node_id``) > product > relationship
+    > domain; none set is the whole model.
     """
-    context_version: int = 1
-    view_mode: str = ""  # "er" | "ontology" | "explorer" | "report" | "domain_tables"
     domain_filter: Optional[str] = None
     selected_node_id: Optional[str] = None  # "domain.product"
     selected_edge_id: Optional[str] = None  # "fk:..."
-    column_mode: Optional[str] = None  # "hide" | "keys" | "all"
-    hide_cross_domain: bool = False
+    selected_attribute: Optional[str] = None  # attribute name in selected_node_id
 
 
 # --- Vibe Inputs (durable input content + anchoring) ---
@@ -1332,6 +1637,10 @@ class VibeInputAnchorOut(BaseModel):
     attribute_name: Optional[str] = None
     fk_link_id: Optional[str] = None
     fk_label: Optional[str] = None
+    # The relationship's diagram edge id, the same id the diagram gives it
+    # (``anchor_resolve.fk_link_edge_ids``: source column = the source
+    # attribute's column_name); what an Add-feedback ``selected_edge_id`` carries.
+    fk_edge_id: Optional[str] = None
     path: list[str] = []
 
 
@@ -1346,6 +1655,8 @@ class VibeInputOut(BaseModel):
     priority: VibeInputPriority
     confidence_score: Optional[float]
     consumed: bool
+    # The run whose success consumed this input; None while open.
+    consumed_by_run_id: Optional[str] = None
     selected_for_run: bool
     status: VibeInputStatus
     deprecated_by: Optional[str]
@@ -1381,10 +1692,74 @@ class VibeInputContextLinkOut(BaseModel):
     created_at: datetime
 
 
-class RunInputLinkOut(BaseModel):
-    run_id: str
+RunConsumeNote = Literal[
+    "dry_run_pending_install",
+    "dry_run_installed",
+    "sync_failed",
+    "version_mismatch",
+    "malformed",
+    "no_outcomes_reported",
+    "pre_0_9_0",
+    "install_consumed",
+]
+
+
+class RunReportItemOut(BaseModel):
+    """One input a run sent (its ``RunInputLink``) with the input's state now.
+
+    ``outcome_status`` is the agent's status for the input (``applied``,
+    ``partial``, ``deferred``, ``scope_rejected``, ...; unknown values pass
+    through), ``not_reported`` when the agent reported outcomes but none (or
+    one with no status) for this input, ``applied`` / ``reopened`` on install runs, and None when the
+    agent reported no outcomes. ``created_at`` is when the run linked it.
+    """
     input_id: str
+    outcome_status: Optional[str] = None
+    outcome_reason: Optional[str] = None
+    outcome_target: Optional[str] = None
     created_at: datetime
+    text: str
+    origin: VibeInputOrigin
+    priority: VibeInputPriority
+    status: VibeInputStatus
+    consumed: bool
+    consumed_by_run_id: Optional[str] = None
+    selected_for_run: bool
+
+
+class RunReportOut(BaseModel):
+    """What a run did with the feedback it sent (``getRunReport``).
+
+    ``consume_note`` says why inputs were or were not marked done; None when
+    the agent's outcomes were applied normally. The ``*_version`` and
+    ``lineage_*`` fields come from the agent's model.json and are None when
+    the run recorded no agent report.
+    """
+    run_id: str
+    business_id: str
+    intent: str
+    run_status: str
+    # The version a vibe run produced; None for other runs and before success.
+    output_version_id: Optional[str] = None
+    dry_run: bool
+    consume_note: Optional[RunConsumeNote] = None
+    has_agent_report: bool
+    has_input_outcomes: bool
+    version_mismatch: bool
+    expected_version: Optional[int] = None
+    fetched_version: Optional[int] = None
+    lineage_base_version: Optional[int] = None
+    lineage_head_at_write: Optional[int] = None
+    lineage_stale: Optional[bool] = None
+    unmatched_outcome_count: int = 0
+    items: list[RunReportItemOut] = []
+
+
+class VersionReportOut(BaseModel):
+    """The report of the vibe run that produced a version (``getVersionReport``);
+    ``report`` is None when no vibe run produced it (generated or imported)."""
+    version_id: str
+    report: Optional[RunReportOut] = None
 
 
 class SubdomainOut(BaseModel):
@@ -1676,8 +2051,16 @@ class ReviewQueueOut(BaseModel):
 
 
 class CompileIn(BaseModel):
-    """Explicit selection of input ids to serialize. Empty = compile nothing."""
+    """Explicit selection of input ids to serialize. Empty = compile nothing.
+
+    When vibe_scope_domains is non-empty, the compile is scoped: only inputs
+    anchored in those domains are included; model-wide inputs are excluded
+    with the reason "model_wide_in_scoped_run".
+    """
     input_ids: list[str] = []
+    # Non-empty => scoped compile: keep only inputs anchored in these domains
+    # (normalized match), exclude model-wide inputs. Empty => today's behaviour.
+    vibe_scope_domains: list[str] = []
 
 
 class CompiledBlockOut(BaseModel):
@@ -1693,11 +2076,18 @@ class CompiledBlockOut(BaseModel):
 
 
 class CompileOut(BaseModel):
-    markdown: str = ""                  # the single doc handed to the agent
+    markdown: str = ""                  # the single doc handed to the agent (no markers)
+    # NEW: markdown + inline [target] anchors + K1 markers (what launch sends to agent).
+    # markdown carries no markers; agent_markdown does. See design §6, D9.
+    agent_markdown: str = ""
     blocks: list[CompiledBlockOut] = []
     included_input_ids: list[str] = []  # excludes deprecated/missing
     excluded_input_ids: list[str] = []  # deprecated or not-on-this-version
-    excluded_reasons: dict[str, str] = {}  # input_id -> reason
+    excluded_reasons: dict[str, str] = {}  # input_id -> reason (may include "out_of_scope", "model_wide_in_scoped_run")
+    # input_id -> the scope domain its anchor on this version maps to (the
+    # same rule the scoped compile filters by); None for model-wide and
+    # unanchored inputs, which a scoped run does not send.
+    input_scope_domains: dict[str, Optional[str]] = {}
 
 
 # --- Model Import ---
@@ -1724,12 +2114,10 @@ class BusinessDigest(BaseModel):
     common_business_jargons: str = ""
     operational_systems_of_records: str = ""
     industry_governing_body: str = ""
-    # Story-1: True when ``industry_alignment`` has no case-insensitive
-    # match in the ``industries`` catalog. The Story-1 endpoint
-    # auto-creates a stub ``Industry`` row when this is True, mirroring
-    # ``initial_sync.py``'s auto-create path. UI surfaces this so the
-    # user isn't surprised by silent catalog growth.
-    industry_will_be_created: bool = False
+    # The catalog industry ``industry_alignment`` resolves to
+    # (``industry_resolve.resolve_industry``); None when nothing matches or the
+    # match is ambiguous. Set by the analyze route only.
+    industry_id: Optional[str] = None
 
 
 class FieldMismatch(BaseModel):
@@ -1772,6 +2160,21 @@ class ImportAnalyzeOut(BaseModel):
     # Story-2 (import-into-existing): populated when ``business_id`` is
     # known. ``mismatch_fields`` non-empty → UI shows the warning panel.
     business_digest_diff: Optional[BusinessDigestDiff] = None
+    # The scope the file and its path settle; None when the user must choose
+    # (``import_model.import_scope``).
+    inferred_scope: Optional[Literal["ecm", "mvm"]] = None
+    # True when the file's version, its agent folder or agent output settles
+    # the scope; False when only its requirements suggest it (the user's
+    # choice still wins) or nothing does.
+    scope_settled: bool = False
+    # The file is agent output and is imported as the agent wrote it
+    # (``import_model.is_agent_output``; a run id given at import also counts).
+    agent_output: bool = False
+    # The file's ``model_conventions.schema_prefix`` ("" when it names none).
+    file_schema_prefix: Optional[str] = None
+    # The schema prefix the app's copy uses; None when the file's is kept or
+    # the scope is not known yet.
+    import_schema_prefix: Optional[str] = None
 
 
 class ImportExecuteIn(BaseModel):
@@ -1781,6 +2184,13 @@ class ImportExecuteIn(BaseModel):
     # business identity disagrees with the target Business. Server
     # returns 409 when mismatches exist and this flag is False.
     accept_business_mismatch: bool = False
+    # The Databricks run that produced the file: linked right after the
+    # import commits (``run_link.link_after_import``); a refused link leaves
+    # the import in place and adds a warning.
+    databricks_run_id: Optional[int] = None
+    # The user's ECM / MVM choice, needed when the analyze reported no
+    # ``inferred_scope``; refused when it contradicts the file's version.
+    scope: Optional[Literal["ecm", "mvm"]] = None
 
 
 class ImportCreateBusinessAndExecuteIn(BaseModel):
@@ -1797,6 +2207,46 @@ class ImportCreateBusinessAndExecuteIn(BaseModel):
     # The detailed description (business_vibes) the user reviewed — defaults to
     # the digest's assembled draft when omitted.
     business_vibes_override: Optional[str] = None
+    # The catalog industry the user picked; wins over resolving the alignment.
+    industry_id: Optional[str] = None
+    # Add the industry alignment to the catalog when no industry matches it.
+    # Without it an unmatched alignment leaves the business with no industry.
+    create_industry: bool = False
+    # As on ``ImportExecuteIn``.
+    databricks_run_id: Optional[int] = None
+    scope: Optional[Literal["ecm", "mvm"]] = None
+
+
+
+class IndustryScopePrefixesIn(BaseModel):
+    """``applyIndustryScopePrefixes``: give an industry downloaded before 0.9.0
+    the scope prefixes a download adds now. ``apply`` False (the default)
+    reports what would change and writes nothing."""
+    apply: bool = False
+
+
+ScopePrefixAction = Literal["changed", "unchanged", "skipped", "failed"]
+
+
+class IndustryScopePrefixRowOut(BaseModel):
+    """One industry version: ``changed`` (or, in a dry run, would change),
+    ``unchanged`` (nothing to do), ``skipped`` (left as it is: ``reason``
+    says why, e.g. installed in the catalogs it names) or ``failed`` (the
+    apply stopped on it: ``reason`` says what completed; a rerun finishes it)."""
+    version_id: str
+    version: int
+    scope: str
+    action: ScopePrefixAction
+    reason: str
+    warnings: list[str] = Field(default_factory=list)
+
+
+class IndustryScopePrefixesOut(BaseModel):
+    """What ``applyIndustryScopePrefixes`` did, one row per version."""
+    business_id: str
+    business_name: str
+    applied: bool
+    rows: list[IndustryScopePrefixRowOut] = Field(default_factory=list)
 
 
 class ImportExecuteOut(BaseModel):
@@ -1810,6 +2260,9 @@ class ImportExecuteOut(BaseModel):
     detected_agent_tag: str = ""
     compat_verdict: str = "unknown"
     latest_supported_tag: str = ""
+    # The Run recorded for ``databricks_run_id``; None when none was given or
+    # the link was refused (the reason is in ``warnings``).
+    linked_run_id: Optional[str] = None
 
 
 class ImportCreateBusinessAndExecuteOut(ImportExecuteOut):
@@ -1864,3 +2317,284 @@ class NextVibesOut(BaseModel):
     # model.json `confidence_score` field.
     confidence_score: Optional[float] = None
     status: str = ""  # agent's overall health label, e.g. "needs_work" / "healthy"
+
+
+# --- Workspace catalogs ---
+
+
+class CatalogOut(BaseModel):
+    """One UC catalog the app service principal can list (``listCatalogs``).
+
+    ``can_create_schema`` is True when a recent positive check of the app's
+    privileges is cached (negative results are never cached); None means ask
+    ``getCatalogCapabilities``.
+    """
+
+    name: str
+    comment: str = ""
+    owner: str = ""
+    can_create_schema: Optional[bool] = None
+
+
+class CatalogCapabilityOut(BaseModel):
+    """What the app service principal can do in one catalog. None = could not
+    be checked (over the per-call cap, timed out, or the grants read failed).
+
+    ``create_schema``: USE_CATALOG + CREATE_SCHEMA on the catalog (runs that
+    create schemas need it). ``use_metamodel``: the app can use
+    ``<catalog>._metamodel`` and its ``vol_root`` volume, creating what is
+    absent (every run needs it). The ``*_fix`` fields carry the GRANT
+    statements for what is missing, for an admin to run; empty when nothing is.
+    """
+
+    name: str
+    create_schema: Optional[bool] = None
+    use_metamodel: Optional[bool] = None
+    create_schema_fix: str = ""
+    use_metamodel_fix: str = ""
+
+
+# --- Run change review (accept or reject a vibe run's changes) ---
+
+RunChangeElementKind = Literal["domain", "product", "attribute"]
+RunChangeKind = Literal["added", "modified", "removed"]
+# ``asked``: the element (or its product or domain) is the anchor of an input
+# the run sent, or the target of an ``applied`` outcome; ``outside_scope``: a
+# scoped run changed a domain outside its scope; ``not_asked``: neither, and
+# the run sent no model-wide input; ``unclear``: the run sent a model-wide input.
+RunChangeClass = Literal["asked", "outside_scope", "not_asked", "unclear"]
+RunChangeDecisionValue = Literal["accepted", "rejected"]
+
+
+class RunChangeOut(BaseModel):
+    """One change between a vibe run's base and output version, with the
+    modeler's decision when there is one."""
+
+    element_kind: RunChangeElementKind
+    element_path: str
+    change_kind: RunChangeKind
+    change_class: RunChangeClass
+    decision: Optional[RunChangeDecisionValue] = None
+    decided_by: Optional[str] = None
+    decided_at: Optional[datetime] = None
+    feedback_input_id: Optional[str] = None
+
+
+class RunChangesOut(BaseModel):
+    """``getRunChanges``: the changes a vibe run made. ``decisions_open`` is
+    False once a newer run on the output version has started."""
+
+    run_id: str
+    version_id: str
+    base_version_id: Optional[str] = None
+    decisions_open: bool = True
+    changes: list[RunChangeOut] = []
+
+
+class RunChangeDecisionIn(BaseModel):
+    element_kind: RunChangeElementKind
+    element_path: str
+    decision: RunChangeDecisionValue
+
+
+class RunChangeDecisionsIn(BaseModel):
+    """Body of ``setRunChangeDecisions``."""
+
+    decisions: list[RunChangeDecisionIn]
+
+
+class RunChangeReviewConfigOut(BaseModel):
+    """``getRunChangeReviewConfig``: whether the run change review is on
+    (``AppConfig.run_change_review_enabled``)."""
+
+    enabled: bool
+
+
+# --- Uninstall impact ---
+
+
+class UninstallImpactTableOut(BaseModel):
+    """``has_data`` None = not checked (over the cap, out of time, or failed),
+    which callers treat as holding data."""
+
+    name: str
+    kind: str
+    has_data: Optional[bool] = None
+
+
+class UninstallImpactVersionOut(BaseModel):
+    """Another version the app records as installed in the catalog."""
+
+    version_id: str
+    business_id: str
+    business_name: str
+    scope: str
+    version: int
+
+
+class UninstallImpactSchemaOut(BaseModel):
+    """``shared``: the catalog's ``_metrics`` schema, which holds the metric
+    views of every model installed in the catalog and is dropped by every
+    uninstall there; ``other_versions`` are the other versions the app
+    records as installed in the catalog, whose metric views go with it.
+    ``objects_listed`` is False when the schema's tables, views and volumes
+    could not be read (its lists are then empty)."""
+
+    name: str
+    owner: str = ""
+    shared: bool = False
+    objects_listed: bool = True
+    tables: list[UninstallImpactTableOut] = []
+    views: list[str] = []
+    volumes: list[str] = []
+    other_versions: list[UninstallImpactVersionOut] = []
+
+
+class UninstallImpactOut(BaseModel):
+    """``getUninstallImpact``: what uninstalling a version from a catalog
+    drops. ``has_data`` is ``unknown`` when anything that may hold data could
+    not be checked (a table, a volume, a schema in another catalog);
+    ``reasons`` says why in plain sentences. ``truncated`` when the check
+    stopped at its table cap or time budget, or could not list the schemas'
+    objects. ``installed_catalogs``: every catalog the version is installed
+    in now, latest install first; the impact is of ``catalog`` only, which
+    may be none of them (the uninstall then drops what it finds there)."""
+
+    version_id: str
+    catalog: str
+    schemas: list[UninstallImpactSchemaOut] = []
+    has_data: Literal["yes", "no", "unknown"] = "unknown"
+    truncated: bool = False
+    reasons: list[str] = []
+    installed_catalogs: list[str] = []
+
+
+# --- Out-of-band versions (made by agent runs the app did not launch) ---
+
+
+class OobVersionOut(BaseModel):
+    """One out-of-band version. ``refused_reason`` is set when the app will
+    not import it (an agent release the compatibility matrix rejects, a
+    registry row waiting for the agent's migration, a failed import)."""
+
+    version: int
+    scope: str
+    refused_reason: Optional[str] = None
+
+
+class OobBusinessOut(BaseModel):
+    """Out-of-band versions of one agent business segment. ``status``:
+    ``existing`` = one app business has this segment (``business_id``);
+    ``new`` = none has; ``ambiguous`` = several have
+    (``candidate_business_ids``), and import is refused for it."""
+
+    business_segment: str
+    status: Literal["existing", "new", "ambiguous"]
+    business_id: Optional[str] = None
+    candidate_business_ids: list[str] = []
+    versions: list[OobVersionOut] = []
+
+
+class OobSummaryOut(BaseModel):
+    """``getOobSummary``: the last cached check. ``checked_at`` None = never
+    checked; ``skipped_reason`` says why the last check did not run or
+    failed (``not_configured``, ``warehouse_not_running``, ``check_failed``);
+    ``checking`` is True while a check runs in the background."""
+
+    checked_at: Optional[datetime] = None
+    catalog: str = ""
+    skipped_reason: Optional[str] = None
+    businesses: list[OobBusinessOut] = []
+    checking: bool = False
+
+
+class OobImportOut(BaseModel):
+    """Result of an out-of-band import: versions imported and the businesses
+    created (new-businesses import only)."""
+
+    imported_versions: int = 0
+    created_business_ids: list[str] = []
+    warnings: list[str] = []
+
+
+# --- Link an imported version to its run ---
+
+
+class LinkRunIn(BaseModel):
+    databricks_run_id: int
+
+
+class LinkRunPreviewOut(BaseModel):
+    """``previewLinkRun``. ``tier`` 1 = matched on the session id in
+    ``_metamodel.business``, 2 = matched on output path and parameters; None
+    when not linkable. ``problems`` holds the reasons a link is refused."""
+
+    databricks_run_id: int
+    linkable: bool
+    tier: Optional[int] = None
+    intent: Optional[str] = None
+    evidence: list[str] = []
+    problems: list[str] = []
+
+
+# --- Orphan schemas ---
+
+
+class OrphanSchemaOut(BaseModel):
+    """A schema in the catalog that no installed version claims. ``match``:
+    ``exact`` when the name came from a version Lakebase knows, ``inferred``
+    when it was rebuilt from a registry name with the default prefixes.
+    Only schemas the app service principal owns and with no
+    ``blocked_reason`` are droppable; ``blocked_reason`` says why a schema
+    of a version the app did not make (or cannot tell) is left alone."""
+
+    name: str
+    owner: str = ""
+    owned_by_app: bool = False
+    match: Literal["exact", "inferred"] = "exact"
+    table_count: Optional[int] = None
+    blocked_reason: Optional[str] = None
+
+
+class OrphanSchemasOut(BaseModel):
+    """``listOrphanSchemas``. ``impact`` is what dropping the selected
+    schemas (or, with no selection, every droppable one) deletes, in the
+    uninstall-impact shape; ``confirm_subject`` is the subject
+    ``dropOrphanSchemas`` needs in ``confirmed_issues`` for that set when it
+    holds data or could not be checked, else None."""
+
+    catalog: str
+    schemas: list[OrphanSchemaOut] = []
+    impact: Optional[UninstallImpactOut] = None
+    confirm_subject: Optional[str] = None
+
+
+class DropOrphanSchemasIn(BaseModel):
+    """Body of ``dropOrphanSchemas``. ``confirmed_issues`` carries the confirm
+    subject the drop needs when a selected schema holds data or could not be
+    checked (same protocol as ``RunIn.confirmed_issues``)."""
+
+    catalog: str
+    schemas: list[str]
+    confirmed_issues: list[str] = []
+
+
+class OrphanSchemaDropOut(BaseModel):
+    """One schema of a drop: ``status`` ``dropped`` or ``failed`` (with a
+    sanitized ``error``), as recorded in ``run_schema_drops``."""
+
+    name: str
+    status: str
+    table_count: int = 0
+    error: Optional[str] = None
+
+
+class DropOrphanSchemasOut(BaseModel):
+    """``dropOrphanSchemas``: the audit run, each schema's outcome, and the
+    ``_metamodel`` cleanups of the registry versions whose schemas are all
+    gone (they also show in ``listMetamodelCleanups``)."""
+
+    run_id: str
+    catalog: str
+    schemas: list[OrphanSchemaDropOut] = []
+    metamodel_cleanup: MetamodelCleanupSummaryOut = Field(default_factory=MetamodelCleanupSummaryOut)

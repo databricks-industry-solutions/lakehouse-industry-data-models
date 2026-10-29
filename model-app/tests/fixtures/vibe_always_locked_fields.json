@@ -1,0 +1,17 @@
+{
+  "_comment": "BE/FE: the Advanced Options a vibe locks whether or not the base version sets them. BE: services/run_defaults.ALWAYS_LOCKED_FIELDS (tests/test_app/test_run_defaults.py). FE: the run-parameters help rows that say so and the help prose built from them (ui/__tests__/help-run-parameters.test.tsx).",
+  "fields": [
+    {
+      "field": "schema_suffix",
+      "label": "Schema Suffix"
+    },
+    {
+      "field": "tag_suffix",
+      "label": "Tag Suffix"
+    },
+    {
+      "field": "boolean_format",
+      "label": "Boolean Format"
+    }
+  ]
+}

@@ -3,10 +3,11 @@
  * `org_divisions` (saved by the Domain Taxonomy Builder or the edit page) seed
  * the FIRST New Base Model run - only when the business has no versions - and
  * open the Advanced Options disclosure so the values are visible. Without them
- * the form is unchanged (collapsed, org divisions auto-set from model scope).
+ * the form is unchanged (collapsed, org divisions on the form default).
  * URL params no longer pre-fill anything.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { warmImports } from "./helpers/warm-imports";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
@@ -30,6 +31,8 @@ vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
   return {
     ...actual,
+    // No base-model pre-fill: the form keeps its own values.
+    useGetRunDefaults: () => ({ data: undefined, isLoading: false, isError: false }),
     useGetBusinessSuspense: () => ({
       data: {
         id: "biz-1", name: "Ridgeline Energy", description: "Short summary.", business_vibes: "## Conformance clamp",
@@ -96,6 +99,8 @@ const orgTrigger = () =>
   // native <option> per preset, so a bare text match would pass for any value.
   screen.getAllByRole("combobox").find((el) => (el.textContent ?? "").includes("Operations"));
 
+warmImports(() => import("@/routes/_sidebar/businesses.$businessId.runs.new"));
+
 describe("runs.new pre-fill from the business", () => {
   it("pre-fills domain tags + org divisions and opens Advanced Options so they are visible", async () => {
     mocks.business = { business_domains: "customer, billing", org_divisions: "Operations, Business and Corporate" };
@@ -104,7 +109,7 @@ describe("runs.new pre-fill from the business", () => {
     await waitFor(() => expect(screen.getByText("customer")).toBeTruthy());
     expect(screen.getByText("billing")).toBeTruthy();
     expect(orgTrigger()?.textContent).toBe("Operations, Business and Corporate");
-    expect(screen.queryByText(/auto-set from model scope/i)).toBeNull();
+    expect(screen.queryByTestId("org-divisions-auto")).toBeNull();
   });
 
   it("seeds the domain chips in stored order", async () => {
@@ -121,15 +126,17 @@ describe("runs.new pre-fill from the business", () => {
     await waitFor(() => expect(screen.getByText(/advanced options/i)).toBeTruthy());
     expect(screen.queryByText("Organization Divisions")).toBeNull();
     fireEvent.click(screen.getByText(/advanced options/i));
-    expect(await screen.findByText(/auto-set from model scope/i)).toBeTruthy();
+    await waitFor(() => expect(orgTrigger()?.textContent).toBe("Operations"));
   });
 
-  it("without stored values the form keeps today's defaults (collapsed, auto-set divisions)", async () => {
+  it("without stored values the form keeps today's defaults (collapsed, default divisions)", async () => {
     await renderRunsNew({ operationType: "new base model" });
     await waitFor(() => expect(screen.getByText(/advanced options/i)).toBeTruthy());
     expect(screen.queryByText("Organization Divisions")).toBeNull();
     fireEvent.click(screen.getByText(/advanced options/i));
-    expect(await screen.findByText(/auto-set from model scope/i)).toBeTruthy();
+    await waitFor(() => expect(orgTrigger()?.textContent).toBe("Operations"));
+    // New Base Model always runs as the large model; its divisions do not follow a size.
+    expect(screen.queryByTestId("org-divisions-auto")).toBeNull();
   });
 
   it("does not pre-fill when the business already has versions", async () => {

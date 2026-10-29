@@ -20,10 +20,11 @@ const handoff = (over: Record<string, unknown> = {}) => ({
   domain_run_id: "r1", path: ROOT, created_at: null, created_by: "", folder_url: `https://ws/#workspace${ROOT}`,
   next_steps: [],
   prompts: [
-    { key: "continue", title: "Continue the assessment", skill: "domain-model-assessment", prompt: `continue prompt ${ROOT}` },
-    { key: "build", title: "Build", skill: "etl-development-framework", prompt: "build prompt" },
-    { key: "validate", title: "Validate", skill: "domain-model-validation", prompt: "validate prompt" },
-    { key: "document", title: "Document", skill: "domain-documentation", prompt: "document prompt" },
+    // The backend numbers the titles (handoff.build_prompts).
+    { key: "continue", title: "1. Continue the assessment", skill: "domain-model-assessment", prompt: `continue prompt ${ROOT}` },
+    { key: "build", title: "2. Build", skill: "etl-development-framework", prompt: "build prompt" },
+    { key: "validate", title: "3. Validate", skill: "domain-model-validation", prompt: "validate prompt" },
+    { key: "document", title: "4. Document", skill: "domain-documentation", prompt: "document prompt" },
   ],
   skills: [
     { name: "domain-model-assessment", state: "present" },
@@ -92,12 +93,17 @@ describe("HandoffPanel", () => {
 
   it("renders four prompt blocks in order, each copyable", async () => {
     mount();
-    const titles = ["Continue the assessment", "Build", "Validate", "Document"];
+    const titles = ["1. Continue the assessment", "2. Build", "3. Validate", "4. Document"];
     const buttons = titles.map((t) => screen.getByRole("button", { name: `Copy ${t}` }));
     expect(buttons).toHaveLength(4);
     const order = screen.getAllByText(/^\d\. /).map((n) => n.textContent);
-    expect(order[0]).toContain("Continue the assessment");
-    expect(order[3]).toContain("domain-documentation");
+    expect(order).toEqual([
+      "1. Continue the assessment (domain-model-assessment)",
+      "2. Build (etl-development-framework)",
+      "3. Validate (domain-model-validation)",
+      "4. Document (domain-documentation)",
+    ]);
+    expect(screen.queryByText(/\d\. \d\. /)).toBeNull();
     fireEvent.click(buttons[1]);
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith("build prompt"));
     expect(copyToast).toHaveBeenCalledWith("Copied to clipboard");
@@ -110,6 +116,19 @@ describe("HandoffPanel", () => {
     expect(within(li("domain-sync")).getByText("Missing")).toBeTruthy();
     expect(within(li("autonomous-validation")).getByText("Unknown")).toBeTruthy();
     expect(screen.getByText("Your user-level skills can't be checked by the app.")).toBeTruthy();
+  });
+
+  it("labels the folder input visibly and gives it a placeholder when there is no default path", () => {
+    api.useGetAssessmentHandoffSuspense.mockReturnValue({ data: handoff({ path: null }) });
+    mount();
+    const input = screen.getByLabelText("Workspace folder") as HTMLInputElement;
+    expect(input.value).toBe("");
+    expect(input.placeholder).toBe("/Workspace/Users/<your email>/vibe-assess");
+    expect(screen.getByText("Workspace folder").tagName).toBe("LABEL");
+    expect(screen.getByRole("button", { name: "Copy to workspace" })).toBeDisabled();
+    fireEvent.change(input, { target: { value: "/Workspace/Users/dana@example.com/x" } });
+    expect(input.value).toBe("/Workspace/Users/dana@example.com/x");
+    expect(screen.getByRole("button", { name: "Copy to workspace" })).toBeEnabled();
   });
 
   it("states that next vibes are not imported automatically", () => {

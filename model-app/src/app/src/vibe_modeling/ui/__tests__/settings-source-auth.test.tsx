@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense } from "react";
 
 import { SourceAuthConfigSection } from "@/routes/_sidebar/settings";
-import { firstRunFetcher } from "./helpers/first-run";
+import { EMPTY_SOURCE_AUTH_CONFIG, firstRunFetcher, jsonResponse } from "./helpers/first-run";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -38,24 +38,12 @@ function renderSection(qc: QueryClient) {
   );
 }
 
-const EMPTY_CONFIG = {
-  auth_mode: "",
-  github_app_id: "",
-  github_app_installation_id: "",
-  github_app_secret_scope: "",
-  github_app_secret_key: "",
-  token_secret_scope: "",
-  token_secret_key: "",
-  effective_mode: "anonymous",
-  error: null,
-};
-
 describe("SourceAuthConfigSection", () => {
   it("renders the card + doc link and shows the anonymous note when unconfigured", async () => {
     vi.stubGlobal(
       "fetch",
       firstRunFetcher({
-        "/api/config/source-auth": { status: 200, body: EMPTY_CONFIG },
+        "/api/config/source-auth": { status: 200, body: EMPTY_SOURCE_AUTH_CONFIG },
       }),
     );
     renderSection(makeClient());
@@ -76,7 +64,7 @@ describe("SourceAuthConfigSection", () => {
         "/api/config/source-auth": {
           status: 200,
           body: {
-            ...EMPTY_CONFIG,
+            ...EMPTY_SOURCE_AUTH_CONFIG,
             auth_mode: "github_app",
             github_app_id: "123456",
             github_app_installation_id: "99887766",
@@ -104,7 +92,7 @@ describe("SourceAuthConfigSection", () => {
         "/api/config/source-auth": {
           status: 200,
           body: {
-            ...EMPTY_CONFIG,
+            ...EMPTY_SOURCE_AUTH_CONFIG,
             auth_mode: "token",
             token_secret_scope: "sc",
             token_secret_key: "k",
@@ -134,17 +122,10 @@ describe("SourceAuthConfigSection", () => {
         "/api/config/source-auth": (url: string, init?: RequestInit) => {
           if (init && init.method === "PUT") {
             putSpy(url, init);
-            return Promise.resolve({
-              ok: true,
-              status: 200,
-              json: async () => ({}),
-            });
+            return Promise.resolve(jsonResponse(200, {}));
           }
-          return Promise.resolve({
-            ok: true,
-            status: 200,
-            json: async () => ({
-              ...EMPTY_CONFIG,
+          return Promise.resolve(jsonResponse(200, {
+              ...EMPTY_SOURCE_AUTH_CONFIG,
               auth_mode: "github_app",
               github_app_id: "123456",
               github_app_installation_id: "99887766",
@@ -153,8 +134,7 @@ describe("SourceAuthConfigSection", () => {
               token_secret_scope: "tok-scope",
               token_secret_key: "tok-key",
               effective_mode: "github_app",
-            }),
-          });
+            }));
         },
       }),
     );

@@ -4,6 +4,7 @@ from __future__ import annotations
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors.base import DatabricksError
 
+from ..core._uc_privileges import covers, effective_privileges
 from ..db_models import AssessConfig, Domain, ModelVersion
 from ..services.metamodel_setup import METAMODEL_SCHEMA
 from .config_service import assess_ready
@@ -11,7 +12,7 @@ from .reader_sp import find_reader_sp, reader_not_found_message
 from .constants import ADMIN_HELP, RUNS_VOLUME
 from .metamodel import resolve_metamodel_location
 from .schemas import Check, DomainReadiness, ReadinessOut, SourceIn
-from .uc_privileges import effective_privileges
+from ..services.schema_names import domain_schema_name
 
 _READ = {"USE_SCHEMA", "SELECT"}
 _WH_OK = {"CAN_USE", "CAN_MANAGE", "IS_OWNER"}
@@ -24,7 +25,7 @@ def _v(x) -> str:
 def _has(privs: set[str] | None, needed: set[str]) -> str:
     if privs is None:
         return "unverified"
-    return "ok" if "ALL_PRIVILEGES" in privs or needed <= privs else "blocked"
+    return "ok" if covers(privs, needed) else "blocked"
 
 
 def warehouse_state(ws: WorkspaceClient, warehouse_id: str, reader: str, sp) -> str:
@@ -109,7 +110,7 @@ def evaluate_readiness(session, ws: WorkspaceClient, cfg: AssessConfig, *, deplo
 
     out: list[DomainReadiness] = []
     for d, sources in domains:
-        phys = d.database_name or d.name
+        phys = domain_schema_name(d.database_name, d.name)
         mm = resolve_metamodel_location(ws, version.uc_catalog, phys)
         checks = [Check(key="metamodel", label="Metamodel", state="ok" if mm else "blocked",
                         detail=(mm.fqn + (f" ({mm.prefix}*)" if mm.prefix else "")) if mm

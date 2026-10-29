@@ -66,6 +66,12 @@ describe("EntryPoints: Domain Taxonomy Builder card", () => {
     expect(grid().className.split(/\s+/)).toEqual(expect.arrayContaining(["sm:grid-cols-2", "lg:grid-cols-4"]));
   });
 
+  it("names no model vendor: the drafter is whichever model service is configured", async () => {
+    await renderEntryPoints();
+    expect(card()?.textContent).toContain("The model drafts it, you shape it");
+    expect(card()?.textContent).not.toMatch(/claude/i);
+  });
+
   it.each([
     ["loading", { data: undefined }],
     ["error", { data: undefined, error: new Error("boom") }],

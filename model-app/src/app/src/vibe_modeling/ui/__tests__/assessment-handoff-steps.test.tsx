@@ -137,7 +137,7 @@ describe("HandoffPanel next steps + skill install", () => {
 
   it("shows the copyable admin-help block when install-skills answers admin_help", async () => {
     api.installAssessmentSkills.mockRejectedValue(
-      new ApiError(502, "Bad Gateway", {
+      new ApiError(409, "Conflict", {
         detail: {
           error: "admin_help", message: "Couldn't install skills: PERMISSION_DENIED",
           job_url: "https://ws/jobs/7", run_url: "https://ws/jobs/7/runs/9", job_reader: "reader-app-id",

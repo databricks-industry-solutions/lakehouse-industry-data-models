@@ -10,6 +10,7 @@ import { diagramColors } from "@/components/diagram/diagram-colors";
 import { DomainSelect } from "@/components/diagram/domain-select";
 import { ProductTypeLegend } from "@/components/diagram/product-type-legend";
 import { getDomainDetail, getModelSummary } from "@/lib/api";
+import { liveDomainOptions, type DomainOption } from "@/lib/domain-options";
 
 interface GraphNode {
   id: string;
@@ -78,7 +79,7 @@ async function fetchModelSummary(
   product_count: number;
   attribute_count: number;
   fk_count: number;
-  domains: Array<{ name: string; product_count: number }>;
+  domains: Array<{ name: string; product_count: number; division?: string | null; change_status?: string | null }>;
 }> {
   const resp = await getModelSummary({
     business_id: businessId,
@@ -91,7 +92,7 @@ async function fetchModelSummary(
     product_count: number;
     attribute_count: number;
     fk_count: number;
-    domains: Array<{ name: string; product_count: number }>;
+    domains: Array<{ name: string; product_count: number; division?: string | null; change_status?: string | null }>;
   };
 }
 
@@ -100,11 +101,20 @@ export function OntologyGraph({
   version,
   scope,
   domainFilter,
+  onDomainChange,
+  onDomainPick,
 }: {
   businessId: string;
   version: string;
   scope: string;
   domainFilter?: string;
+  /** Reports the domain the graph shows (null for every domain), so the
+   *  page's Add-feedback can capture it. */
+  onDomainChange?: (domain: string | null) => void;
+  /** When set, the host owns the domain dropdown: it shows `domainFilter`
+   *  and a pick calls this (the domain page opens the picked domain's page)
+   *  instead of filtering in place. */
+  onDomainPick?: (domain: string | null) => void;
 }) {
   const { data: summary } = useSuspenseQuery({
     queryKey: ["ontology-summary", businessId, version, scope],
@@ -135,7 +145,10 @@ export function OntologyGraph({
         attribute_count: summary.attribute_count,
         fk_count: summary.fk_count ?? 0,
       }}
+      domainOptions={liveDomainOptions(summary.domains)}
       domainFilter={domainFilter}
+      onDomainChange={onDomainChange}
+      onDomainPick={onDomainPick}
     />
   );
 }
@@ -144,9 +157,15 @@ function OntologyGraphInner({
   domains,
   businessName,
   stats,
+  domainOptions,
   domainFilter,
+  onDomainChange,
+  onDomainPick,
 }: {
   domains: DomainInfo[];
+  /** The domain dropdown's options: the model's live domains, in the same
+   *  order and set as every other domain dropdown. */
+  domainOptions: DomainOption[];
   businessName: string;
   stats: {
     domain_count: number;
@@ -155,10 +174,18 @@ function OntologyGraphInner({
     fk_count: number;
   };
   domainFilter?: string;
+  onDomainChange?: (domain: string | null) => void;
+  onDomainPick?: (domain: string | null) => void;
 }) {
   const [view, setView] = useState<"network" | "circular" | "concentric" | "sunburst">("network");
   const [hoveredNode, setHoveredNode] = useState<string | null>(null);
-  const [networkFilter, setNetworkFilter] = useState<string | null>(domainFilter ?? null);
+  const [localFilter, setLocalFilter] = useState<string | null>(domainFilter ?? null);
+  // The chosen domain (null = every domain) scopes every layout.
+  const chosenDomain = onDomainPick ? (domainFilter ?? null) : localFilter;
+  const setChosenDomain = onDomainPick ?? setLocalFilter;
+  useEffect(() => {
+    onDomainChange?.(chosenDomain);
+  }, [chosenDomain, onDomainChange]);
   const [hoveredSlice, setHoveredSlice] = useState<string | null>(null);
   const [expandedDomain, setExpandedDomain] = useState<string | null>(null);
   const [hideCrossDomain, setHideCrossDomain] = useState(false);
@@ -295,6 +322,38 @@ function OntologyGraphInner({
     return adj;
   }, [visibleEdges]);
 
+  // What every layout draws for the chosen domain: its tables, the FKs that
+  // touch them and, unless cross-domain edges are hidden, the tables on the
+  // other end. The Sunburst (a size hierarchy, no edges) shows the domain's
+  // own tables; the center labels count the chosen domain.
+  const scoped = useMemo(() => {
+    if (!chosenDomain) return { nodes, edges: visibleEdges, hierarchy, stats };
+    const scopedNodes = nodes.filter((n) => n.domain === chosenDomain);
+    const ids = new Set(scopedNodes.map((n) => n.id));
+    const scopedEdges = visibleEdges.filter((e) => ids.has(e.source) || ids.has(e.target));
+    if (!hideCrossDomain) {
+      scopedEdges.forEach((e) => {
+        [e.source, e.target].forEach((id) => {
+          if (!ids.has(id) && nodeMap[id]) {
+            scopedNodes.push(nodeMap[id]);
+            ids.add(id);
+          }
+        });
+      });
+    }
+    const scopedHierarchy = hierarchy.filter((d) => d.domain === chosenDomain);
+    return {
+      nodes: scopedNodes,
+      edges: scopedEdges,
+      hierarchy: scopedHierarchy,
+      stats: {
+        ...stats,
+        domain_count: scopedHierarchy.length,
+        product_count: scopedHierarchy.reduce((n, d) => n + d.product_count, 0),
+      },
+    };
+  }, [chosenDomain, nodes, nodeMap, visibleEdges, hierarchy, hideCrossDomain, stats]);
+
   const isConn = (id: string) =>
     !hoveredNode || id === hoveredNode || adjacency[hoveredNode]?.has(id);
   const nodeR = (n: GraphNode) => Math.max(6, 4 + n.fkCount * 0.7);
@@ -312,7 +371,7 @@ function OntologyGraphInner({
       className={`space-y-3 mt-4 ${isFullscreen ? "bg-background p-4" : ""}`}
       style={isFullscreen ? { height: "100vh", overflow: "auto" } : undefined}
     >
-      {!domainFilter && (
+      {!chosenDomain && (
         <p className="text-xs text-muted-foreground">
           {stats.domain_count} domains, {stats.product_count} tables,{" "}
           {stats.attribute_count.toLocaleString()} columns,{" "}
@@ -333,6 +392,13 @@ function OntologyGraphInner({
       )}
 
       <div className="flex items-center gap-2 flex-wrap">
+        <DomainSelect
+          domains={domainOptions}
+          value={chosenDomain}
+          onChange={setChosenDomain}
+          portalContainer={isFullscreen ? containerRef.current : null}
+        />
+        <div className="h-5 w-px bg-border mx-1" />
         {views.map(({ key, label }) => (
           <Button
             key={key}
@@ -377,26 +443,22 @@ function OntologyGraphInner({
 
       {view === "network" && (
         <NetworkView
-          nodes={nodes}
+          nodes={scoped.nodes}
           nodeMap={nodeMap}
-          edges={visibleEdges}
+          edges={scoped.edges}
           hoveredNode={hoveredNode}
           setHoveredNode={setHoveredNode}
-          networkFilter={networkFilter}
-          setNetworkFilter={setNetworkFilter}
-          hideCrossDomain={hideCrossDomain}
           isConn={isConn}
           nodeR={nodeR}
           dc={dc}
           divisionMap={divisionMap}
-          hideDomainFilter={!!domainFilter}
         />
       )}
       {view === "circular" && (
         <CircularView
-          nodes={nodes}
+          nodes={scoped.nodes}
           nodeMap={nodeMap}
-          edges={visibleEdges}
+          edges={scoped.edges}
           hoveredNode={hoveredNode}
           setHoveredNode={setHoveredNode}
           isConn={isConn}
@@ -404,14 +466,14 @@ function OntologyGraphInner({
           dc={dc}
           divisionMap={divisionMap}
           businessName={businessName}
-          stats={stats}
+          stats={scoped.stats}
         />
       )}
       {view === "concentric" && (
         <ConcentricView
-          nodes={nodes}
+          nodes={scoped.nodes}
           nodeMap={nodeMap}
-          edges={visibleEdges}
+          edges={scoped.edges}
           hoveredNode={hoveredNode}
           setHoveredNode={setHoveredNode}
           isConn={isConn}
@@ -419,13 +481,13 @@ function OntologyGraphInner({
           dc={dc}
           divisionMap={divisionMap}
           businessName={businessName}
-          stats={stats}
+          stats={scoped.stats}
         />
       )}
       {view === "sunburst" && (
         <SunburstView
-          hierarchy={hierarchy}
-          stats={stats}
+          hierarchy={scoped.hierarchy}
+          stats={scoped.stats}
           businessName={businessName}
           dc={dc}
           hoveredSlice={hoveredSlice}
@@ -568,47 +630,24 @@ function ZoomPanSvg({
 // --- Network Layout ---
 
 function NetworkView({
-  nodes, nodeMap, edges, hoveredNode, setHoveredNode,
-  networkFilter, setNetworkFilter, hideCrossDomain, isConn, nodeR, dc,
-  divisionMap, hideDomainFilter,
+  nodes, nodeMap, edges, hoveredNode, setHoveredNode, isConn, nodeR, dc,
+  divisionMap,
 }: {
   nodes: GraphNode[];
   nodeMap: Record<string, GraphNode>;
   edges: GraphEdge[];
   hoveredNode: string | null;
   setHoveredNode: (id: string | null) => void;
-  networkFilter: string | null;
-  setNetworkFilter: (d: string | null) => void;
-  hideCrossDomain: boolean;
   isConn: (id: string) => boolean;
   nodeR: (n: GraphNode) => number;
   dc: (name: string) => string;
   divisionMap: Record<string, string>;
-  hideDomainFilter?: boolean;
 }) {
   const palette = diagramColors();
+  // Writes each node's x/y in place; returns the domain order.
   const layout = useMemo(() => {
-    const fNodes = networkFilter
-      ? [...nodes.filter((n) => n.domain === networkFilter)]
-      : [...nodes];
-    const fIds = new Set(fNodes.map((n) => n.id));
-    const fEdges = networkFilter
-      ? edges.filter((e) => fIds.has(e.source) || fIds.has(e.target))
-      : edges;
-
-    if (networkFilter && !hideCrossDomain) {
-      fEdges.forEach((e) => {
-        [e.source, e.target].forEach((id) => {
-          if (!fIds.has(id) && nodeMap[id]) {
-            fNodes.push(nodeMap[id]);
-            fIds.add(id);
-          }
-        });
-      });
-    }
-
     const W = 1800, H = 1400, cx = W / 2, cy = H / 2;
-    const domainNames = [...new Set(fNodes.map((n) => n.domain))];
+    const domainNames = [...new Set(nodes.map((n) => n.domain))];
     const clusterR = Math.min(W, H) * 0.35;
     const dCenters: Record<string, { x: number; y: number }> = {};
 
@@ -618,7 +657,7 @@ function NetworkView({
     });
 
     domainNames.forEach((dn) => {
-      const dns = fNodes.filter((n) => n.domain === dn);
+      const dns = nodes.filter((n) => n.domain === dn);
       const c = dCenters[dn];
       const cols = Math.ceil(Math.sqrt(dns.length));
       dns.forEach((n, i) => {
@@ -629,9 +668,9 @@ function NetworkView({
 
     // Simple repulsion
     for (let it = 0; it < 25; it++) {
-      for (let i = 0; i < fNodes.length; i++) {
-        for (let j = i + 1; j < fNodes.length; j++) {
-          const a = fNodes[i], b = fNodes[j];
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const a = nodes[i], b = nodes[j];
           const dx = b.x - a.x, dy = b.y - a.y;
           const d = Math.sqrt(dx * dx + dy * dy) || 1;
           if (d < 50) {
@@ -645,30 +684,18 @@ function NetworkView({
       }
     }
 
-    return { fNodes, fEdges, domainNames };
-  }, [nodes, nodeMap, edges, networkFilter, hideCrossDomain]);
-
-  const allDomains = useMemo(
-    () => [...new Set(nodes.map((n) => n.domain))].sort().map((name) => ({ name })),
-    [nodes],
-  );
+    return { domainNames };
+  }, [nodes]);
 
   return (
     <div>
-      {!hideDomainFilter && (
-        <div className="flex items-center gap-3 mb-3 flex-wrap">
-          <DomainSelect
-            domains={allDomains}
-            value={networkFilter}
-            onChange={setNetworkFilter}
-          />
-          <ProductTypeLegend />
-        </div>
-      )}
+      <div className="flex items-center gap-3 mb-3 flex-wrap">
+        <ProductTypeLegend />
+      </div>
       <ZoomPanSvg>
         {/* Domain background rects */}
         {layout.domainNames.map((dn) => {
-          const dns = layout.fNodes.filter((n) => n.domain === dn);
+          const dns = nodes.filter((n) => n.domain === dn);
           if (!dns.length) return null;
           const mnX = Math.min(...dns.map((n) => n.x)) - 35;
           const mnY = Math.min(...dns.map((n) => n.y)) - 35;
@@ -686,7 +713,7 @@ function NetworkView({
           );
         })}
         {/* Edges */}
-        {layout.fEdges.map((e, i) => {
+        {edges.map((e, i) => {
           const s = nodeMap[e.source], t = nodeMap[e.target];
           if (!s || !t) return null;
           const hl = hoveredNode && (e.source === hoveredNode || e.target === hoveredNode);
@@ -704,7 +731,7 @@ function NetworkView({
           );
         })}
         {/* Nodes */}
-        {layout.fNodes.map((n) => {
+        {nodes.map((n) => {
           const r = nodeR(n);
           const color = getProductTypeColors(n.productType).hex;
           const conn = isConn(n.id), isH = hoveredNode === n.id;
@@ -890,7 +917,7 @@ function ConcentricView({
   dc: (name: string) => string;
   divisionMap: Record<string, string>;
   businessName: string;
-  stats: { domain_count?: number; product_count: number };
+  stats: { domain_count: number; product_count: number };
 }) {
   const palette = diagramColors();
   const { sortedDomains } = useMemo(() => {
@@ -971,7 +998,7 @@ function ConcentricView({
       })}
       <text x={cx} y={cy - 8} textAnchor="middle" fontSize={14} className="fill-muted-foreground" fontWeight={700}>{businessName}</text>
       <text x={cx} y={cy + 10} textAnchor="middle" fontSize={10} className="fill-muted-foreground">
-        {sortedDomains.length} domains, {stats.product_count} tables
+        {stats.domain_count} domains, {stats.product_count} tables
       </text>
     </ZoomPanSvg>
   );

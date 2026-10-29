@@ -132,3 +132,42 @@ describe("DiagramViewer - onDomainNavigate (items 3A/3B, 0.6.6)", () => {
     expect(screen.queryByText("All domains")).not.toBeInTheDocument();
   });
 });
+
+describe("DiagramViewer - domain dropdown when the layout fails", () => {
+  function mockFailingFetch() {
+    (globalThis as any).fetch = vi.fn(() => Promise.reject(new Error("layout failed")));
+  }
+
+  it("still offers the domain dropdown on the error card, and it navigates", async () => {
+    mockFailingFetch();
+    const onDomainNavigate = vi.fn();
+    render(
+      <DiagramViewer
+        businessId="biz-1"
+        version="1"
+        scope="ecm"
+        domains={domains}
+        onDomainNavigate={onDomainNavigate}
+      />,
+    );
+    expect(await screen.findByText("Failed to load diagram")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    await openDomainSelectAndPick("A");
+    expect(onDomainNavigate).toHaveBeenCalledWith("A");
+  });
+
+  it("keeps the dropdown hidden on the error card when showDomainSelect is false", async () => {
+    mockFailingFetch();
+    render(
+      <DiagramViewer
+        businessId="biz-1"
+        version="1"
+        scope="ecm"
+        domains={domains}
+        showDomainSelect={false}
+      />,
+    );
+    expect(await screen.findByText("Failed to load diagram")).toBeInTheDocument();
+    expect(screen.queryAllByRole("combobox")).toHaveLength(0);
+  });
+});

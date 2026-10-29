@@ -37,8 +37,13 @@ scripts/smoke/.receipts/
 # Local Python version (pyenv); project uses Databricks runtime
 .python-version
 
-# uv lockfile (project uses pyenv, not uv)
+# uv lockfile: not committed yet. A stale local one changes what `uv sync` and
+# `apx build` install; delete it if a build resolves unexpected versions.
 uv.lock
+
+# Agent and tool session files (local only)
+SESSION_HANDOFF.md
+.isaac/
 
 # Local Serena / MCP dev config (per-machine, never shared)
 .mcp.json

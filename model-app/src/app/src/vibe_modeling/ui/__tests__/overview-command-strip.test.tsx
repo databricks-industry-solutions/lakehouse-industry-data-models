@@ -1,13 +1,12 @@
 /**
- * Command-strip tests — the compact row that replaces the old "Actions on …"
- * and "Runs for this version" cards. Covers the lifecycle-action logic that
- * moved out of ActionsCard (enable/disable by deployment status, deferred
- * createRun behind the confirm dialog) plus the new run-status summary that
- * replaces the runs card.
+ * Command-strip tests: the install action named for the version's state
+ * (design §1 UI), Uninstall only when installed, Generate samples gone (X18),
+ * both open the version operation dialog without starting a run, the
+ * "Prepare new Vibe" entry, and the run-status summary.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { toast } from "sonner";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, screen } from "@testing-library/react";
+import type { ModelVersionOut } from "@/lib/api";
 
 let runsData: unknown[] = [];
 
@@ -21,157 +20,84 @@ vi.mock("@/lib/api", async () => {
   };
 });
 
-vi.mock("sonner", async () => {
-  const actual = await vi.importActual<typeof import("sonner")>("sonner");
-  return {
-    ...actual,
-    toast: { ...actual.toast, warning: vi.fn() },
-  };
-});
+vi.mock("@/components/runs/version-operation-dialog", () => ({
+  VersionOperationDialog: ({ intent }: { intent: string }) => (
+    <div data-testid={`stub-${intent}-dialog`} />
+  ),
+}));
 
 import { createRun } from "@/lib/api";
 import { CommandStrip } from "@/components/overview/command-strip";
 import { renderWithRouter } from "./helpers/router-wrapper";
+import { makeModelVersion } from "./helpers/model-version";
 
-const mockedCreateRun = vi.mocked(createRun);
-
-function renderStrip(deploymentStatus: string, scope = "mvm") {
+function renderStrip(over: Partial<ModelVersionOut> = {}) {
+  const version = makeModelVersion({ id: "v-abc", version: 3, ...over });
   return renderWithRouter(
-    <CommandStrip
-      businessId="b1"
-      versionId="v-abc"
-      versionNum={3}
-      scope={scope}
-      deploymentStatus={deploymentStatus}
-    />,
+    <CommandStrip businessId="b1" version={version} versions={[version]} />,
   );
 }
 
 describe("CommandStrip — lifecycle actions", () => {
   beforeEach(() => {
-    mockedCreateRun.mockReset();
-    vi.mocked(toast.warning).mockClear();
+    vi.mocked(createRun).mockReset();
     runsData = [];
   });
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
 
-  it("replaces the Actions + Runs cards with one strip", async () => {
-    renderStrip("draft");
+  it("renders one strip", async () => {
+    renderStrip();
     expect(await screen.findByTestId("overview-command-strip")).toBeInTheDocument();
   });
 
-  it("enables Install but disables Uninstall + Generate samples on a draft version", async () => {
-    renderStrip("draft");
-    const install = await screen.findByRole("button", { name: /^Install$/ });
-    expect(install).not.toBeDisabled();
-    expect(screen.getByRole("button", { name: /^Uninstall$/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Generate samples/ })).toBeDisabled();
+  it.each([
+    [{ status: "draft", dry_run: true, draft_state: "ready", is_head: false }, "Install this Dry Run"],
+    [{ status: "completed" }, "Install"],
+    [{ status: "completed", deployment_status: "deployed", uc_catalog: "cat_a" }, "Re-install"],
+    [{ status: "superseded", is_head: false }, "Make this version current"],
+    [{ status: "superseded", replaced_at: "2026-10-21T00:00:00Z", is_head: false }, "Make this version current"],
+  ] as [Partial<ModelVersionOut>, string][])("labels the install action (%j -> %s)", async (over, label) => {
+    renderStrip(over);
+    expect(await screen.findByTestId("install-version")).toHaveTextContent(label);
   });
 
-  it("enables all three actions once the version is deployed", async () => {
-    renderStrip("deployed");
-    expect(
-      await screen.findByRole("button", { name: /Re-install/ }),
-    ).not.toBeDisabled();
-    expect(screen.getByRole("button", { name: /^Uninstall$/ })).not.toBeDisabled();
-    expect(
-      screen.getByRole("button", { name: /Generate samples/ }),
-    ).not.toBeDisabled();
+  it("offers no install for a failed version", async () => {
+    renderStrip({ status: "failed" });
+    await screen.findByTestId("overview-command-strip");
+    expect(screen.queryByTestId("install-version")).toBeNull();
   });
 
-  it("defers createRun until the confirm dialog's Launch is clicked", async () => {
-    mockedCreateRun.mockResolvedValueOnce({
-      data: { id: "run-42" },
-    } as Awaited<ReturnType<typeof createRun>>);
-    renderStrip("draft");
-
-    const install = await screen.findByRole("button", { name: /^Install$/ });
-    await act(async () => {
-      fireEvent.click(install);
-    });
-    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
-    expect(mockedCreateRun).not.toHaveBeenCalled();
-
-    const launch = await screen.findByRole("button", { name: /^Launch$/ });
-    await act(async () => {
-      fireEvent.click(launch);
-    });
-    await waitFor(() => expect(mockedCreateRun).toHaveBeenCalledTimes(1));
-    expect(mockedCreateRun).toHaveBeenCalledWith(
-      { business_id: "b1" },
-      { intent: "install", version_id: "v-abc" },
-    );
+  it("enables Uninstall only when installed", async () => {
+    const { unmount } = renderStrip();
+    expect(await screen.findByTestId("uninstall-version")).toBeDisabled();
+    unmount();
+    renderStrip({ deployment_status: "deployed", uc_catalog: "cat_a" });
+    expect(await screen.findByTestId("uninstall-version")).not.toBeDisabled();
   });
 
-  it("surfaces a create-run warning (e.g. re-install clash) as a toast", async () => {
-    mockedCreateRun.mockResolvedValueOnce({
-      data: {
-        id: "run-43",
-        warnings: [
-          {
-            field_path: "version_id",
-            message:
-              "This version is already recorded as deployed to test_catalog; " +
-              "re-installing without uninstalling first will fail the agent's clash check.",
-            severity: "warning",
-          },
-        ],
-      },
-    } as unknown as Awaited<ReturnType<typeof createRun>>);
-    renderStrip("deployed");
-
-    const install = await screen.findByRole("button", { name: /Re-install/ });
-    await act(async () => {
-      fireEvent.click(install);
-    });
-    const launch = await screen.findByRole("button", { name: /^Launch$/ });
-    await act(async () => {
-      fireEvent.click(launch);
-    });
-
-    await waitFor(() =>
-      expect(toast.warning).toHaveBeenCalledWith(
-        "This version is already recorded as deployed to test_catalog; " +
-          "re-installing without uninstalling first will fail the agent's clash check.",
-      ),
-    );
+  it("no longer offers Generate samples (X18)", async () => {
+    renderStrip({ deployment_status: "deployed", uc_catalog: "cat_a" });
+    await screen.findByTestId("overview-command-strip");
+    expect(screen.queryByRole("button", { name: /Generate samples/ })).toBeNull();
   });
 
-  it("does not toast when the create-run response has no warnings", async () => {
-    mockedCreateRun.mockResolvedValueOnce({
-      data: { id: "run-44", warnings: [] },
-    } as unknown as Awaited<ReturnType<typeof createRun>>);
-    renderStrip("draft");
-
-    const install = await screen.findByRole("button", { name: /^Install$/ });
+  it("opens the install and uninstall dialogs without starting a run", async () => {
+    renderStrip({ deployment_status: "deployed", uc_catalog: "cat_a" });
     await act(async () => {
-      fireEvent.click(install);
+      fireEvent.click(await screen.findByTestId("install-version"));
     });
-    const launch = await screen.findByRole("button", { name: /^Launch$/ });
-    await act(async () => {
-      fireEvent.click(launch);
-    });
-
-    await waitFor(() => expect(mockedCreateRun).toHaveBeenCalledTimes(1));
-    expect(toast.warning).not.toHaveBeenCalled();
+    expect(screen.getByTestId("stub-install-dialog")).toBeInTheDocument();
+    expect(createRun).not.toHaveBeenCalled();
   });
 
   it("shows 'Prepare new Vibe' on both ECM and MVM scopes", async () => {
-    const { unmount } = renderStrip("draft", "ecm");
-    const ecmButton = await screen.findByTestId("prepare-new-vibe");
-    expect(ecmButton).toBeInTheDocument();
-    expect(ecmButton.closest("a")).toHaveAttribute(
+    const { unmount } = renderStrip({ scope: "ecm" });
+    expect((await screen.findByTestId("prepare-new-vibe")).closest("a")).toHaveAttribute(
       "href",
       expect.stringContaining("/ecm/inputs"),
     );
     unmount();
-
-    renderStrip("draft", "mvm");
-    const mvmButton = await screen.findByTestId("prepare-new-vibe");
-    expect(mvmButton).toBeInTheDocument();
-    expect(mvmButton.closest("a")).toHaveAttribute(
+    renderStrip({ scope: "mvm" });
+    expect((await screen.findByTestId("prepare-new-vibe")).closest("a")).toHaveAttribute(
       "href",
       expect.stringContaining("/mvm/inputs"),
     );
@@ -184,8 +110,7 @@ describe("CommandStrip — run status summary", () => {
   });
 
   it("shows 'No runs yet' with no runs", async () => {
-    runsData = [];
-    renderStrip("draft");
+    renderStrip();
     expect(await screen.findByText(/No runs yet/)).toBeInTheDocument();
   });
 
@@ -194,13 +119,12 @@ describe("CommandStrip — run status summary", () => {
       { id: "r2", business_id: "b1", status: "completed", created_at: new Date().toISOString() },
       { id: "r1", business_id: "b1", status: "completed", created_at: new Date().toISOString() },
     ];
-    renderStrip("draft");
+    renderStrip();
     expect(await screen.findByText("2")).toBeInTheDocument();
-    expect(screen.getByText(/runs/)).toBeInTheDocument();
   });
 
   it("shows the Installed badge only when deployed", async () => {
-    renderStrip("deployed");
+    renderStrip({ deployment_status: "deployed", uc_catalog: "cat_a" });
     expect(await screen.findByText("Installed")).toBeInTheDocument();
   });
 });

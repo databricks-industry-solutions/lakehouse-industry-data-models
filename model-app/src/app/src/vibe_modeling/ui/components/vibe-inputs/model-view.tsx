@@ -1,5 +1,6 @@
 import { Suspense, useCallback, useState, type ReactNode } from "react";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tabs, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { ToolbarActions, ToolbarTabsList } from "@/components/model/toolbar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { useListVibeInputsSuspense } from "@/lib/api";
@@ -14,6 +15,7 @@ import {
   BarChart2,
 } from "lucide-react";
 import { DiagramViewer } from "@/components/diagram/diagram-viewer";
+import { TabDomainSelect } from "@/components/diagram/domain-select";
 import type { ColumnDisplayMode } from "@/components/diagram/types";
 import { RelationshipAnalysis } from "@/components/explorer/relationship-analysis";
 import { OntologyGraph } from "@/components/explorer/ontology-graph";
@@ -62,14 +64,19 @@ export interface ModelViewProps {
   value?: ModelViewTab;
   /** Called when the active tab changes. */
   onTabChange?: (tab: ModelViewTab) => void;
-  /** Pre-focus the diagram on this anchor's domain leaf. */
-  focusAnchor?: ModelViewFocusAnchor;
+  /** The one domain the diagram draws (its single-domain layout, in place):
+   *  an input review's focus-anchor domain, else the domain picked in the
+   *  Diagram tab's own dropdown. Undefined draws all domains. */
+  diagramDomain?: string;
+  /** Model route: the Overview tab's domain dropdown opens the picked
+   *  domain's page (Products tab). Omit it and the Overview shows none. */
+  onOpenDomain?: (domain: string) => void;
   /** When provided, the diagram's domain selection navigates via this
    *  callback instead of the viewer's own internal state (item 3A). Omit to
    *  keep DiagramViewer's internal-state behavior unchanged. */
   onDomainNavigate?: (domain: string | null) => void;
-  /** Hide the diagram toolbar's own domain dropdown, e.g. when a host
-   *  renders an equivalent picker elsewhere (item 3). Defaults to true. */
+  /** Hide the diagram toolbar's own domain dropdown on surfaces that only
+   *  follow a focused input. Defaults to true. */
   showDomainSelect?: boolean;
   /** Seeds the diagram's initial column-display mode from the caller's
    *  resolved per-user preference (Settings > Diagram, item 4). Omit to
@@ -88,17 +95,26 @@ export interface ModelViewProps {
   columnModePending?: boolean;
   /** Bubbles the diagram's node/edge selection (feedback scoping). */
   onSelectionChange?: (sel: { nodeId: string | null; edgeId: string | null }) => void;
+  /** Bubbles the Ontology tab's domain filter (feedback scoping). */
+  onOntologyDomainChange?: (domain: string | null) => void;
+  /** Model route: the Ontology dropdown is host-owned. It shows
+   *  `ontologyDomain` (the picked `?domain=`, shared with the Diagram) and a
+   *  pick calls this. Omit both and the Ontology filters locally. */
+  ontologyDomain?: string;
+  onOntologyDomainPick?: (domain: string | null) => void;
   /** Overview tab body. Only consulted when "overview" is in `tabs`. */
   overviewSlot?: ReactNode;
   /** Statistics tab body. Only consulted when "statistics" is in `tabs`.
    *  Supplied by the model route (the tab owns its own scope tree + report
    *  pane, so it lives outside the shared visualization tabs). */
   statisticsSlot?: ReactNode;
-  /** Rendered between the tab list and the tab content (model route title +
-   *  actions live here so the page chrome stays put). */
+  /** Rendered in its own row above the tab list (the model route's title,
+   *  badges and search); it owns its own wrapping. Domain selection is
+   *  per tab and never goes here. */
   headerSlot?: ReactNode;
-  /** Rendered as the right-aligned cluster in the tab bar (e.g. focus scope
-   *  label on card-details). Suppressed while the diagram tab is active -
+  /** Rendered as the right-aligned cluster beside the tab list, wrapping onto
+   *  its own line when the tabs leave no room (e.g. focus scope label on
+   *  card-details). Suppressed while the diagram tab is active -
    *  the diagram toolbar's feedbackSlot is the single home for feedback
    *  there (item 5B); reappears on every other tab. */
   tabBarTrailing?: ReactNode;
@@ -128,7 +144,7 @@ const TAB_META: Record<ModelViewTab, { label: string; icon: ReactNode }> = {
  * both that route and the Vibe-Input card-details page mount ONE diagram host,
  * not two (drift-unification).
  *
- * The diagram is scoped via `focusAnchor.domain` → `DiagramViewer.initialDomain`;
+ * The diagram is scoped via `diagramDomain` → `DiagramViewer.initialDomain`;
  * it never renders all-domains from card-details (ELK perf constraint).
  */
 export function ModelView({
@@ -140,12 +156,16 @@ export function ModelView({
   defaultTab,
   value,
   onTabChange,
-  focusAnchor,
+  diagramDomain,
+  onOpenDomain,
   onDomainNavigate,
   showDomainSelect,
   initialColumnMode,
   columnModePending = false,
   onSelectionChange,
+  onOntologyDomainChange,
+  ontologyDomain,
+  onOntologyDomainPick,
   overviewSlot,
   statisticsSlot,
   headerSlot,
@@ -169,10 +189,10 @@ export function ModelView({
 
   return (
     <Tabs value={activeTab} onValueChange={handleTabChange}>
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3 min-w-0">
-          {headerSlot}
-          <TabsList>
+      <div className="flex flex-col gap-2" data-testid="model-toolbar">
+        {headerSlot}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <ToolbarTabsList>
             {tabs.map((t) => (
               <TabsTrigger key={t} value={t}>
                 {TAB_META[t].icon}
@@ -184,15 +204,28 @@ export function ModelView({
                 )}
               </TabsTrigger>
             ))}
-          </TabsList>
+          </ToolbarTabsList>
+          {activeTab !== "diagram" && tabBarTrailing && (
+            <ToolbarActions data-testid="model-toolbar-actions">{tabBarTrailing}</ToolbarActions>
+          )}
         </div>
-        {activeTab !== "diagram" && tabBarTrailing}
       </div>
 
       {betweenSlot}
 
       {tabs.includes("overview") && (
-        <TabsContent value="overview">{overviewSlot}</TabsContent>
+        <TabsContent value="overview">
+          {onOpenDomain && (
+            <TabDomainSelect
+              domains={domains}
+              value={null}
+              onChange={(d) => d && onOpenDomain(d)}
+              allowAll={false}
+              placeholder="Go to domain"
+            />
+          )}
+          {overviewSlot}
+        </TabsContent>
       )}
       {tabs.includes("diagram") && (
         <TabsContent value="diagram">
@@ -200,19 +233,19 @@ export function ModelView({
             <Skeleton className="h-96 w-full" />
           ) : (
             <DiagramViewer
-              // `focusAnchor.domain` can change in place on the input-review
-              // route when the focused input belongs to a new domain. DiagramViewer
-              // seeds `selectedDomain` via a useState initializer read ONCE at
-              // mount (item 3B), so an in-place prop change leaves the diagram
-              // on the old domain. Keying on the focal domain (empty string for
-              // the all-domains / no-anchor case) forces a fresh mount, matching
-              // the fix applied to the $domainName route (key={domainName}).
-              key={focusAnchor?.domain ?? ""}
+              // The focal domain changes in place (a new input's domain on the
+              // input-review route, a picked domain on the model route).
+              // DiagramViewer seeds `selectedDomain` via a useState initializer
+              // read ONCE at mount, so an in-place prop change would leave the
+              // diagram on the old domain. Keying on the focal domain (empty
+              // string for all-domains) forces a fresh mount, matching the
+              // $domainName route (key={domainName}).
+              key={diagramDomain ?? ""}
               businessId={businessId}
               version={version}
               scope={scope}
               domains={domains}
-              initialDomain={focusAnchor?.domain}
+              initialDomain={diagramDomain}
               initialColumnMode={initialColumnMode}
               onSelectionChange={onSelectionChange}
               feedbackSlot={feedbackSlot}
@@ -232,7 +265,14 @@ export function ModelView({
       {tabs.includes("ontology") && (
         <TabsContent value="ontology">
           <Suspense fallback={<Skeleton className="h-96 w-full" />}>
-            <OntologyGraph businessId={businessId} version={version} scope={scope} />
+            <OntologyGraph
+              businessId={businessId}
+              version={version}
+              scope={scope}
+              onDomainChange={onOntologyDomainChange}
+              domainFilter={onOntologyDomainPick ? ontologyDomain : undefined}
+              onDomainPick={onOntologyDomainPick}
+            />
           </Suspense>
         </TabsContent>
       )}

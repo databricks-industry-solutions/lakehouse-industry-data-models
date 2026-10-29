@@ -15,6 +15,7 @@ import { MODEL_VIEW_TABS, type ModelViewTab } from "@/components/vibe-inputs/mod
 import { OriginBadge, PriorityIndicator } from "@/components/vibe-inputs/chips";
 import { InputMarkdownEditorDialog } from "@/components/vibe-inputs/input-markdown-editor-dialog";
 import { anchorFromInput } from "@/components/vibe-inputs/state";
+import { feedbackSubjectFromAnchor } from "@/components/feedback/feedback-context";
 import { invalidateVibeInputQueries } from "@/components/vibe-inputs/query-keys";
 
 type InputSearch = { from?: "feedback"; tab: ModelViewTab };
@@ -105,8 +106,7 @@ export function DetailsContent({
   const focusAnchor = anchorFromInput(input);
   const anchorLabel = input.anchor?.path?.join(" › ") || "Model-wide";
 
-  // This review surface has no title-level domain picker (item 3B: the slot
-  // is only passed by the two model routes), but its focal diagram can still
+  // This review surface has no domain picker, but its focal diagram can still
   // show a RELATED domain group with a clickable header (diagram-viewer.tsx's
   // onDomainClick). Item 3B deleted DiagramViewer's internal domain-state
   // fallback, so without this callback that click would go inert. Wire it to
@@ -143,6 +143,7 @@ export function DetailsContent({
           tab={tab}
           onTabChange={onTabChange}
           focusAnchor={focusAnchor}
+          feedbackSubject={feedbackSubjectFromAnchor(input.anchor)}
           showLifecycleActions={false}
           onDomainNavigate={handleDomainNavigate}
           showDomainSelect={false}

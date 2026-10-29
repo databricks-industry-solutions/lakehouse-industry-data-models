@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "src", "a
 import pytest
 
 from vibe_modeling.backend.core._paths import (
+    file_in_folder,
     metamodel_root_for_business,
     model_json_volume_candidates,
     model_json_volume_path,
@@ -140,3 +141,19 @@ class TestVersionDirInVolume:
     def test_invalid_scope(self):
         with pytest.raises(ValueError):
             version_dir_in_volume("dep_cat", "Acme", 4, "raw")
+
+
+class TestFileInFolder:
+    FOLDER = "/Volumes/dep_cat/_metamodel/vol_root/business/acme/v4/mvm"
+
+    @pytest.mark.parametrize("path,expected", [
+        (f"{FOLDER}/model.json", True),
+        (f"{FOLDER}/other_name.json", True),
+        ("/Volumes/DEP_CAT/_metamodel/vol_root/business/Acme/v4/MVM/model.json", True),
+        (f"{FOLDER}/sub/model.json", False),
+        ("/Volumes/dep_cat/_metamodel/vol_root/business/acme/v4/model.json", False),
+        ("/Volumes/landing/raw/drop/model.json", False),
+    ], ids=["model_json", "any_name", "case", "subfolder", "parent", "elsewhere"])
+    def test_the_file_must_sit_directly_in_the_folder(self, path, expected):
+        assert file_in_folder(path, self.FOLDER) is expected
+        assert file_in_folder(path, f"{self.FOLDER}/") is expected

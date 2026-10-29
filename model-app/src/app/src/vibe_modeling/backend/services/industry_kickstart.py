@@ -28,9 +28,11 @@ return. Everything else - the model-tree copy, the VibeInput copy, the
   deliberately NOT copied here - see Phase 2.
 - **Phase 1** (:func:`_run_kickstart_background`): seed
   ``<deployment_catalog>._metamodel.*`` for each cloned version via
-  :func:`import_metamodel_writer.seed_metamodel_one` so the new business is
-  directly iterable (the agent reads its parent model only from
-  ``_metamodel``).
+  :func:`import_metamodel_writer.seed_metamodel_one` (which creates the
+  agent's registry tables first when they are missing) so the new business
+  is directly iterable (the agent reads its parent model only from
+  ``_metamodel``). A failed seed does not stop phase 2; the run then ends
+  ``failed`` with the seed failure in its ``error_message``.
 - **Phase 2**: copy the source version's Volume artifacts (download → upload
   into the new version's Volume dir under the deployment catalog) using
   :func:`artifact_indexer.walk_volume_dir`, then index them as ``RunArtifact``
@@ -41,6 +43,19 @@ return. Everything else - the model-tree copy, the VibeInput copy, the
   those rows, keyed off the NEW version's id from the start so a later
   resync's re-parse of the same artifact is a no-op (see
   :func:`_copy_vibe_inputs`'s docstring).
+
+Schema prefix: an industry downloaded with 0.9.0 is already prefixed
+(``ecm_crop``, metric views ``ecm_<view>``; its version records the markers,
+``ModelVersion.import_schema_prefix_added``), so its copy is verbatim and
+carries the same markers. An industry downloaded before 0.9.0 (no markers) is
+read before phase 0 and gets the import rule
+(``scope_prefix.import_schema_prefix``): phase 0 rewrites the cloned
+``Domain.database_name`` rows (so the phase 1 seed and the app's schema names
+agree) and phase 2 rewrites the copied model.json
+(``scope_prefix.apply_import_prefix``: schemas, metric view sources and
+names), and the version records what was added. An industry file that is
+there but cannot be read fails the kickstart before phase 0
+(:class:`KickstartModelUnreadable`).
 
 Structure is the contract a kickstart preserves (domains / products /
 attributes / FK links), copied directly via :func:`copy_model_tree`.
@@ -60,19 +75,19 @@ created and only failing a minute into the next run's fail-fast preflight.
 
 from __future__ import annotations
 
-import io
+import json
 import logging
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy import insert as sa_insert
 from sqlmodel import Session, select
 
 from .._query_helpers import BusinessNameConflict, ensure_business_name_available
 from ..core import resolve_metamodel_catalog
+from ..core._intents import INTENT_KICKSTART_FROM_INDUSTRY
 from ..core._paths import version_dir_candidates, version_dir_in_volume
 from ..core._warehouse import get_warehouse_id
 from ..core.anchor_resolve import (
@@ -82,6 +97,7 @@ from ..core.anchor_resolve import (
     prefetch_anchor_maps,
     resolve_named_anchor,
 )
+from ..error_sanitization import recorded_error_text, sanitize_error_message
 from ..db_models import (
     Business,
     ModelVersion,
@@ -95,12 +111,24 @@ from ..model_sync import ingest_next_vibes
 from ._bulk_model_io import _row_values, copy_model_tree
 from .artifact_indexer import index_artifacts_at_path, walk_volume_dir
 from .import_metamodel_writer import seed_metamodel_one
+from .metamodel_registry import setup_error_message
+from .metamodel_setup import MetamodelSetupError, ensure_metamodel_schema_and_volume
+from .schema_names import scope_schema_prefix
+from .scope_prefix import apply_import_prefix, apply_import_prefix_to_rows, import_schema_prefix
+from .version_files import model_json_candidates, read_conventions
+from .volume_copy import copy_volume_folder
 
 logger = logging.getLogger(__name__)
 
 
 class KickstartError(ValueError):
     """Raised when the kickstart request is invalid (bad source / version)."""
+
+    @property
+    def detail(self) -> str:
+        """The message as raised, for the route's 400: an ``AppMessage`` (the
+        setup's GRANT text) stays one, so the error handler keeps its length."""
+        return self.args[0] if self.args and isinstance(self.args[0], str) else str(self)
 
 
 class KickstartSourceNotFound(KickstartError):
@@ -188,6 +216,9 @@ def kickstart_from_industry(
         KickstartError: source is missing / not an industry / version absent.
         KickstartDescriptionRequired: neither ``new_description`` nor the
             source industry's own description is non-blank.
+        KickstartError: the deployment catalog's ``_metamodel`` schema or
+            ``vol_root`` volume does not exist and cannot be created (the
+            message says which privilege is missing).
     """
     industry = session.get(Business, source_industry_id)
     if industry is None:
@@ -234,6 +265,17 @@ def kickstart_from_industry(
         validate_business_description(resolved_description)
     except ValueError as exc:
         raise KickstartDescriptionRequired(str(exc)) from exc
+
+    # Every check that can refuse the request is behind us: only now touch
+    # Unity Catalog. A fresh catalog has no ``_metamodel`` schema or
+    # ``vol_root`` volume yet, and the background seed and artifact copy write
+    # to both. ``ws`` is None for direct callers without a workspace.
+    if ws is not None and deployment_catalog:
+        try:
+            ensure_metamodel_schema_and_volume(ws, deployment_catalog)
+        except MetamodelSetupError as exc:
+            raise KickstartError(setup_error_message(ws, deployment_catalog, exc)) from exc
+
     new_business = Business(
         name=new_name,
         description=resolved_description,
@@ -257,8 +299,9 @@ def kickstart_from_industry(
         _SourceVersionSpec(
             src_mv_id=src_mv.id,
             scope=src_mv.scope or "ecm",
-            uc_catalog=src_mv.uc_catalog,
             src_version=int(src_mv.version),
+            schema_prefix_added=src_mv.import_schema_prefix_added,
+            view_prefix_added=src_mv.import_view_prefix_added,
         )
         for src_mv in source_versions
     ]
@@ -273,7 +316,7 @@ def kickstart_from_industry(
     run = Run(
         business_id=new_business_id,
         version_id=None,
-        intent="kickstart-from-industry",
+        intent=INTENT_KICKSTART_FROM_INDUSTRY,
         status="running",
         progress_percent=0,
         progress_message=(
@@ -494,8 +537,11 @@ class _SourceVersionSpec:
 
     src_mv_id: str
     scope: str
-    uc_catalog: str
     src_version: int
+    # The source version's import markers; ``None`` for an industry
+    # downloaded before 0.9.0, whose copy gets the import rule.
+    schema_prefix_added: Optional[str] = None
+    view_prefix_added: Optional[str] = None
 
 
 @dataclass
@@ -522,6 +568,70 @@ class _KickstartCopyPlan:
     source_business_id: str = ""
     copy_inputs: bool = False
     source_specs: list[_SourceVersionSpec] = field(default_factory=list)
+    # scope -> the schema prefix the copy's model.json is rewritten for
+    # (``scope_prefix.apply_import_prefix``; ``None`` keeps its schemas and
+    # renames only its metric views); a scope not in it is copied verbatim.
+    rewrites: dict[str, Optional[str]] = field(default_factory=dict)
+    # scope -> the (schema, view) markers the copy records.
+    markers: dict[str, tuple[str, str]] = field(default_factory=dict)
+
+
+# --- The kickstart schema prefix ---------------------------------------------
+
+
+class KickstartModelUnreadable(KickstartError):
+    """The industry model.json exists but could not be read, so the copy's
+    schema prefix cannot be set; nothing is copied."""
+
+
+def _industry_schema_prefix(ws, catalog: str, business_name: str, version: int, scope: str) -> Optional[str]:
+    """The industry model.json's ``schema_prefix`` (``""`` when its
+    conventions name none), or ``None`` when the version has no model.json
+    (nothing to rewrite).
+
+    Raises :class:`KickstartModelUnreadable` when the file is there but the
+    bounded read fails (timeout, size cap, bad JSON). Copying anyway would
+    leave that scope with the industry's bare names while the other scope
+    gets its prefix, so the kickstart fails before phase 0 writes anything
+    and the user can retry.
+    """
+    if not (ws and catalog and business_name):
+        return None
+
+    def _present(path: str) -> bool:
+        directory = path.rsplit("/", 1)[0]
+        return path in walk_volume_dir(ws, directory)
+
+    found = read_conventions(
+        ws, model_json_candidates(catalog, business_name, version, scope), exists=_present
+    )
+    if found.unreadable:
+        raise KickstartModelUnreadable(
+            f"Could not read the {scope.upper()} model file of industry {business_name!r} "
+            f"v{version} to set the copy's schema prefix. Nothing was copied; kickstart again."
+        )
+    if found.path is None:
+        return None
+    return str((found.conventions or {}).get("schema_prefix") or "")
+
+
+def _plan_scope_prefix(ws, plan: "_KickstartCopyPlan", spec: _SourceVersionSpec) -> None:
+    """Record how ``spec``'s copy is prefixed: verbatim with the source's
+    markers for a 0.9.0 industry; otherwise the import rule over the
+    industry file's prefix (``scope_prefix.import_schema_prefix``), its
+    metric views renamed too. No industry file: verbatim, nothing added."""
+    if spec.schema_prefix_added is not None:
+        plan.markers[spec.scope] = (spec.schema_prefix_added, spec.view_prefix_added or "")
+        return
+    file_prefix = _industry_schema_prefix(
+        ws, plan.deployment_catalog, plan.src_business_name, spec.src_version, spec.scope,
+    )
+    if file_prefix is None:
+        plan.markers[spec.scope] = ("", "")
+        return
+    prefix = import_schema_prefix(spec.scope, file_prefix)
+    plan.rewrites[spec.scope] = prefix
+    plan.markers[spec.scope] = (prefix or "", scope_schema_prefix(spec.scope))
 
 
 def _set_run(session: Session, run_id: str, **fields) -> None:
@@ -562,7 +672,11 @@ def _run_phase0(session: Session, plan: _KickstartCopyPlan) -> None:
             status="completed",
             deployment_status="draft",
             scope=spec.scope,
-            uc_catalog=spec.uc_catalog,
+            # Not installed anywhere: no install catalog. Its files are seeded
+            # and copied into the metamodel catalog, so they resolve there.
+            files_catalog=plan.deployment_catalog or None,
+            import_schema_prefix_added=plan.markers.get(spec.scope, ("", ""))[0],
+            import_view_prefix_added=plan.markers.get(spec.scope, ("", ""))[1],
         )
         session.add(new_mv)
         session.flush()  # assigns new_mv.id
@@ -572,6 +686,10 @@ def _run_phase0(session: Session, plan: _KickstartCopyPlan) -> None:
             session, source_version_id=spec.src_mv_id, target_version_id=new_mv.id,
         )
         copy_tree_elapsed += time.monotonic() - copy_tree_started
+        prefix = plan.rewrites.get(spec.scope)
+        if prefix:
+            apply_import_prefix_to_rows(session, new_mv.id, prefix)
+            session.flush()
 
         export_started = time.monotonic()
         exported = export_model_json(session, new_mv.id)
@@ -629,8 +747,9 @@ def _run_kickstart_background(session: Session, ws, plan: _KickstartCopyPlan) ->
     transactions). Non-fatal to the business, which is already durable: a
     hard failure in ANY phase marks the RUN ``failed`` with an
     ``error_message`` (phase 0 failure = no version/tree survives, business
-    stays a bare shell; seed failure = the model stays un-iterable, caught by
-    the preflight; copy failure = artifacts partial). Per-file copy failures
+    stays a bare shell; copy failure = artifacts partial). A seed failure
+    still runs phase 2, then fails the run naming the seed failure (the
+    model stays un-iterable, caught by the preflight). Per-file copy failures
     and unconfigured-catalog seed skips are tolerated (not run-failing).
     """
     kickstart_started = time.monotonic()
@@ -641,6 +760,8 @@ def _run_kickstart_background(session: Session, ws, plan: _KickstartCopyPlan) ->
                 session, plan.run_id,
                 progress_message="Copying model structure",
             )
+            for spec in plan.source_specs:
+                _plan_scope_prefix(ws, plan, spec)
             _run_phase0(session, plan)
 
         total = step + len(plan.seeds) + len(plan.copy_specs)
@@ -649,6 +770,9 @@ def _run_kickstart_background(session: Session, ws, plan: _KickstartCopyPlan) ->
         warehouse_id = get_warehouse_id(session)
         session.commit()
         phase1_started = time.monotonic()
+        # A failed seed does not stop the artifact copy: the run fails after
+        # phase 2, naming the seed failure.
+        seed_errors: list[str] = []
         for exported, scope, version in plan.seeds:
             summary = seed_metamodel_one(
                 ws,
@@ -659,12 +783,13 @@ def _run_kickstart_background(session: Session, ws, plan: _KickstartCopyPlan) ->
                 scope=scope,
                 version=version,
                 log_prefix="kickstart",
+                wait_mode="background",
+                location=version_dir_in_volume(
+                    plan.deployment_catalog, plan.new_business_name, version, scope,
+                ) if plan.deployment_catalog else None,
             )
             if summary is not None and summary.get("errors"):
-                raise RuntimeError(
-                    f"_metamodel seed failed for {scope} v{version}: "
-                    f"{summary['errors']}"
-                )
+                seed_errors.append(f"{scope} v{version}: {'; '.join(map(str, summary['errors']))}")
             step += 1
             _set_run(
                 session, plan.run_id,
@@ -691,6 +816,8 @@ def _run_kickstart_background(session: Session, ws, plan: _KickstartCopyPlan) ->
                 new_business_name=plan.new_business_name,
                 new_version=spec.new_version,
                 scope=spec.scope,
+                rewrite=spec.scope in plan.rewrites,
+                schema_prefix=plan.rewrites.get(spec.scope),
             )
             if copied:
                 index_started = time.monotonic()
@@ -733,6 +860,24 @@ def _run_kickstart_background(session: Session, ws, plan: _KickstartCopyPlan) ->
             plan.run_id, phase2_elapsed, len(plan.copy_specs),
             index_elapsed, next_vibes_elapsed,
         )
+        if seed_errors:
+            _set_run(
+                session, plan.run_id,
+                status="failed",
+                progress_percent=100,
+                progress_message="The model and its artifacts were copied, but seeding the "
+                                 "agent's registry (_metamodel) failed, so the business "
+                                 "can't be vibed yet.",
+                error_message=sanitize_error_message(
+                    f"_metamodel seed failed for {', '.join(seed_errors)}"
+                ),
+                completed_at=datetime.now(timezone.utc),
+            )
+            logger.error(
+                "kickstart: run %s copied its artifacts but the _metamodel seed failed: %s",
+                plan.run_id, seed_errors,
+            )
+            return
         _set_run(
             session, plan.run_id,
             status="completed",
@@ -762,7 +907,7 @@ def _run_kickstart_background(session: Session, ws, plan: _KickstartCopyPlan) ->
             progress_message="Kickstart background work failed; the business "
                              "is created but may not yet be iterable / its "
                              "artifacts may be incomplete.",
-            error_message=str(exc),
+            error_message=recorded_error_text(exc, "Kickstart background work"),
             completed_at=datetime.now(timezone.utc),
         )
 
@@ -781,35 +926,6 @@ def run_kickstart_artifact_copy_bg(
         )
 
 
-# Bounded worker pool for the per-file download+upload copy below. The app
-# runs co-located with the workspace (low network latency to Volumes), so a
-# modest pool already overlaps most of the per-file round-trip wait without
-# risking a burst of concurrent requests against the Files API from a
-# laptop/dev run.
-_COPY_WORKER_COUNT = 6
-
-
-def _copy_one_file(ws, src_path: str, dest_path: str) -> bool:
-    """Download ``src_path`` and re-upload it to ``dest_path``. Returns
-    ``True`` on success, ``False`` on any failure (logged, never raised) -
-    the caller tolerates a bad file without aborting the rest of the batch.
-    """
-    try:
-        resp = ws.files.download(src_path)
-        payload = resp.contents.read()
-        # files.upload expects a binary file-like object, NOT raw bytes
-        # (mirrors industry_download._upload). Passing bytes raises and
-        # the whole bundle silently no-ops.
-        ws.files.upload(dest_path, io.BytesIO(payload), overwrite=True)
-        return True
-    except Exception as exc:
-        logger.warning(
-            "kickstart: skipping uncopyable artifact %s -> %s: %s",
-            src_path, dest_path, exc,
-        )
-        return False
-
-
 def _copy_version_files(
     ws,
     *,
@@ -819,71 +935,50 @@ def _copy_version_files(
     new_business_name: str,
     new_version: int,
     scope: str,
+    rewrite: bool = False,
+    schema_prefix: Optional[str] = None,
 ) -> tuple[str, int]:
-    """Download the source version's Volume files and re-upload them under the
-    new version's dir. Pure Volume I/O - touches NO database, so it can run
-    with the Postgres transaction closed (the copy is multi-minute; holding a
-    transaction across it trips Lakebase's idle-in-transaction timeout).
-
-    Files are copied concurrently via a bounded worker pool
-    (``_COPY_WORKER_COUNT``) - each file's download+upload is independent I/O,
-    so this is a straightforward latency win with no ordering requirement.
+    """Copy the source version's Volume files under the new version's folder
+    (``volume_copy.copy_volume_folder``); with ``rewrite``, its ``model.json``
+    goes through ``scope_prefix.apply_import_prefix`` for ``schema_prefix``.
+    Pure Volume I/O - touches no database, so it runs with the Postgres
+    transaction closed.
 
     Returns ``(dest_dir, copied_count)``. ``catalog`` is the DEPLOYMENT catalog
     (where the ``_metamodel`` Volume lives), NOT the per-model install catalog
-    (empty for a draft industry); both ``src_dir`` and ``dest_dir`` build off
-    it. Best-effort: a missing ``ws`` / catalog / source dir yields
-    ``("", 0)``; per-file copy failures are logged with the exception and
-    skipped so one bad file never breaks the kickstart.
+    (empty for a draft industry); both folders build off it. The source may be
+    a pre-upgrade (flat) folder: nested first, then flat, whichever holds
+    files; the destination is always nested. Best-effort: a missing ``ws`` /
+    catalog / source folder yields ``("", 0)``; a file that fails is logged
+    and skipped.
     """
     if not (ws and catalog and src_business_name):
         return "", 0
     try:
-        # Source may be a pre-upgrade (flat) version: probe nested first, then
-        # flat, and copy from whichever holds files. Destination is a new
-        # version → always the nested (canonical) layout.
-        src_candidates = version_dir_candidates(
-            catalog, src_business_name, src_version, scope,
-        )
-        dest_dir = version_dir_in_volume(
-            catalog, new_business_name, new_version, scope,
-        )
+        src_candidates = version_dir_candidates(catalog, src_business_name, src_version, scope)
+        dest_dir = version_dir_in_volume(catalog, new_business_name, new_version, scope)
     except ValueError:
         return "", 0
 
-    src_dir = src_candidates[0]
-    pairs: list[tuple[str, str]] = []
-    for cand in src_candidates:
-        entries = walk_volume_dir(ws, cand)
-        if entries:
-            src_dir = cand
-            for src_path in entries:
-                rel = src_path[len(src_dir):].lstrip("/")
-                if not rel:
-                    continue
-                pairs.append((src_path, f"{dest_dir}/{rel}"))
-            break
+    def _rewrite(payload: bytes) -> bytes:
+        root = json.loads(payload)
+        apply_import_prefix(root, scope, schema_prefix)
+        return json.dumps(root).encode()
 
-    started = time.monotonic()
-    copied = 0
-    if pairs:
-        with ThreadPoolExecutor(max_workers=_COPY_WORKER_COUNT) as pool:
-            results = pool.map(
-                lambda pair: _copy_one_file(ws, *pair), pairs,
+    for src_dir in src_candidates:
+        files = walk_volume_dir(ws, src_dir)
+        if files:
+            result = copy_volume_folder(
+                ws, files, src_dir, dest_dir,
+                model_json_transform=_rewrite if rewrite else None,
+                log_prefix=f"kickstart {new_business_name} v{new_version} {scope}",
             )
-            copied = sum(1 for ok in results if ok)
-    elapsed = time.monotonic() - started
-    logger.info(
-        "kickstart: copied %d/%d artifact(s) for %s v%s scope=%s in %.1fs "
-        "(%d worker(s))",
-        copied, len(pairs), new_business_name, new_version, scope, elapsed,
-        _COPY_WORKER_COUNT,
-    )
-
-    return dest_dir, copied
+            return dest_dir, result.copied
+    return dest_dir, 0
 
 
 __all__ = [
+    "KickstartModelUnreadable",
     "kickstart_from_industry",
     "run_kickstart_artifact_copy_bg",
     "KickstartError",

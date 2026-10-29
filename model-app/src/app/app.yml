@@ -66,8 +66,15 @@ env:
   # are rewritten by install/render_app_yaml.py from install.sh's
   # --enable-assessment / --assess-reader-sp flags. The reader service
   # principal (application id) only seeds AssessConfig.reader_application_id
-  # while that column is empty; Settings -> Assessment owns it after that.
+  # while that column is empty; Settings -> Platform (Optional features) owns it after that.
   - name: VIBE_MODELING_ASSESSMENT_ENABLED
     value: "false"
   - name: VIBE_MODELING_ASSESS_READER_SP
     value: ""
+  # Seed of Settings -> Agent -> "Annotate jobs with run tags" (on by default).
+  # Rewritten by install/render_app_yaml.py; install.sh --no-run-tags renders
+  # "false". It fills the setting when the app creates its settings row, and
+  # once more on the first upgrade to 0.9.0 or later (migration v_0_9_0_2);
+  # Settings own the value after that.
+  - name: VIBE_MODELING_RUN_TAGS_DEFAULT
+    value: "true"

@@ -17,13 +17,17 @@ from typing import Any, Callable, Optional
 
 from typing import Annotated
 
+from dataclasses import dataclass
+
 from fastapi import HTTPException, Path as PathParam, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import event
 from sqlmodel import Session, select
 
 from ._query_helpers import resolve_model_version
 from .core import Dependencies, create_router
 from .db_models import DiagramLayout
+from .error_sanitization import sanitize_error_detail, sanitize_error_message
 from .explorer import (
     _load_model,
     _load_prev_model,
@@ -31,6 +35,7 @@ from .explorer import (
 from .model_diff import compute_model_diff
 from .fk import (
     count_fk_attributes,
+    fk_edge_id,
     is_fk_attribute,
     parse_fk_target,
     product_fqn,
@@ -126,8 +131,24 @@ ELK_DOMAIN_OPTIONS = {
 # Path to the ELK layout subprocess script
 ELK_SCRIPT = Path(__file__).parent / "elk_layout.cjs"
 
-# In-memory layout cache: hash -> DiagramLayoutOut | error string
-_layout_cache: dict[str, DiagramLayoutOut | str] = {}
+@dataclass(frozen=True)
+class _LayoutError:
+    """A failed background layout job, kept so the next viewer poll can
+    report it. ``detail`` is already sanitized; ``status_code`` is the
+    original one (a missing model stays a 404)."""
+
+    status_code: int
+    detail: Any
+    at_ms: int
+
+
+# A cached failure older than this is dropped and the layout recomputed: the
+# viewer polls every few seconds, so a fresh failure still reaches it, while
+# one left by the post-version prefetch minutes earlier does not.
+_LAYOUT_ERROR_TTL_MS = 60_000
+
+# In-memory layout cache: hash -> layout | failed job
+_layout_cache: dict[str, DiagramLayoutOut | _LayoutError] = {}
 _cache_lock = threading.Lock()
 
 # Track in-progress background computations to avoid duplicate work.
@@ -324,7 +345,10 @@ def _collect_fk_edges(model: dict, product_index: dict, domain_filter: str | Non
                 target_node = product_fqn(target_domain, target_product)
                 if target_node not in product_index:
                     continue  # broken FK reference, skip
-                edge_id = f"{source_node}.{attr.get('column_name', attr.get('name', ''))}>{target_node}.{target_column}"
+                edge_id = fk_edge_id(
+                    source_node, attr.get("column_name", attr.get("name", "")),
+                    target_node, target_column,
+                )
                 if edge_id in seen:
                     continue
                 seen.add(edge_id)
@@ -504,7 +528,7 @@ def _build_elk_graph(
         intra_edges = []
         for edge in edges:
             if edge["source_domain"] == dn and edge["target_domain"] == dn:
-                edge_id = f"fk:{edge['source_node']}.{edge['source_column']}>{edge['target_node']}.{edge['target_column']}"
+                edge_id = fk_edge_id(edge["source_node"], edge["source_column"], edge["target_node"], edge["target_column"])
                 elk_edge = {
                     "id": edge_id,
                     "sources": [edge["source_node"]],
@@ -526,7 +550,7 @@ def _build_elk_graph(
     inter_edges = []
     for edge in edges:
         if edge["source_domain"] != edge["target_domain"]:
-            edge_id = f"fk:{edge['source_node']}.{edge['source_column']}>{edge['target_node']}.{edge['target_column']}"
+            edge_id = fk_edge_id(edge["source_node"], edge["source_column"], edge["target_node"], edge["target_column"])
             elk_edge = {
                 "id": edge_id,
                 "sources": [edge["source_node"]],
@@ -667,7 +691,7 @@ def _extract_layout(elk_result: dict, metadata: dict, edges: list[dict]) -> Diag
 
     diagram_edges = [
         DiagramEdge(
-            id=f"fk:{e['source_node']}.{e['source_column']}>{e['target_node']}.{e['target_column']}",
+            id=fk_edge_id(e["source_node"], e["source_column"], e["target_node"], e["target_column"]),
             source_node=e["source_node"],
             source_column=e["source_column"],
             target_node=e["target_node"],
@@ -866,6 +890,43 @@ def _invalidate_empty_layouts(
 # ---------------------------------------------------------------------------
 
 
+def _after_transaction(session: "Session", fn: Callable[[], None], *, what: str) -> None:
+    """Run ``fn`` once the transaction ``session`` is in has ended, unless it
+    rolled back.
+
+    Commit and a plain ``close()`` both run it: a request session closes
+    without committing after reading rows an earlier commit wrote, and those
+    rows are visible to a fresh session. A rollback of the outer transaction
+    drops ``fn`` (a savepoint rollback doesn't). ``fn`` runs inside the
+    commit, so its errors are logged, never raised into the caller's commit.
+    """
+    root = session.get_transaction()
+
+    def _run() -> None:
+        try:
+            fn()
+        except Exception:
+            logger.exception("Deferred %s failed (non-fatal)", what)
+
+    state = {"rolled_back": False, "done": False}
+
+    def _on_rollback(sess: "Session") -> None:
+        if not sess.in_nested_transaction():
+            state["rolled_back"] = True
+
+    def _on_end(sess: "Session", transaction: Any) -> None:
+        if transaction is not root or state["done"]:
+            return
+        state["done"] = True
+        if state["rolled_back"]:
+            logger.info("Dropped %s: the transaction rolled back", what)
+            return
+        _run()
+
+    event.listen(session, "after_rollback", _on_rollback)
+    event.listen(session, "after_transaction_end", _on_end)
+
+
 def queue_layout_prefetch_for_version(
     session: "Session",
     session_factory: Callable[[], "Session"],
@@ -895,14 +956,19 @@ def queue_layout_prefetch_for_version(
          the user opens the explorer.
 
     Best-effort: on any failure logs and returns ``0``. Never raises.
-    The number returned is the count of jobs actually submitted (jobs
-    skipped because their key was already in flight don't count).
+    The number returned is the count of jobs queued (jobs skipped because
+    their key was already in flight don't count).
 
     Two session parameters because the caller already has a live
     request-scoped ``session`` we use synchronously to enumerate the
     domains, while the background ELK workers run after the caller's
     session has closed and need a ``session_factory`` to open their
     own session bound to the app engine.
+
+    The jobs are submitted only when the caller's transaction ends (see
+    ``_after_transaction``): the orchestrator queues the prefetch in the
+    same transaction that creates the version, and a worker that starts
+    before that commit can't see it.
     """
     submitted = 0
     try:
@@ -937,23 +1003,41 @@ def queue_layout_prefetch_for_version(
         for dn in domain_names:
             to_queue.append((dn, "hide"))
 
-        for domain_filter, column_mode in to_queue:
-            key = _cache_key(business_id, version_int, scope, domain_filter, column_mode)
-            with _in_progress_lock:
-                if key in _in_progress:
-                    continue
-                _in_progress[key] = _now_ms()
-            _prefetch_pool.submit(
-                _background_compute,
-                session_factory, ws, business_id, version_int,
-                scope, domain_filter, column_mode, key,
+        jobs = [
+            (domain_filter, column_mode,
+             _cache_key(business_id, version_int, scope, domain_filter, column_mode))
+            for domain_filter, column_mode in to_queue
+        ]
+        with _in_progress_lock:
+            jobs = [job for job in jobs if job[2] not in _in_progress]
+        submitted = len(jobs)
+
+        def _submit() -> None:
+            for domain_filter, column_mode, key in jobs:
+                with _in_progress_lock:
+                    if key in _in_progress:
+                        continue
+                    _in_progress[key] = _now_ms()
+                try:
+                    _prefetch_pool.submit(
+                        _background_compute,
+                        session_factory, ws, business_id, version_int,
+                        scope, domain_filter, column_mode, key,
+                    )
+                except Exception:
+                    with _in_progress_lock:
+                        _in_progress.pop(key, None)
+                    raise
+            logger.info(
+                "queue_layout_prefetch_for_version: submitted %d jobs for "
+                "business=%s version=%s scope=%s",
+                len(jobs), business_id, version_int, scope,
             )
-            submitted += 1
-        logger.info(
-            "queue_layout_prefetch_for_version: submitted %d jobs for "
-            "business=%s version=%s scope=%s",
-            submitted, business_id, version_int, scope,
-        )
+
+        _after_transaction(session, _submit, what=(
+            f"layout prefetch business={business_id} "
+            f"version={version_int} scope={scope}"
+        ))
     except Exception:
         logger.exception(
             "queue_layout_prefetch_for_version: failed for "
@@ -1028,6 +1112,17 @@ def _compute_layout(
     return layout
 
 
+def _layout_error(exc: Exception) -> _LayoutError:
+    """The cached form of a failed layout job: the original status (an
+    ``HTTPException`` keeps its own, anything else is a 500) and a sanitized
+    detail."""
+    if isinstance(exc, HTTPException):
+        return _LayoutError(exc.status_code, sanitize_error_detail(exc.detail), _now_ms())
+    return _LayoutError(
+        500, sanitize_error_message(f"Layout computation failed: {exc}"), _now_ms(),
+    )
+
+
 def _background_compute(
     session_factory, ws, business_id: str, version_int: int, scope: str,
     domain: str | None, column_mode: str, key: str,
@@ -1075,9 +1170,10 @@ def _background_compute(
         logger.debug("Layout deferred for %s: model not ready (no domains yet)", key)
     except Exception as e:
         logger.warning("Background prefetch failed for %s: %s", key, e)
-        # Cache the failure so the frontend stops retrying
+        # Kept briefly so the viewer's next poll reports it instead of
+        # re-queueing the same failing job (see ``_LAYOUT_ERROR_TTL_MS``).
         with _cache_lock:
-            _layout_cache[key] = str(e)
+            _layout_cache[key] = _layout_error(e)
     finally:
         with _in_progress_lock:
             _in_progress.pop(key, None)
@@ -1113,14 +1209,18 @@ def get_diagram_layout(
     with _cache_lock:
         if key in _layout_cache:
             cached = _layout_cache[key]
-            if isinstance(cached, str):
-                # Cached error — return it so the frontend can show a message.
-                # Remove from cache so a subsequent request can retry.
+            if isinstance(cached, _LayoutError):
+                # Reported once, then dropped so the next request recomputes.
+                # A warm-up request (prefetch) or a stale failure recomputes
+                # at once: neither has a viewer waiting on that failure.
                 del _layout_cache[key]
-                raise HTTPException(500, f"Layout computation failed: {cached}")
-            cached.domain_filter = domain
-            cached.show_columns = column_mode != "hide"
-            return cached
+                fresh = _now_ms() - cached.at_ms < _LAYOUT_ERROR_TTL_MS
+                if fresh and not prefetch:
+                    raise HTTPException(cached.status_code, cached.detail)
+            else:
+                cached.domain_filter = domain
+                cached.show_columns = column_mode != "hide"
+                return cached
 
     # Tier 2: Lakebase cache (survives app restart). Don't gate behind prefetch
     # flag — a Lakebase hit is essentially free and returns instantly.

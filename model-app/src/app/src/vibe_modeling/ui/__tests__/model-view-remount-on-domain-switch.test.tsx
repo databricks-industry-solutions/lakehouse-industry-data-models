@@ -1,15 +1,15 @@
 /**
  * ModelView — DiagramViewer remounts on focal domain change (fix regression).
  *
- * When `focusAnchor.domain` changes in place (e.g. the input-review route
+ * When `diagramDomain` changes in place (e.g. the input-review route
  * re-renders `ModelTabsShell` → `ModelView` with a new anchor domain),
  * `DiagramViewer`'s internal `selectedDomain` useState was seeded only at
  * mount (item 3B removed the resync fallback), so the diagram kept showing the
- * OLD domain. The fix adds `key={focusAnchor?.domain ?? ""}` so React remounts
+ * OLD domain. The fix adds `key={diagramDomain ?? ""}` so React remounts
  * DiagramViewer on every focal-domain change.
  *
  * This test uses the REAL DiagramViewer (not a stub) with a mocked fetch,
- * rerenders `ModelView` with a new `focusAnchor.domain`, and asserts a fresh
+ * rerenders `ModelView` with a new `diagramDomain`, and asserts a fresh
  * layout request goes to the NEW domain rather than staying on the old one.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -85,7 +85,7 @@ afterEach(() => {
 });
 
 describe("ModelView — DiagramViewer remounts on focal domain change", () => {
-  it("re-fetches the layout for the NEW domain when focusAnchor.domain changes", async () => {
+  it("re-fetches the layout for the NEW domain when diagramDomain changes", async () => {
     const fetchImpl = mockLayoutFetch();
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -94,7 +94,7 @@ describe("ModelView — DiagramViewer remounts on focal domain change", () => {
         <ModelView
           {...baseProps}
           value="diagram"
-          focusAnchor={{ domain: "Sales" }}
+          diagramDomain="Sales"
           modelVersionId="ver-1"
         />
       </QueryClientProvider>,
@@ -111,7 +111,7 @@ describe("ModelView — DiagramViewer remounts on focal domain change", () => {
         <ModelView
           {...baseProps}
           value="diagram"
-          focusAnchor={{ domain: "Inventory" }}
+          diagramDomain="Inventory"
           modelVersionId="ver-1"
         />
       </QueryClientProvider>,

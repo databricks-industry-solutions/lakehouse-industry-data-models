@@ -13,7 +13,15 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { VolumePicker } from "@/components/import/volume-picker";
-import { notifyConfigMissing } from "@/lib/notify";
+import {
+  ImportScopeChoice,
+  importScope,
+  importScopeBody,
+  initialScopeChoice,
+  type ImportScope,
+} from "@/components/import/import-scope-choice";
+import { apiErrorMessage } from "@/lib/api-error";
+import { notifyConfigMissing, notifyWarnings } from "@/lib/notify";
 import {
   analyzeImport,
   executeImport,
@@ -51,6 +59,7 @@ export function ImportModelDialog({ businessId, trigger }: ImportModelDialogProp
   const [analysis, setAnalysis] = useState<ImportAnalyzeOut | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [acceptMismatch, setAcceptMismatch] = useState(false);
+  const [chosenScope, setChosenScope] = useState<ImportScope | null>(null);
   const queryClient = useQueryClient();
 
   // Preview query — runs as soon as the user has a plausibly-valid Volume
@@ -73,13 +82,14 @@ export function ImportModelDialog({ businessId, trigger }: ImportModelDialogProp
       setAnalysis(response.data);
       setError(null);
       setAcceptMismatch(false);
+      setChosenScope(initialScopeChoice(response.data));
     },
     onError: (err: unknown) => {
       if (notifyConfigMissing(err)) {
         setAnalysis(null);
         return;
       }
-      setError(err instanceof Error ? err.message : "Failed to analyze");
+      setError(apiErrorMessage(err, "Failed to analyze"));
       setAnalysis(null);
     },
   });
@@ -91,9 +101,11 @@ export function ImportModelDialog({ businessId, trigger }: ImportModelDialogProp
         {
           volume_path: volumePath,
           accept_business_mismatch: acceptMismatch,
+          scope: importScopeBody(analysis, chosenScope),
         },
       ),
-    onSuccess: () => {
+    onSuccess: (response) => {
+      notifyWarnings("Imported with warnings", response.data.warnings);
       queryClient.invalidateQueries({
         queryKey: listVersionsKey({ business_id: businessId }),
       });
@@ -110,7 +122,7 @@ export function ImportModelDialog({ businessId, trigger }: ImportModelDialogProp
       // Missing config renders via the ONE shared renderer (rich toast with
       // per-item Settings deep-links); everything else stays inline.
       if (notifyConfigMissing(err)) return;
-      setError(err instanceof Error ? err.message : "Import failed");
+      setError(apiErrorMessage(err, "Import failed"));
     },
   });
 
@@ -119,17 +131,20 @@ export function ImportModelDialog({ businessId, trigger }: ImportModelDialogProp
     setAnalysis(null);
     setError(null);
     setAcceptMismatch(false);
+    setChosenScope(null);
   };
 
   const mismatches = analysis?.business_digest_diff?.mismatch_fields ?? [];
   const hasMismatch = mismatches.length > 0;
   // Block submit when:
   //  - the mutation is in flight,
-  //  - the user has unacknowledged business-identity mismatches, OR
+  //  - the user has unacknowledged business-identity mismatches,
+  //  - the model's scope is neither settled by the file nor chosen, OR
   //  - the preview says model.json is not present at the path.
   const importDisabled =
     executeMutation.isPending ||
     (hasMismatch && !acceptMismatch) ||
+    importScope(analysis, chosenScope) == null ||
     (preview != null && !preview.model_json_found);
 
   // Analyze is blocked when preview says no model.json sits at the path.
@@ -277,6 +292,13 @@ export function ImportModelDialog({ businessId, trigger }: ImportModelDialogProp
                   </label>
                 </div>
               )}
+
+              <ImportScopeChoice
+                analysis={analysis}
+                chosen={chosenScope}
+                onChoose={setChosenScope}
+                disabled={executeMutation.isPending}
+              />
 
               {(analysis.warnings?.length ?? 0) > 0 && (
                 <div className="border-t border-border pt-2">

@@ -2,7 +2,9 @@
 
 Wraps the `DeploymentVerifier` service so the UI can compare a logical
 ModelVersion in Lakebase against the UC schema actually deployed for it,
-and check that the catalog is reachable in the first place.
+and check that the catalog is reachable in the first place. A query that
+fails answers 200 with ``verification_error`` set (sanitized), never an
+empty "nothing deployed" result.
 """
 
 from __future__ import annotations
@@ -11,16 +13,18 @@ from fastapi import APIRouter, HTTPException
 from sqlmodel import select
 
 from ..._metadata import api_prefix
-from ..core import Dependencies, resolve_version_volume_catalog
+from ..core import Dependencies, resolve_version_install_catalog
 from ..db_models import ModelVersion
+from ..models import DeployedUcSchemaOut, DeploymentCatalogCheckOut, DeploymentVerificationOut
 from ._helpers import resolve_warehouse_id
+from ..services.schema_names import domain_schema_name
 
 router = APIRouter(prefix=api_prefix)
 
 
 @router.get(
     "/businesses/{business_id}/versions/{version_id}/deployment/catalog-check",
-    response_model=dict,
+    response_model=DeploymentCatalogCheckOut,
     operation_id="checkDeploymentCatalog",
 )
 def check_deployment_catalog(
@@ -37,9 +41,7 @@ def check_deployment_catalog(
     if not mv or mv.business_id != business_id:
         raise HTTPException(status_code=404, detail="Version not found")
 
-    # Where this version lives: its install catalog (mv.uc_catalog) when
-    # installed, else the installation metamodel catalog for a draft.
-    catalog = resolve_version_volume_catalog(mv, session)
+    catalog = resolve_version_install_catalog(mv, session)
     if not catalog:
         raise HTTPException(status_code=400, detail="No catalog configured")
 
@@ -49,7 +51,7 @@ def check_deployment_catalog(
 
 @router.get(
     "/businesses/{business_id}/versions/{version_id}/deployment/uc-schema",
-    response_model=dict,
+    response_model=DeployedUcSchemaOut,
     operation_id="getDeployedUcSchema",
 )
 def get_deployed_uc_schema(
@@ -66,9 +68,7 @@ def get_deployed_uc_schema(
     if not mv or mv.business_id != business_id:
         raise HTTPException(status_code=404, detail="Version not found")
 
-    # Where this version lives: its install catalog (mv.uc_catalog) when
-    # installed, else the installation metamodel catalog for a draft.
-    catalog = resolve_version_volume_catalog(mv, session)
+    catalog = resolve_version_install_catalog(mv, session)
     if not catalog:
         raise HTTPException(status_code=400, detail="No catalog configured")
 
@@ -76,14 +76,14 @@ def get_deployed_uc_schema(
     # Derive schemas from the logical model's domains
     from ..db_models import Domain
     domains = session.exec(select(Domain).where(Domain.version_id == version_id)).all()
-    schemas = [d.database_name or d.name for d in domains]
+    schemas = [domain_schema_name(d.database_name, d.name) for d in domains]
 
     return verifier.get_uc_schema(catalog, schemas)
 
 
 @router.get(
     "/businesses/{business_id}/versions/{version_id}/deployment/compare",
-    response_model=dict,
+    response_model=DeploymentVerificationOut,
     operation_id="compareDeployment",
 )
 def compare_deployment(
@@ -100,9 +100,7 @@ def compare_deployment(
     if not mv or mv.business_id != business_id:
         raise HTTPException(status_code=404, detail="Version not found")
 
-    # Where this version lives: its install catalog (mv.uc_catalog) when
-    # installed, else the installation metamodel catalog for a draft.
-    catalog = resolve_version_volume_catalog(mv, session)
+    catalog = resolve_version_install_catalog(mv, session)
     if not catalog:
         raise HTTPException(status_code=400, detail="No catalog configured")
 

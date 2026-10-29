@@ -54,6 +54,11 @@ describe("VibeInputCard chips", () => {
     expect(screen.getByText("AI suggestion")).toBeInTheDocument();
   });
 
+  it("renders the rejected-change origin chip for change_rejection", () => {
+    renderCard({ origin: "change_rejection" });
+    expect(screen.getByText("Rejected change")).toBeInTheDocument();
+  });
+
   it("renders a defensive import origin label (unknown union member)", () => {
     renderCard({ origin: "uc_import" as VibeInputOut["origin"] });
     expect(screen.getByText("UC import")).toBeInTheDocument();
@@ -150,5 +155,13 @@ describe("VibeInputCard include/exclude", () => {
       "data-excluded",
       "true",
     );
+  });
+});
+
+describe("VibeInputCard delete dialog", () => {
+  it("tells the user where to restore the feedback", () => {
+    renderCard({}, { onDelete: vi.fn() });
+    fireEvent.click(screen.getByLabelText("Delete"));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent(/restore it from the Deprecated list on the inputs surface/);
   });
 });
