@@ -291,5 +291,5 @@ def test_both_metric_prompts_share_one_parameter_rule():
     kpi = ah.PROMPT_TEMPLATES["KPI_FIRST_GLOBAL_PROMPT"]
     assert ("### QUERY-TIME PARAMETERS\n\n" + rule + " A view a requirement asks to take a query parameter declares it with the name, "
             "the data type and the default the requirement gives.") in kpi
-    assert '      "parameters": [],\n      "joins": [{{}}],' in kpi
+    assert '      "parameters": [],\n      "joins": [{{"alias": "dim_<parent_product>"' in kpi  # v5.3.4 join example
     assert SRC.count("QUERY-TIME PARAMETERS (currency reporting") == 1

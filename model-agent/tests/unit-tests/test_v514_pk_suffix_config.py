@@ -481,7 +481,20 @@ def test_prompt_renders_the_default_suffix_byte_identically_to_56ce1eb(name):
     old = _module_at(BASE_COMMIT)
     new_text = _render(ah, name, "_id", explicit=True).replace(SUFFIX_LINE.replace("{pk_suffix}", "_id") + "\n", "")
     new_text = new_text.replace(MV_REF_RULE_LINE + "\n", "")
-    assert new_text == _render(old, name, "_id", explicit=True)
+    old_text = _render(old, name, "_id", explicit=True)
+    assert _with_v534_join_rules_reverted(new_text, old_text) == old_text
+
+
+def _with_v534_join_rules_reverted(new_text, old_text):
+    """v5.3.4 replaced the MV prompt's 'JOINS ARE DISABLED' section with star-schema join rules (an intended change,
+    covered by test_v534_mv_joins.py); swap the old section back so the rest of the prompt is still byte-checked."""
+    new_start, old_start = "### STAR-SCHEMA JOINS", "### SINGLE-TABLE METRIC VIEWS ONLY"
+    end = "**Domain Metric Type Matrix"
+    if new_start not in new_text or old_start not in old_text:
+        return new_text
+    a, b = new_text.index(new_start), new_text.index(end, new_text.index(new_start))
+    oa, ob = old_text.index(old_start), old_text.index(end, old_text.index(old_start))
+    return new_text[:a] + old_text[oa:ob] + new_text[b:]
 
 
 @pytest.mark.parametrize("name", PROMPTS)
