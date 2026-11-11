@@ -42,9 +42,10 @@ def test_v506_schemas_have_parameters():
         assert '"parameters"' in json.dumps(d), f"v5.0.6: {base} missing parameters"
 
 
-def test_v506_joins_default_off_flag_gated():
+def test_v506_joins_flag_gated():
     src = _all_source()
-    assert "config.get('MV_ENABLE_JOINS')" in src, "v5.0.6: joins must be behind MV_ENABLE_JOINS flag"
+    # v5.3.4: still behind MV_ENABLE_JOINS, now default ON (live probe proved the join YAML installs)
+    assert ".get('MV_ENABLE_JOINS', True)" in src, "joins must stay behind the MV_ENABLE_JOINS flag"
     assert "if False and isinstance(_mv_joins_raw" not in src, "v5.0.6: old hard-disabled join guard must be gone"
 
 

@@ -274,7 +274,7 @@ class TestNotebookIntegrity:
                ("valid-joins-init-unconditional", 1),
                ("domain-to-db-from-config", 2),
                ("mv-yaml-no-type-field", 2),
-               ("mv-joins-disabled-pending-syntax-fix", 2),
+               ("mv-joins-disabled-pending-syntax-fix", 1),
            ]:
                assert agent_src.count(alias) >= min_hits, f"{alias} not present (need >={min_hits} hits)"
 
@@ -343,22 +343,10 @@ class TestV100MetricViewYamlNoTypeField:
 # 10. v1.0.1 hotfix — disable MV joins entirely until syntax verified live
 # ----------------------------------------------------------------------
 class TestV101MetricViewJoinsDisabled:
-    def test_joins_emission_block_gated_off(self, agent_src):
-        """The `if isinstance(_mv_joins_raw, list) and _mv_joins_raw:` block must be gated
-        with `if False and ...` so no joins YAML block is emitted."""
-        idx = agent_src.find("if False and isinstance(_mv_joins_raw, list)")
-        assert idx > 0, (
-            "v1.0.1 regression: the join-emission gate was not flipped to `if False and ...`. "
-            "MV joins will continue to emit and fail at column-resolution time."
-        )
-
-    def test_alias_present_and_self_reports(self, agent_src):
-        """v1.0.1 alias must appear ≥2 times: once in comment, once in runtime self-report."""
-        assert agent_src.count("mv-joins-disabled-pending-syntax-fix") >= 2, (
-            "v1.0.1 alias missing — no audit trail."
-        )
-        assert "[mv-joins-disabled-pending-syntax-fix FIRED]" in agent_src
-
+    # v5.3.4: the v1.0.1 hard-disable (`if False and ...`) was replaced in v5.0.6 by the MV_ENABLE_JOINS flag and the
+    # flag now defaults ON after a live probe proved the join YAML installs. Behaviour (joins render, the source alias
+    # is normalized, fan-out joins are skipped, MV_ENABLE_JOINS=False still suppresses) is covered by
+    # test_v534_mv_joins.py; the suppression self-report stays and is asserted below.
     def test_runtime_self_report_fires_on_suppressed_joins(self, agent_src):
         """The runtime marker must log when LLM proposed joins that we suppressed —
         provides the auditor with `suppressed_joins=N` evidence per MV."""

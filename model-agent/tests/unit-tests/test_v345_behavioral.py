@@ -120,6 +120,7 @@ def _exec_mv_prune():
     wrapped = (
         "def run(_stmt, _src_cols):\n"
         "    _kept2 = []; _drop_reasons2 = []; _rename_reasons2 = []\n"
+        "    _mvcp_join_cols = {}  # v5.3.6: the statement's joins (none in these single-table views)\n"
         "    _src_sch, _src_tbl = 'hr', 'position'\n"
         "    for _ in [0]:\n"
         + textwrap.indent(block, "        ")
