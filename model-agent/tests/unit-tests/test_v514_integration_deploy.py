@@ -130,9 +130,10 @@ def test_main_halts_on_a_failed_gate_before_carry_over_and_before_physical_deplo
     src = _main_source()
     join = src.index("_vibe_scope_halt_if_gate_failed(widgets_values, \"the parallel artifact join\", logger)")
     assert join < src.index("_carry_over_missing_artifacts_from_previous_version(widgets_values, config, logger)", join)
-    reexport = src.index("_vibe_scope_halt_if_gate_failed(widgets_values, \"the model.json re-export after SelfFixer\", logger)")
-    assert src.index("Outer guard caught", src.index("vov-remediate-before-modeljson")) < reexport
+    final_export = src.index("_export_final_model_json(widgets_values, logger)")
+    assert src.index("Outer guard caught") < final_export
     step9a = src.index("_vibe_scope_halt_if_gate_failed(widgets_values, \"Step 9a physical deploy\", logger)")
+    assert final_export < step9a
     assert step9a < src.index("_run_step(step_create_physical_schema_stage1", step9a)
     ast.parse(src)
 

@@ -139,9 +139,11 @@ def test_empty_domain_gate_reexports_model_json_when_dropped_POST(agent_source_t
     gate_at = src.find("v414-empty-domain-vov-writeback FIRED v4.1.4")
     window = src[gate_at:gate_at + 1600]
     # when husks are dropped, model.json MUST be re-exported so the shipped artifact
-    # matches the physical schema (the v4.1.3 no-op left model.json with the husks)
+    # matches the physical schema (the v4.1.3 no-op left model.json with the husks).
+    # v5.3.3: the mandatory final export right after the gate writes it.
     assert "if _v414_n:" in window
-    assert "step_generate_data_model_json(widgets_values)" in window
+    final_at = src.find("_export_final_model_json(widgets_values, logger)", gate_at)
+    assert gate_at < final_at < src.find("_run_step(step_create_physical_schema_stage1"), (gate_at, final_at)
 
 
 def test_empty_domain_writeback_absent_pre_patch_FAILPRE():

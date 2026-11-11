@@ -1335,6 +1335,8 @@ Agent 4.8.0 and later never emit this stage: sample data moved to the standalone
 4. `step_name = "Data Dictionary"` → `{"artifact": "data_dictionary"}`
 5. `step_name = "Model Report"` → `{"artifact": "model_report"}`
 
+Since agent 5.3.3, `model.json` is written a second time from the final model: after the VibeOrchestrator, the SelfFixer and the empty-domain gate, and before the physical schema. Each write emits its own model.json event, and the last one carries the final counts. The `model.json` on the Volume holds the same model the registry rows, the DDL and the exit summary are built from. If that final write fails, the run fails.
+
 ---
 
 ### Stage 18: Consolidation and Cleanup
