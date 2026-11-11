@@ -1686,7 +1686,7 @@ If the UI does not set `processing_status = 'done'` within **90 seconds**, the a
 Each session is identified by the composite key `(business, version, model_scope)`. Only one session can run at a time for a given key.
 
 ### Delta Concurrent Write Conflicts
-The agent retries writes up to **5 times** with exponential backoff.
+The agent retries writes up to **5 times** with exponential backoff. The registry writes an install makes on `_metamodel` (the DELETEs, the `deploy_status` UPDATE and the business INSERT) use the same retry, because the progress writer updates the same business row while the install runs.
 
 ### Agent Crash Recovery
 If the agent crashes, `completed_percent` will be stuck below `100.0` and `last_updated_at` will stop advancing. Detect staleness (no update for 5+ minutes) and display an error state.
