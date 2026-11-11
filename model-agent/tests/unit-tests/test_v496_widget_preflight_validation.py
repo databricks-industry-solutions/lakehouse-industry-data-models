@@ -140,5 +140,6 @@ def test_parent_preflight_runs_before_job_launch():
     # pre-flight validation + its clean-exit return both precede the actual job launch
     assert i_preflight < i_return < i_launch
     # and the pre-flight sits inside the interactive (no session id) branch
-    i_branch = src.index("if not _raw_session_id_from_widget:")
+    # v5.3.6: the interactive branch also excludes job runs (alias=joblaunch-gate-skip-in-job)
+    i_branch = src.index("if not _raw_session_id_from_widget and not _v536_job_run:")
     assert i_branch < i_preflight
