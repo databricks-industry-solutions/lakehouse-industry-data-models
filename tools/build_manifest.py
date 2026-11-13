@@ -50,8 +50,8 @@ LS_TREE_RE = re.compile(r"^\d+\s+blob\s+(\S+)\t(.+)$")
 LS_TREE_LONG_RE = re.compile(r"^\d+\s+blob\s+(\S+)\s+(\d+)\t(.+)$")
 
 EXPECTED_SECTIONS = 8
-EXPECTED_INDUSTRIES = 41
-EXPECTED_MODELS = 112
+EXPECTED_INDUSTRIES = 42
+EXPECTED_MODELS = 113
 
 CANONICAL_SOURCE_SLUG = "databricks-industry-solutions/lakehouse-industry-data-models"
 

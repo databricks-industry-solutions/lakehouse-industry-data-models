@@ -172,7 +172,7 @@ All 40 MVMs ship with **zero structural findings**. The 15 ECM silos and 34 ECM 
 
 Click an industry to open its folder. The installer resolves the highest version present.
 
-> **Property & Casualty Insurance** is the 41st industry, added after the original gallery run (from [issue #42](https://github.com/databricks-industry-solutions/lakehouse-industry-data-models/issues/42)). It ships both ECM and MVM. **v2** refines v1 through vibe-modeling-of-version: the `claims`, `risk_exposure`, and `catastrophe_geography` domains are renamed to `claim`, `risk`, and `catastrophe`, `claim_financials` folds into `claim` as a subdomain, and the underwriting lifecycle (23 products: submission, clearance, eligibility, rating, quoting, binding, and decisioning) is rebalanced from `coverage` into `underwriting` so `underwriting` holds 24 products and `coverage` 22 (v1 remains selectable in the viewer). The aggregate totals above still describe the original **40 industries / 80 models** (P&C is counted separately); the index below lists all 41.
+> **Property & Casualty Insurance** is the 41st industry, added after the original gallery run (from [issue #42](https://github.com/databricks-industry-solutions/lakehouse-industry-data-models/issues/42)). It ships both ECM and MVM. **v2** refines v1 through vibe-modeling-of-version: the `claims`, `risk_exposure`, and `catastrophe_geography` domains are renamed to `claim`, `risk`, and `catastrophe`, `claim_financials` folds into `claim` as a subdomain, and the underwriting lifecycle (23 products: submission, clearance, eligibility, rating, quoting, binding, and decisioning) is rebalanced from `coverage` into `underwriting` so `underwriting` holds 24 products and `coverage` 22 (v1 remains selectable in the viewer). **Asset Management** is the 42nd industry: an institutional asset manager investing for several participating pension plans (23 domains, 566 tables, 373 metric views). It ships the ECM only. The aggregate totals above still describe the original **40 industries / 80 models** (P&C and Asset Management are counted separately); the index below lists all 42.
 
 <details>
 <summary><b>Financial Services &amp; Insurance</b></summary>
@@ -184,6 +184,7 @@ Click an industry to open its folder. The installer resolves the highest version
 | [Health Insurance](./data-models/health_insurance/) | v2 | [411](./data-models/health_insurance/v2/ecm/) | [130](./data-models/health_insurance/v2/mvm/) |
 | [Life Insurance](./data-models/life_insurance/) | v1 | [468](./data-models/life_insurance/v1/ecm/) | [217](./data-models/life_insurance/v1/mvm/) |
 | [Property & Casualty Insurance](./data-models/pc_insurance/) | v2 | [226](./data-models/pc_insurance/v2/ecm/) | [90](./data-models/pc_insurance/v2/mvm/) |
+| [Asset Management](./data-models/asset_management/) | v1 | [566](./data-models/asset_management/v1/ecm/) | &mdash; |
 
 </details>
 
