@@ -53,6 +53,17 @@ quadrants below:
 | — | `autonomous-validation` | *(cross-cutting)* | Execution-discipline guidance for running at scale: scratchpad-validate → confirm → persist, batching discipline, human-in-the-loop contract. |
 | — | `domain-sync` | *(steady-state)* | Keeps a built model's artifacts in sync after point updates: change→artifact impact matrix, staleness linter, scoped regeneration. |
 
+### Clinical data standards (clinical_trials v2)
+
+These four skills work against the `clinical_trials` v2 model and plug into the loop above: terminology and USDM ingest feed **Build**, projection and conformance feed **Validate**.
+
+| Skill | Station | What it does |
+|-------|---------|--------------|
+| `cdisc-terminology-load` | **Build** | Loads CDISC Controlled Terminology from the NCI EVS quarterly package (free) into `datamanagement.codelist` and `codelist_term`, with deterministic keys per package version; LOINC and customer-licensed MedDRA, WHODrug and SNOMED CT structure into the `terminology` domain. |
+| `usdm-study-ingest` | **Build** | Loads a CDISC USDM v4 study definition (DDF-RA JSON) into the `study` domain: study version, design, arms, epochs, cells, elements, schedule timeline, encounters, activities and biomedical concepts. |
+| `cdisc-submission-projection` | **Validate** | Projects the business-shaped silver model to SDTM datasets from mapping metadata, decoding Controlled Terminology through `codelist_term`, and exports CDISC Dataset-JSON. |
+| `cdisc-conformance-validation` | **Validate** | Runs CDISC CORE (cdisc-rules-engine with cdisc-open-rules) on the projected datasets and lands the findings in tables for review before database lock. |
+
 Every loop station emits `docs/commentary/{skill}-improvement-recommendations.md` on completion
 (protocol: `autonomous-validation/commentary-protocol.md`) — a per-run, self-improving feedback
 artifact.
