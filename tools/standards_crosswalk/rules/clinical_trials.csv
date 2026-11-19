@@ -1,0 +1,62 @@
+domain,product,attribute,standard,standard_version,target_entity,target_element,match_type,confidence,evidence,notes
+terminology,meddra_pt,pt_code,SDTM,3.4,AE,AEPTCD,derived,high,model_attribute_explicit,"MedDRA PT code, reached from safety.adverse_event.meddra_pt_id"
+safety,adverse_event,meddra_pt_name,SDTM,3.4,AE,AEDECOD,exact,high,model_attribute_explicit,MedDRA Preferred Term text (coded term)
+safety,adverse_event,ae_term_verbatim,SDTM,3.4,AE,AETERM,exact,high,model_attribute_name,Verbatim adverse event term
+safety,adverse_event,meddra_llt_code,SDTM,3.4,AE,AELLTCD,exact,high,model_attribute_explicit,MedDRA Lowest Level Term code
+safety,adverse_event,meddra_soc_code,SDTM,3.4,AE,AESOCCD,exact,high,model_attribute_explicit,MedDRA System Organ Class code
+safety,adverse_event,meddra_soc_name,SDTM,3.4,AE,AESOC,exact,high,model_attribute_explicit,MedDRA System Organ Class name
+safety,adverse_event,onset_date,SDTM,3.4,AE,AESTDTC,exact,high,model_attribute_name,Adverse event start date
+safety,adverse_event,resolution_date,SDTM,3.4,AE,AEENDTC,exact,high,model_attribute_name,Adverse event end date
+safety,adverse_event,severity,SDTM,3.4,AE,AESEV,derived,high,model_attribute_name,Severity classification
+safety,adverse_event,ctcae_grade,SDTM,3.4,AE,AETOXGR,derived,high,model_attribute_name,Toxicity grade (CTCAE or similar)
+safety,adverse_event,is_serious,SDTM,3.4,AE,AESER,derived,high,model_attribute_name,Serious adverse event indicator
+safety,adverse_event,outcome,SDTM,3.4,AE,AEOUT,derived,high,model_attribute_name,Adverse event outcome
+safety,adverse_event,action_taken,SDTM,3.4,AE,AEACN,derived,high,model_attribute_name,Action taken with IMP
+safety,adverse_event,ae_term_verbatim,CDASH,2.0,AE,AETERM,exact,high,model_attribute_name,Verbatim adverse event term (eCRF collection)
+safety,adverse_event,onset_date,CDASH,2.0,AE,AESTDAT,exact,high,model_attribute_name,Adverse event start date as collected (CDASH AESTDAT; SDTM derives AESTDTC)
+safety,adverse_event,severity,CDASH,2.0,AE,AESEV,derived,high,model_attribute_name,Adverse event severity
+safety,adverse_event,is_serious,CDASH,2.0,AE,AESER,derived,high,model_attribute_name,Serious adverse event indicator
+terminology,meddra_pt,pt_code,FHIR,R4,AdverseEvent,event.coding.code,derived,high,model_attribute_explicit,"MedDRA PT code, reached from safety.adverse_event.meddra_pt_id"
+safety,adverse_event,onset_date,FHIR,R4,AdverseEvent,date,exact,high,model_attribute_name,Adverse event occurrence date
+safety,adverse_event,severity,FHIR,R4,AdverseEvent,severity,derived,high,model_attribute_name,Adverse event severity
+safety,adverse_event,outcome,FHIR,R4,AdverseEvent,outcome,derived,high,model_attribute_name,Adverse event outcome
+safety,adverse_event,causality_assessment,FHIR,R4,AdverseEvent,suspectEntity.causality.assessment,related,medium,model_attribute_name,Causality assessment of the suspect entity
+safety,adverse_event,trial_subject_id,FHIR,R4,AdverseEvent,subject,derived,high,model_fk_reference,Reference to ResearchSubject
+terminology,meddra_pt,pt_code,OMOP,5.4,condition_occurrence,condition_source_value,derived,medium,model_attribute_explicit,"MedDRA PT code, reached from safety.adverse_event.meddra_pt_id"
+safety,adverse_event,onset_date,OMOP,5.4,condition_occurrence,condition_start_date,derived,medium,model_attribute_name,Condition (adverse event) start date
+subject,trial_subject,trial_subject_id,FHIR,R4,ResearchSubject,id,derived,high,model_attribute_name,ResearchSubject identifier
+subject,demographic,age_at_screening,SDTM,3.4,DM,AGE,exact,high,model_attribute_name,Age at baseline
+subject,demographic,date_of_birth,SDTM,3.4,DM,BRTHDTC,exact,high,model_attribute_name,Birth date
+subject,demographic,date_of_birth,FHIR,R4,Patient,birthDate,exact,high,model_attribute_name,Birth date
+subject,demographic,sex_codelist_term_id,SDTM,3.4,DM,SEX,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (SEX, C66731)"
+subject,demographic,sex_codelist_term_id,FHIR,R4,Patient,gender,derived,medium,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (SEX, C66731)"
+subject,demographic,race_codelist_term_id,SDTM,3.4,DM,RACE,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (RACE C74457, or RACEC C128689 where the CT package carries only the as-collected list)"
+subject,demographic,ethnicity_codelist_term_id,SDTM,3.4,DM,ETHNIC,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (ETHNIC C66790, or ETHNICC C128690 where the CT package carries only the as-collected list)"
+subject,medical_history,meddra_pt,SDTM,3.4,MH,MHDECOD,exact,high,model_attribute_name,Medical history dictionary-derived term (MedDRA PT)
+subject,medical_history,onset_date,SDTM,3.4,MH,MHSTDTC,exact,high,model_attribute_name,Medical history start date
+subject,medical_history,resolution_date,SDTM,3.4,MH,MHENDTC,exact,high,model_attribute_name,Medical history end date
+subject,concomitant_medication,whodrug_drug_name,SDTM,3.4,CM,CMDECOD,exact,high,model_attribute_explicit,Standardized (WHODrug) medication name; CMTRT is the reported name
+subject,concomitant_medication,start_date,SDTM,3.4,CM,CMSTDTC,exact,high,model_attribute_name,Concomitant medication start date
+subject,concomitant_medication,end_date,SDTM,3.4,CM,CMENDTC,exact,high,model_attribute_name,Concomitant medication end date
+subject,concomitant_medication,dose,SDTM,3.4,CM,CMDOSE,exact,high,model_attribute_name,Concomitant medication dose
+study,study,study_id,FHIR,R4,ResearchStudy,id,derived,high,model_attribute_explicit,ResearchStudy identifier
+study,endpoint,endpoint_name,USDM,4.0,Endpoint,name,derived,high,model_attribute_name,Endpoint name (study design)
+study,endpoint,endpoint_description,USDM,4.0,Endpoint,description,derived,high,model_attribute_name,Endpoint description (study design)
+study,arm,arm_name,USDM,4.0,StudyArm,name,derived,high,model_attribute_name,Study arm name
+study,epoch,epoch_name,USDM,4.0,StudyEpoch,name,derived,high,model_attribute_name,Study epoch name
+study,eligibility_criterion,criterion_text,USDM,4.0,EligibilityCriterion,description,derived,high,model_attribute_name,Eligibility criterion text
+laboratory,laboratory_lab_result,lbcat,SDTM,3.4,LB,LBCAT,exact,high,model_attribute_explicit,Laboratory test category
+laboratory,laboratory_lab_result,result_value_numeric,SDTM,3.4,LB,LBSTRESN,derived,medium,model_attribute_explicit,Numeric result in standard format (LBORRES is the character original result)
+laboratory,laboratory_lab_result,result_value_numeric,FHIR,R4,Observation,valueQuantity.value,derived,high,model_attribute_explicit,Observation numeric value
+laboratory,laboratory_lab_result,result_standard_unit,SDTM,3.4,LB,LBSTRESU,exact,high,model_attribute_explicit,Standard unit for lab result
+consent,consent_subject_consent,consent_date,FHIR,R4,Consent,dateTime,related,medium,model_attribute_explicit,When the consent was agreed
+subject,demographic,age_unit_codelist_term_id,SDTM,3.4,DM,AGEU,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (AGEU, C66781)"
+safety,adverse_event,adverse_severity_codelist_term_id,SDTM,3.4,AE,AESEV,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (AESEV, C66769)"
+safety,adverse_event,adverse_outcome_codelist_term_id,SDTM,3.4,AE,AEOUT,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (OUT, C66768)"
+safety,adverse_event,adverse_action_taken_codelist_term_id,SDTM,3.4,AE,AEACN,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (ACN, C66767)"
+subject,concomitant_medication,route_codelist_term_id,SDTM,3.4,CM,CMROUTE,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (ROUTE, C66729)"
+subject,concomitant_medication,dose_unit_codelist_term_id,SDTM,3.4,CM,CMDOSU,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (UNIT, C71620)"
+subject,concomitant_medication,dose_form_codelist_term_id,SDTM,3.4,CM,CMDOSFRM,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (FRM, C66726)"
+study,dosing_regimen,dose_unit_codelist_term_id,SDTM,3.4,EX,EXDOSU,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (UNIT, C71620)"
+study,dosing_regimen,route_codelist_term_id,SDTM,3.4,EX,EXROUTE,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (ROUTE, C66729)"
+study,dosing_regimen,dose_form_codelist_term_id,SDTM,3.4,EX,EXDOSFRM,derived,high,model_attribute_explicit,"Decode through datamanagement.codelist_term.submission_value (FRM, C66726)"

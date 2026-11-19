@@ -1,0 +1,13 @@
+domain,product,attribute,standard,standard_version,target_entity,target_element,match_type,confidence,evidence,source_ref
+terminology,meddra_pt,pt_code,FHIR,R4,AdverseEvent,event.coding.code,derived,high,mapped from meddra_pt.pt_code,"MedDRA PT code, reached from safety.adverse_event.meddra_pt_id"
+safety,adverse_event,onset_date,FHIR,R4,AdverseEvent,date,exact,high,Attribute name: onset_date,Adverse event occurrence date
+safety,adverse_event,severity,FHIR,R4,AdverseEvent,severity,derived,high,Attribute name: severity,Adverse event severity
+safety,adverse_event,outcome,FHIR,R4,AdverseEvent,outcome,derived,high,Attribute name: outcome,Adverse event outcome
+safety,adverse_event,causality_assessment,FHIR,R4,AdverseEvent,suspectEntity.causality.assessment,related,medium,Attribute name: causality_assessment,Causality assessment of the suspect entity
+safety,adverse_event,trial_subject_id,FHIR,R4,AdverseEvent,subject,derived,high,mapped from adverse_event.trial_subject_id,Reference to ResearchSubject
+subject,trial_subject,trial_subject_id,FHIR,R4,ResearchSubject,id,derived,high,Attribute name: trial_subject_id,ResearchSubject identifier
+subject,demographic,date_of_birth,FHIR,R4,Patient,birthDate,exact,high,Attribute name: date_of_birth,Birth date
+subject,demographic,sex_codelist_term_id,FHIR,R4,Patient,gender,derived,medium,CDISC reference in description,"Decode through datamanagement.codelist_term.submission_value (SEX, C66731)"
+study,study,study_id,FHIR,R4,ResearchStudy,id,derived,high,mapped from study.study_id,ResearchStudy identifier
+laboratory,laboratory_lab_result,result_value_numeric,FHIR,R4,Observation,valueQuantity.value,derived,high,SDTM reference in description,Observation numeric value
+consent,consent_subject_consent,consent_date,FHIR,R4,Consent,dateTime,related,medium,mapped from consent_subject_consent.consent_date,When the consent was agreed

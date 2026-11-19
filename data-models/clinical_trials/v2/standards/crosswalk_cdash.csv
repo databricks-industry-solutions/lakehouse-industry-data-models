@@ -1,0 +1,5 @@
+domain,product,attribute,standard,standard_version,target_entity,target_element,match_type,confidence,evidence,source_ref
+safety,adverse_event,ae_term_verbatim,CDASH,2.0,AE,AETERM,exact,high,Attribute name: ae_term_verbatim,Verbatim adverse event term (eCRF collection)
+safety,adverse_event,onset_date,CDASH,2.0,AE,AESTDAT,exact,high,Attribute name: onset_date,Adverse event start date as collected (CDASH AESTDAT; SDTM derives AESTDTC)
+safety,adverse_event,severity,CDASH,2.0,AE,AESEV,derived,high,Attribute name: severity,Adverse event severity
+safety,adverse_event,is_serious,CDASH,2.0,AE,AESER,derived,high,Attribute name: is_serious,Serious adverse event indicator

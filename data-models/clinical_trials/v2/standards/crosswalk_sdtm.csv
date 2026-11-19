@@ -1,0 +1,39 @@
+domain,product,attribute,standard,standard_version,target_entity,target_element,match_type,confidence,evidence,source_ref
+terminology,meddra_pt,pt_code,SDTM,3.4,AE,AEPTCD,derived,high,mapped from meddra_pt.pt_code,"MedDRA PT code, reached from safety.adverse_event.meddra_pt_id"
+safety,adverse_event,meddra_pt_name,SDTM,3.4,AE,AEDECOD,exact,high,mapped from adverse_event.meddra_pt_name,MedDRA Preferred Term text (coded term)
+safety,adverse_event,ae_term_verbatim,SDTM,3.4,AE,AETERM,exact,high,Attribute name: ae_term_verbatim,Verbatim adverse event term
+safety,adverse_event,meddra_llt_code,SDTM,3.4,AE,AELLTCD,exact,high,mapped from adverse_event.meddra_llt_code,MedDRA Lowest Level Term code
+safety,adverse_event,meddra_soc_code,SDTM,3.4,AE,AESOCCD,exact,high,mapped from adverse_event.meddra_soc_code,MedDRA System Organ Class code
+safety,adverse_event,meddra_soc_name,SDTM,3.4,AE,AESOC,exact,high,mapped from adverse_event.meddra_soc_name,MedDRA System Organ Class name
+safety,adverse_event,onset_date,SDTM,3.4,AE,AESTDTC,exact,high,Attribute name: onset_date,Adverse event start date
+safety,adverse_event,resolution_date,SDTM,3.4,AE,AEENDTC,exact,high,Attribute name: resolution_date,Adverse event end date
+safety,adverse_event,severity,SDTM,3.4,AE,AESEV,derived,high,Attribute name: severity,Severity classification
+safety,adverse_event,ctcae_grade,SDTM,3.4,AE,AETOXGR,derived,high,Attribute name: ctcae_grade,Toxicity grade (CTCAE or similar)
+safety,adverse_event,is_serious,SDTM,3.4,AE,AESER,derived,high,Attribute name: is_serious,Serious adverse event indicator
+safety,adverse_event,outcome,SDTM,3.4,AE,AEOUT,derived,high,Attribute name: outcome,Adverse event outcome
+safety,adverse_event,action_taken,SDTM,3.4,AE,AEACN,derived,high,Attribute name: action_taken,Action taken with IMP
+subject,demographic,age_at_screening,SDTM,3.4,DM,AGE,exact,high,Attribute name: age_at_screening,Age at baseline
+subject,demographic,date_of_birth,SDTM,3.4,DM,BRTHDTC,exact,high,Attribute name: date_of_birth,Birth date
+subject,demographic,sex_codelist_term_id,SDTM,3.4,DM,SEX,derived,high,CDISC reference in description,"Decode through datamanagement.codelist_term.submission_value (SEX, C66731)"
+subject,demographic,race_codelist_term_id,SDTM,3.4,DM,RACE,derived,high,CDISC reference in description,"Decode through datamanagement.codelist_term.submission_value (RACE C74457, or RACEC C128689 where the CT package carries only the as-collected list)"
+subject,demographic,ethnicity_codelist_term_id,SDTM,3.4,DM,ETHNIC,derived,high,CDISC reference in description,"Decode through datamanagement.codelist_term.submission_value (ETHNIC C66790, or ETHNICC C128690 where the CT package carries only the as-collected list)"
+subject,medical_history,meddra_pt,SDTM,3.4,MH,MHDECOD,exact,high,Attribute name: meddra_pt,Medical history dictionary-derived term (MedDRA PT)
+subject,medical_history,onset_date,SDTM,3.4,MH,MHSTDTC,exact,high,Attribute name: onset_date,Medical history start date
+subject,medical_history,resolution_date,SDTM,3.4,MH,MHENDTC,exact,high,Attribute name: resolution_date,Medical history end date
+subject,concomitant_medication,whodrug_drug_name,SDTM,3.4,CM,CMDECOD,exact,high,mapped from concomitant_medication.whodrug_drug_name,Standardized (WHODrug) medication name; CMTRT is the reported name
+subject,concomitant_medication,start_date,SDTM,3.4,CM,CMSTDTC,exact,high,Attribute name: start_date,Concomitant medication start date
+subject,concomitant_medication,end_date,SDTM,3.4,CM,CMENDTC,exact,high,Attribute name: end_date,Concomitant medication end date
+subject,concomitant_medication,dose,SDTM,3.4,CM,CMDOSE,exact,high,Attribute name: dose,Concomitant medication dose
+laboratory,laboratory_lab_result,lbcat,SDTM,3.4,LB,LBCAT,exact,high,SDTM reference in description,Laboratory test category
+laboratory,laboratory_lab_result,result_value_numeric,SDTM,3.4,LB,LBSTRESN,derived,medium,SDTM reference in description,Numeric result in standard format (LBORRES is the character original result)
+laboratory,laboratory_lab_result,result_standard_unit,SDTM,3.4,LB,LBSTRESU,exact,high,SDTM reference in description | CDISC reference in description,Standard unit for lab result
+subject,demographic,age_unit_codelist_term_id,SDTM,3.4,DM,AGEU,derived,high,CDISC reference in description,"Decode through datamanagement.codelist_term.submission_value (AGEU, C66781)"
+safety,adverse_event,adverse_severity_codelist_term_id,SDTM,3.4,AE,AESEV,derived,high,mapped from adverse_event.adverse_severity_codelist_term_id,"Decode through datamanagement.codelist_term.submission_value (AESEV, C66769)"
+safety,adverse_event,adverse_outcome_codelist_term_id,SDTM,3.4,AE,AEOUT,derived,high,mapped from adverse_event.adverse_outcome_codelist_term_id,"Decode through datamanagement.codelist_term.submission_value (OUT, C66768)"
+safety,adverse_event,adverse_action_taken_codelist_term_id,SDTM,3.4,AE,AEACN,derived,high,mapped from adverse_event.adverse_action_taken_codelist_term_id,"Decode through datamanagement.codelist_term.submission_value (ACN, C66767)"
+subject,concomitant_medication,route_codelist_term_id,SDTM,3.4,CM,CMROUTE,derived,high,CDISC reference in description,"Decode through datamanagement.codelist_term.submission_value (ROUTE, C66729)"
+subject,concomitant_medication,dose_unit_codelist_term_id,SDTM,3.4,CM,CMDOSU,derived,high,CDISC reference in description,"Decode through datamanagement.codelist_term.submission_value (UNIT, C71620)"
+subject,concomitant_medication,dose_form_codelist_term_id,SDTM,3.4,CM,CMDOSFRM,derived,high,CDISC reference in description,"Decode through datamanagement.codelist_term.submission_value (FRM, C66726)"
+study,dosing_regimen,dose_unit_codelist_term_id,SDTM,3.4,EX,EXDOSU,derived,high,CDISC reference in description,"Decode through datamanagement.codelist_term.submission_value (UNIT, C71620)"
+study,dosing_regimen,route_codelist_term_id,SDTM,3.4,EX,EXROUTE,derived,high,CDISC reference in description,"Decode through datamanagement.codelist_term.submission_value (ROUTE, C66729)"
+study,dosing_regimen,dose_form_codelist_term_id,SDTM,3.4,EX,EXDOSFRM,derived,high,CDISC reference in description,"Decode through datamanagement.codelist_term.submission_value (FRM, C66726)"
