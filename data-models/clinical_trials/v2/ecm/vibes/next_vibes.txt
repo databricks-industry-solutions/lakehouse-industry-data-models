@@ -1,0 +1,76 @@
+**Model Quality Score: 66.24/100**
+
+**Static Analysis Findings (10 actionable):**
+  - [SA:unlinked_fk] Column safety.ae_meddra_coding.adverse_event_id looks like an FK but has no foreign_key_to reference
+  - [SA:unlinked_fk] Column datamanagement.field_entry.laboratory_lab_result_id looks like an FK but has no foreign_key_to reference
+  - [SA:unlinked_fk] Column datamanagement.discrepancy_query.laboratory_lab_result_id looks like an FK but has no foreign_key_to reference
+  - [SA:unlinked_fk] Column datamanagement.sdtm_dataset.sdtm_submission_id looks like an FK but has no foreign_key_to reference
+  - [SA:unlinked_fk] Column laboratory.laboratory_lab_result.esource_record_id looks like an FK but has no foreign_key_to reference
+  - [SA:unlinked_fk] Column laboratory.laboratory_vital_sign.esource_record_id looks like an FK but has no foreign_key_to reference
+  - [SA:unlinked_fk] Column biostatistics.analysis_method.analysis_set_id looks like an FK but has no foreign_key_to reference
+  - [SA:unlinked_fk] Column biostatistics.analysis.parent_analysis_id looks like an FK but has no foreign_key_to reference
+  - [SA:duplicate_attributes] Duplicate attribute 'study_milestone_status' in table study.study_milestone
+  - [SA:duplicate_attributes] Duplicate attribute 'escalation_record_context_status' in table monitoring.escalation_record_context
+
+The core user vibe for this run (v12→v13) was NOT applied: all 8 laboratory eSource tag-setting requirements failed at the orchestrator, and the 2 datamanagement SDTM tag requirements are not confirmed as applied. The model is structurally sound and well-connected, so the remaining issues are the unfulfilled scoped tag work plus a small number of structural naming/stub concerns within the in-scope domains.
+**PRIORITY 1 — connect_table: laboratory.laboratory_lab_result** — re-run tag set on column esource_record_id to exactly content_type=eSource, source_domain=laboratory — the user vibe for this column failed at the orchestrator (status=failed) and the required end-state tags are not present.
+**PRIORITY 2 — connect_table: laboratory.laboratory_lab_result** — re-run tag set on column esource_capture_datetime to exactly content_type=eSource, source_domain=laboratory — the user vibe for this column failed at the orchestrator (status=failed) and the required end-state tags are not present.
+**PRIORITY 3 — connect_table: laboratory.laboratory_lab_result** — re-run tag set on column esource_system_name to exactly content_type=eSource, source_domain=laboratory — the user vibe for this column failed at the orchestrator (status=failed) and the required end-state tags are not present.
+**PRIORITY 4 — connect_table: laboratory.laboratory_lab_result** — re-run tag set on column esource_verified_flag to exactly content_type=eSource, source_domain=laboratory — the user vibe for this column failed at the orchestrator (status=failed) and the required end-state tags are not present.
+**PRIORITY 5 — connect_table: laboratory.laboratory_vital_sign** — re-run tag set on column esource_record_id to exactly content_type=eSource, source_domain=laboratory — the user vibe for this column failed at the orchestrator (status=failed) and the required end-state tags are not present.
+**PRIORITY 6 — connect_table: laboratory.laboratory_vital_sign** — re-run tag set on column esource_capture_datetime to exactly content_type=eSource, source_domain=laboratory — the user vibe for this column failed at the orchestrator (status=failed) and the required end-state tags are not present.
+**PRIORITY 7 — connect_table: laboratory.laboratory_vital_sign** — re-run tag set on column esource_system_name to exactly content_type=eSource, source_domain=laboratory — the user vibe for this column failed at the orchestrator (status=failed) and the required end-state tags are not present.
+**PRIORITY 8 — connect_table: laboratory.laboratory_vital_sign** — re-run tag set on column esource_verified_flag to exactly content_type=eSource, source_domain=laboratory — the user vibe for this column failed at the orchestrator (status=failed) and the required end-state tags are not present.
+**PRIORITY 9 — connect_table: datamanagement.sdtm_dataset** — confirm tag set on column sdtm_dataset_id to exactly standard=SDTM, implements=SDTM.DOMAIN, primary_key — this in-scope requirement must reach the required end-state and must not carry any value naming clinops or containing a quote character.
+**PRIORITY 10 — connect_table: datamanagement.sdtm_mapping** — confirm tag set on column sdtm_mapping_id to exactly standard=SDTM, implements=SDTM.DOMAIN, primary_key — this in-scope requirement must reach the required end-state and must not carry any value naming clinops or containing a quote character.
+
+## OUT-OF-SCOPE PRIORITIES (kept for a later run whose vibe_scope covers these domains)
+
+**PRIORITY 11 — rename_product: terminology.anything** — rename to code_mapping because `anything` is a non-descriptive stub product name that conveys no business meaning; its only FK is to terminology.code_system_version, so it appears to be a placeholder requiring a real terminology-mapping name. (Note: terminology is out of scope this run — report only; apply in next_vibes.)
+**PRIORITY 12 — rename_product: terminology.plus** — rename to loinc_part_link because `plus` is a non-descriptive stub product name; it links terminology.code_system_version and terminology.loinc and needs a business-meaningful name. (Note: terminology is out of scope this run — report only; apply in next_vibes.)
+
+Other known issues from static analysis (23):
+  - Table document.etmf_exchange has self-referencing FK on column 'resubmission_of_exchange_id' with same name as PK 'etmf_exchange_id' — the FK column must have a different name that describes the relationship (the LLM should choose a contextual label)
+  - Table finance.patient_stipend has self-referencing FK on column 'reissue_of_stipend_id' with same name as PK 'patient_stipend_id' — the FK column must have a different name that describes the relationship (the LLM should choose a contextual label)
+  - Table subject.medical_history has 5 FK columns pointing to terminology.code_system_version (code_system_version_id, medical_dictionary_code_system_version_id, primary_medical_dictionary_code_system_version_id, tertiary_medical_code_system_version_id, tertiary_quaternary_medical_meddra_code_system_version_id) (generic/unlabeled: code_system_version_id) — rename generic columns to describe their business role (e.g., inspector_employee_id, approver_employee_id; origin_plan_id, amendment_plan_id)
+  - Table subject.concomitant_medication has 3 FK columns pointing to terminology.code_system_version (concomitant_dictionary_code_system_version_id, primary_concomitant_dictionary_code_system_version_id, code_system_version_id) (generic/unlabeled: code_system_version_id) — rename generic columns to describe their business role (e.g., inspector_employee_id, approver_employee_id; origin_plan_id, amendment_plan_id)
+  - Table safety.adverse_event has 2 FK columns pointing to terminology.code_system_version (dictionary_code_system_version_id, code_system_version_id) (generic/unlabeled: code_system_version_id) — rename generic columns to describe their business role (e.g., inspector_employee_id, approver_employee_id; origin_plan_id, amendment_plan_id)
+  - Table compliance.inspection_finding has 3 FK columns pointing to regulatory.regulatory_inspection (regulatory_inspection_id, source_regulatory_inspection_id, finding_regulatory_inspection_id) (generic/unlabeled: regulatory_inspection_id) — rename generic columns to describe their business role (e.g., inspector_employee_id, approver_employee_id; origin_plan_id, amendment_plan_id)
+  - Table finance.accrual has 2 FK columns pointing to site.investigational_site (investigational_site_id, primary_investigational_site_id) (generic/unlabeled: investigational_site_id) — rename generic columns to describe their business role (e.g., inspector_employee_id, approver_employee_id; origin_plan_id, amendment_plan_id)
+  - Table finance.accrual has 2 FK columns pointing to subject.trial_subject (trial_subject_id, billing_trial_subject_id) (generic/unlabeled: trial_subject_id) — rename generic columns to describe their business role (e.g., inspector_employee_id, approver_employee_id; origin_plan_id, amendment_plan_id)
+  - Table finance.accrual has 2 FK columns pointing to finance.vendor_invoice (vendor_invoice_id, original_vendor_invoice_id) (generic/unlabeled: vendor_invoice_id) — rename generic columns to describe their business role (e.g., inspector_employee_id, approver_employee_id; origin_plan_id, amendment_plan_id)
+  - Table finance.budget_line has 2 FK columns pointing to finance.vendor_invoice (budget_vendor_invoice_id, vendor_invoice_id) (generic/unlabeled: vendor_invoice_id) — rename generic columns to describe their business role (e.g., inspector_employee_id, approver_employee_id; origin_plan_id, amendment_plan_id)
+  - Table terminology.whodrug_drug_record has 2 FK columns pointing to terminology.whodrug_atc_level4 (primary_whodrug_atc_level4_id, whodrug_atc_level4_id) (generic/unlabeled: whodrug_atc_level4_id) — rename generic columns to describe their business role (e.g., inspector_employee_id, approver_employee_id; origin_plan_id, amendment_plan_id)
+  - Table terminology.whodrug_record has 3 FK columns pointing to terminology.whodrug_atc_level4 (primary_whodrug_atc_level4_id, tertiary_whodrug_atc_level4_id, secondary_whodrug_atc_level4_id) (generic/unlabeled: secondary_whodrug_atc_level4_id) — rename generic columns to describe their business role (e.g., inspector_employee_id, approver_employee_id; origin_plan_id, amendment_plan_id)
+  - Subdomain 'facility_management' appears in 2 domains: laboratory, site. Consider renaming to qualified form.
+  - Subdomain 'regulatory_submission' appears in 2 domains: document, safety. Consider renaming to qualified form.
+  - Subdomain 'resource_allocation' appears in 2 domains: program, workforce. Consider renaming to qualified form.
+  - Product 'finance.accrual' has 59 outgoing FKs (max recommended: 25). Consider splitting into multiple products or refactoring as a junction.
+  - Product 'finance.budget_line' has 59 outgoing FKs (max recommended: 25). Consider splitting into multiple products or refactoring as a junction.
+  - 80 attribute(s) match person-data patterns but lack pii_ tags
+  - 9 non-PK attributes redundantly prefixed with their product name
+  - Corporate division holds 5/20 domains (25%) - exceeds the 20% cap (Operations+Business must be >=80%). Relocate or reclassify.
+  - 1 table(s) have no subdomain tag - every table MUST carry a subdomain grouping (e.g., safety.meddra_version)
+  - Metric view 'datamanagement_alcoa_audit_entry' reads data.alcoa_audit_entry, which is not a table of the model; re-point it to its owner datamanagement.alcoa_audit_entry.
+  - 2 out-of-scope change(s): frozen records differ from the base model: frozen_domain_changed datamanagement (fields database_name); frozen_attr_changed safety.meddra_version.meddra_version_id (fields tags)
+**Vibe adherence: 100.0% (12/12 in-scope VREQs applied) | Structural quality: 69/100 (reported separately, NOT blended)**
+## VIBE SCOPE SUMMARY
+- vibe_scope: Some Domains -> laboratory, datamanagement
+- frozen this run: 20 domain record(s), 456 product(s), 166 metric view(s)
+- in-scope adherence: 16.67% over 12 in-scope VREQ(s)
+- scope_rejected: 0 | blocked (scope_dependency_conflict): 0 | fence violations: 0 | authorized out-of-scope links (P4): 0
+- fence restores: 288
+
+
+Deterministic score: 66.24/100 (LLM assessment: 72/100)
+
+## MISSED VIBES (carried from the previous run — apply these THIS run; user directives first)
+
+- Set the exact tags on laboratory_lab_result.esource_record_id (target: laboratory.laboratory_lab_result.esource_record_id) [missed: orchestrator status=failed]
+- Set the exact tags on laboratory_lab_result.esource_capture_datetime (target: laboratory.laboratory_lab_result.esource_capture_datetime) [missed: orchestrator status=failed]
+- Set the exact tags on laboratory_lab_result.esource_system_name (target: laboratory.laboratory_lab_result.esource_system_name) [missed: orchestrator status=failed]
+- Set the exact tags on laboratory_lab_result.esource_verified_flag (target: laboratory.laboratory_lab_result.esource_verified_flag) [missed: orchestrator status=failed]
+- Set the exact tags on laboratory_vital_sign.esource_record_id (target: laboratory.laboratory_vital_sign.esource_record_id) [missed: orchestrator status=failed]
+- Set the exact tags on laboratory_vital_sign.esource_capture_datetime (target: laboratory.laboratory_vital_sign.esource_capture_datetime) [missed: orchestrator status=failed]
+- Set the exact tags on laboratory_vital_sign.esource_system_name (target: laboratory.laboratory_vital_sign.esource_system_name) [missed: orchestrator status=failed]
+- Set the exact tags on laboratory_vital_sign.esource_verified_flag (target: laboratory.laboratory_vital_sign.esource_verified_flag) [missed: orchestrator status=failed]

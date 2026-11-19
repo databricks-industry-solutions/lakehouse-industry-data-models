@@ -1,0 +1,284 @@
+clinical_trials v2 was produced from the published v1 by the Vibe Modelling Agent in a sequence of vibe modeling of version runs. The first pass carries the v2 design; the later passes are bounded corrections, each scoped to the domains it names. Internal iteration numbers are shown for traceability; the published version is v2.
+
+=== Pass 1 (internal iteration v1 to v2, agent 5.1.3, all domains) ===
+
+Evolve the clinical_trials model to v2 so that a sponsor or CRO can run clinical operations on it and also trace every collected data point to the clinical data standards regulators expect. Keep the silver model normalized and business-shaped. Do not reshape it into SDTM; SDTM and ADaM are produced downstream from this model using the standards metadata described below. This is an expansion of v1, not a rewrite: preserve every v1 clinical-operations domain, product and attribute, and add the standards structure below on top of them. Do not drop or shrink existing coverage.
+
+1. Study design aligned to CDISC USDM (Unified Study Definitions Model, DDF reference architecture v4).
+The study domain owns the digital protocol. Extend the existing protocol, arm, epoch, objective, endpoint, eligibility_criterion, study_visit_schedule and visit_procedure products rather than creating duplicates, and add the USDM concepts that are missing: study_version, study_design (interventional or observational), study_cell (arm x epoch), study_element, schedule_timeline, scheduled_activity_instance, encounter, activity, biomedical_concept, study_identifier (registry identifiers such as NCT, EU CT number, IND, with the issuing organization), governance_date, population and cohort, study_intervention, and intercurrent_event, each referencing the estimand in biostatistics it affects (many intercurrent_event to one estimand). Every USDM-aligned product and attribute must reference the USDM class and attribute it implements.
+
+2. CDISC standards metadata.
+Rename the v1 data domain to datamanagement, because data is a forbidden generic domain name; datamanagement is the concrete business function that owns the eCRF, query, validation, EDC-build and SDTM-mapping products. In datamanagement (alongside sdtm_dataset and sdtm_mapping), add the products that hold the standards catalog the clinical data maps to: cdisc_standard (SDTMIG, CDASHIG, ADaMIG, SENDIG, Define-XML, with version; SENDIG is catalogued for completeness only, with no nonclinical SEND structures generated in this model), sdtm_domain_spec, sdtm_variable_spec (name, label, role, core designation, codelist), cdash_variable_spec (CDASH variable name, label, CDASHIG version, codelist), value_level_metadata and define_document. Keep all of these in datamanagement; do not create a separate domain for them. sdtm_mapping must reference sdtm_variable_spec instead of carrying the variable definition as free text, and must keep only the foreign keys a mapping genuinely depends on (study, source eCRF field, target variable, SAP). Remove the unrelated foreign keys from sdtm_dataset such as billing milestone, blinding configuration and randomization scheme. ecrf_field must reference the cdash_variable_spec it collects and its CDASHIG version.
+
+3. CDISC Controlled Terminology.
+Add codelist and codelist_term reference products holding CDISC Controlled Terminology with NCI concept codes (C-codes), submission values, synonyms, extensibility and package version. Categorical attributes governed by CDISC CT (for example sex, race, ethnicity, route of administration, dose form, units, AE outcome, AE action taken, disposition event, epoch type, arm type, visit type) must reference the codelist they draw from.
+
+4. One terminology domain.
+Create a single terminology domain that owns all coding dictionaries: code_system and code_system_version, plus the MedDRA hierarchy (SOC, HLGT, HLT, PT, LLT and SMQ), WHODrug Global (drug record, preferred name, ATC classification levels 1 to 4), LOINC, SNOMED CT, CTCAE and ICD-10. Relocate meddra_term and ctcae_grade from the safety domain into the terminology domain, which becomes their single owner. This is a move, not a copy: the safety domain must not retain its own meddra_term or ctcae_grade product, and anything that referenced them now references the terminology-domain owner. Coded clinical records (adverse_event, medical_history, concomitant_medication, lab_result, disposition) keep the verbatim term and reference the coded concept, the dictionary and the dictionary version used. Rename the misnamed whodb columns on concomitant_medication to WHODrug. These dictionaries are licensed by the customer, so the model defines structure only.
+
+5. Analysis results.
+In biostatistics, add products aligned to the CDISC Analysis Results Standard: reporting_event, analysis, analysis_method, analysis_set, grouping_factor and analysis_output. Connect them to the existing sap, analysis_population, adam_dataset_spec, tlf_shell and tlf_output products. Keep ADaM dataset and variable specifications as metadata products, not as analysis datasets.
+
+6. eSource from electronic health records.
+Add products that capture EHR-to-EDC eSource: ehr_source_system, ehr_data_transfer and a crosswalk from HL7 FHIR ResearchStudy and ResearchSubject to the study and trial_subject products. Lab results and vital signs received through eSource must record their LOINC code and the source FHIR resource.
+
+7. Fix single-source-of-truth findings from v1.
+subject_visit is the single owner of a subject's visit; monitoring_visit is a site monitoring visit and must be named and described so it cannot be mistaken for it. compliance_inspection and regulatory_inspection must collapse into one owner with the other referencing it. Resolve every other cross_domain_duplicate in the v1 next_vibes findings explicitly, following the rename and ownership directions already recorded there: where two products are the same concept, name one canonical owner and have the other reference it via FK; where they are genuinely distinct, give each a distinct name (monitoring_plan, supply_plan and program_plan stay separate; study_milestone, regulatory_milestone and program_milestone stay separate; and site, sponsor and subject each own their own contact). Do not leave any cross_domain_duplicate unaddressed.
+
+8. Standard references on attributes.
+Every attribute that implements a CDISC, USDM, ICH or HL7 FHIR concept records the governing standard and the exact element it implements, for example SDTM AE.AETERM, CDASH AETERM, USDM StudyArm.type, ICH E2B(R3) C.1.1 or FHIR ResearchSubject.status. Patient and subject identifiers, initials, dates of birth, contact details, addresses and any other person-identifying fields are tagged as PII.
+
+
+=== Pass 2 (internal iteration v2 to v3, agent 5.1.3, all domains) ===
+
+Evolve the clinical_trials model from v2 to v3. This is a targeted convergence pass, not an expansion: preserve every v2 domain, product and attribute, and make only the specific corrections below. Do not add new domains. Do not rename or drop anything except where stated. The goal is to close the wiring and single-source-of-truth gaps that remain from v2 so the model is internally consistent and standards-accurate.
+
+1. Wire CDISC Controlled Terminology on the categorical fields that are genuinely CT-governed.
+Each field below already exists and holds a value; add a foreign key from it to datamanagement.codelist_term, and make sure the codelist it draws from exists in datamanagement.codelist with the CDISC codelist short name and NCI C-code shown. Keep the existing verbatim or submission-value column; the new foreign key records which controlled-terminology term applies.
+- subject.demographic.sex references the SEX codelist (NCI C66731).
+- subject.demographic.race references the RACE codelist (NCI C74457).
+- subject.demographic.ethnicity references the ETHNIC codelist (NCI C66790).
+- subject.demographic.age_unit references the AGEU codelist (NCI C66781).
+- safety.adverse_event.outcome references the OUT codelist (NCI C66768).
+- safety.adverse_event.action_taken references the ACN codelist (NCI C66767).
+- safety.adverse_event.severity references the AESEV severity and intensity codelist (NCI C66769).
+- subject.disposition.coded_reason references the NCOMPLT completion and reason for non-completion codelist (NCI C66727).
+- study.dosing_regimen.dosing_route and subject.concomitant_medication.dose_route reference the ROUTE codelist (NCI C66729).
+- study.dosing_regimen.dose_form and subject.concomitant_medication.dose_form reference the FRM pharmaceutical dosage form codelist (NCI C66726).
+- study.dosing_regimen.dose_unit and subject.concomitant_medication.dose_unit reference the UNIT codelist (NCI C71620).
+
+Do not add controlled-terminology foreign keys to sponsor-defined, operational or system fields. Specifically leave unmapped every status field (data_entry_status, lock_status, sdv_status, record_status, result_status, ae_status, arm_status, epoch_status, visit_status, disposition_status, coding_status, condition_status), report_type, blinding_type, intervention_type, comparator_type, and every arm_code, regimen_code, source_system code and clinical_one code. These are not CDISC controlled terminology and must not be forced onto a codelist. Where a CDISC codelist for a field is uncertain (for example gender_identity or causality_assessment), leave the field as it is rather than guessing a codelist.
+
+2. Keep coded clinical records on their dictionaries, not on controlled terminology, and record the dictionary version.
+Rename the misnamed column subject.concomitant_medication.whodb_drug_name to whodrug_drug_name. Make the coded clinical records reference their dictionary concept in the terminology domain and the dictionary version used: adverse_event and medical_history reference terminology.meddra_term; concomitant_medication references terminology.whodrug_drug_record; laboratory lab results and vital signs reference terminology.loinc; and each of these also references terminology.code_system_version for the version of the dictionary applied. ctcae_grade stays a reference to terminology.ctcae_grade.
+
+3. Collapse the inspection single-source-of-truth violation.
+regulatory.regulatory_inspection is the one canonical owner of a regulatory inspection. The compliance domain must not define its own inspection entity: remove the duplicate compliance inspection products and have any compliance-side record that needs an inspection reference it by foreign key to regulatory.regulatory_inspection. An inspection finding record may remain, but it references the canonical regulatory_inspection rather than a compliance-owned copy.
+
+4. Remove the clinops domain by folding its two products into their existing owners.
+laboratory.laboratory_lab_result is the single owner of a laboratory result and laboratory.laboratory_vital_sign is the single owner of a vital sign. Move the eSource attributes that the clinops products added (the LOINC code, the source system reference and the source FHIR resource) onto those laboratory products, then remove the clinops domain and its duplicate clinops_lab_result and vital_signs products so there is exactly one owner for each concept.
+
+5. Trim datamanagement.sdtm_dataset to the foreign keys a dataset genuinely depends on.
+An SDTM dataset depends on its study, its data management plan, its statistical analysis plan and its regulatory submission. Remove the unrelated foreign keys it still carries, such as those to compliance obligation, compliance SOP, agreement deliverable, sponsor delivery preference, sponsor regulatory strategy, regulatory binder and workforce employee.
+
+6. After these changes, resolve any remaining cross-domain duplicate, foreign-key cycle or siloed-table finding the same way v2 was asked to: name one canonical owner and have the other reference it, or give genuinely distinct concepts distinct names. Do not leave empty domains; do not introduce new ones.
+
+
+=== Pass 3 (internal iteration v3 to v4, agent 5.1.3, all domains) ===
+
+Evolve the clinical_trials model from v3 to v4. This is a cleanup pass only. Preserve every domain, product and attribute except where a removal is stated below. Do not add new domains or new products. Do not add any new attribute except where a specific column name is named below. Each instruction describes the desired end state of the model, not a transformation to narrate; do not create any column whose name contains the words "rename", "renamed", "column", "instruction" or "to_" - those are mistakes, not column names.
+
+1. One controlled-terminology foreign key per field.
+Each categorical field that draws on CDISC Controlled Terminology must end with exactly one foreign key to datamanagement.codelist_term, and that foreign key column must be named <field>_codelist_term_id. For every such field, keep the single column named <field>_codelist_term_id and remove every other controlled-terminology foreign key on the same field, including any column whose name ends in _term_id or _ct_term_id that duplicates it. Concretely, the end state is:
+- subject.demographic keeps demographic_sex_codelist_term_id, demographic_race_codelist_term_id, demographic_ethnicity_codelist_term_id and demographic_age_unit_codelist_term_id, and has no other codelist_term foreign key on sex, race, ethnicity or age_unit (remove demographic_race_term_id, demographic_ethnicity_term_id and demographic_age_unit_term_id).
+- safety.adverse_event keeps one codelist_term foreign key each for outcome, action_taken and severity, named adverse_outcome_codelist_term_id, adverse_action_taken_codelist_term_id and adverse_severity_codelist_term_id, and has no other codelist_term foreign key on those three fields (remove the ae_ variants, the _ct_term_id variants and the bare _term_id variants).
+- subject.disposition, study.dosing_regimen and subject.concomitant_medication likewise keep exactly one <field>_codelist_term_id foreign key per controlled-terminology field and no duplicate.
+These dictionary foreign keys are not controlled terminology and must stay as they are: any meddra, whodrug, loinc or ctcae reference.
+
+2. The concomitant_medication drug-name column.
+The subject.concomitant_medication product must have exactly one column for the WHODrug drug name, and its name must be whodrug_drug_name. The product must not contain a column named whodb_drug_name, nor any column whose name contains "renamed" or begins with "column_subject". Remove those.
+
+3. study_design must not hold foreign keys to the entities that belong to it.
+In USDM a study design is composed of its arms, epochs, elements, encounters, population, cohorts, eligibility criteria, objectives, endpoints, interventions, intercurrent events and protocol, and in this normalized model each of those child products already carries a study_design_id foreign key back to study.study_design, which is the correct and only direction. Therefore study.study_design must not carry foreign keys to those children. Remove these columns from study.study_design: arm_id, cohort_id, epoch_id, study_element_id, encounter_id, population_id, eligibility_criterion_id, primary_objective_id, study_objective_id, primary_endpoint_id, study_endpoint_id, study_intervention_id, intercurrent_event_id and protocol_id. Removing them also resolves the circular foreign-key dependencies that run through study_design.
+
+4. Resolve the remaining foreign-key cycles and mismatches.
+Break any remaining circular foreign-key dependency by keeping the foreign key on the dependent side only. The endpoint and objective pair must not both reference each other: an objective references its primary endpoint, and an endpoint does not reference its objective. The milestone cycle across agreement.agreement_billing_milestone, regulatory.regulatory_program_milestone and study.study_protocol_milestone must be broken the same way, keeping one direction. Where a column named regulatory_inspection_id has a description that says compliance, correct the description to regulatory so it matches the foreign key to regulatory.regulatory_inspection.
+
+5. No empty domains, no junk products, no unlinked foreign keys.
+The model must contain no empty domain and no product whose name is a verb or an instruction fragment. The compliance domain must not contain a product named remove or a product named have; those are not entities and must be removed. More generally, remove any product whose name is one of: remove, have, has, add, connect, rename, into, owner, owns, listing. Every column whose name ends in _id and is intended as a foreign key must have a foreign_key_to target; if a column looks like a foreign key but has no sensible target, either connect it to the correct product or remove it. Do not introduce new domains or new products while doing this.
+
+6. Remove skeleton foreign-key-extension products.
+A product must carry its own business attributes, not only primary and foreign keys. The products finance.accrual_fk_extension and finance.budget_line_fk_extension exist only to hold foreign keys; fold their foreign keys back into finance.accrual and finance.budget_line respectively and remove the two _fk_extension products. Do not create any product whose name ends in _fk_extension or _context.
+
+7. Correct wrong column data types.
+A ratio or percentage is a decimal number, not text. Set the type of these columns to DECIMAL: study.arm.randomization_ratio, study.dosing_regimen.randomization_ratio, subject.randomization_assignment.randomization_ratio and biostatistics.sample_size_calc.allocation_ratio.
+
+8. Tag special-category personal data.
+Race and ethnicity are special-category personal data under GDPR Article 9. Tag these as sensitive or special-category PII: subject.demographic.demographic_race_codelist_term_id, subject.demographic.demographic_ethnicity_codelist_term_id, and the race and ethnicity reference products and columns in datamanagement that hold the codelist values. Any patient or subject identifier, initials, date of birth, contact detail or address remains tagged as PII.
+
+
+=== Pass 4 (internal iteration v4 to v5, agent 5.1.3, all domains) ===
+
+Evolve the clinical_trials model from v4 to v5. This is a small cleanup pass only. Preserve every domain, product and attribute except the specific removals below. Do not add new domains or new products. Each instruction describes the desired end state of the model, not a transformation to narrate; do not create any column or product whose name contains the words rename, renamed, column, instruction, remove, have, add or connect.
+
+1. One controlled-terminology foreign key per field on safety.adverse_event.
+The adverse_event product must have exactly one foreign key to datamanagement.codelist_term for each of its three controlled-terminology fields, and no more. The end state is exactly these three columns and no other codelist_term foreign key on adverse_event:
+- adverse_outcome_codelist_term_id for the adverse event outcome (CDISC OUT codelist).
+- adverse_action_taken_codelist_term_id for the action taken with study treatment (CDISC ACN codelist).
+- adverse_severity_codelist_term_id for the severity or intensity (CDISC AESEV codelist).
+Remove every other codelist_term foreign key on adverse_event, including the variants named outcome_codelist_term_id, primary_adverse_outcome_codelist_term_id, severity_codelist_term_id, tertiary_adverse_severity_codelist_term_id, action_taken_codelist_term_id and any similar primary_, secondary_, tertiary_ or bare-field duplicate. An adverse event has one outcome, one action taken and one severity, so one foreign key each.
+
+2. Break the remaining circular foreign-key dependencies, keeping the foreign key on the dependent side only.
+- In biostatistics, the analysis, analysis_set, analysis_method and grouping_factor products form circular dependencies. Keep foreign keys in one direction only: an analysis references its analysis_set; an analysis_method references its analysis; a grouping_factor references the analysis or analysis_method it belongs to. Remove whichever foreign keys close the loop so there is no cycle among these four products.
+- The study and regulatory.ind_application pair must not reference each other. An IND application references its study; study does not reference ind_application. Remove the ind_application foreign key from study.study if present.
+
+3. Correct the remaining ratio column types.
+An allocation ratio is a decimal number, not text. Set the type of these columns to DECIMAL: randomization.rand_scheme.allocation_ratio, randomization.rand_list.allocation_ratio and randomization.stratification_cell.allocation_ratio.
+
+4. Resolve the remaining unlinked foreign keys.
+Every column whose name ends in _id and is meant as a foreign key must have a foreign_key_to target. In particular, compliance.inspection_finding.prior_finding_inspection_finding_id is a self reference to the prior inspection finding and must point to compliance.inspection_finding. If any other column looks like a foreign key but has no sensible target, connect it to the correct product; do not leave it dangling.
+
+5. Give the two thin products their business attributes so they are not skeletons.
+study.study_milestone and monitoring.escalation_record_context each currently hold only keys. Add the few business attributes each needs to be a complete entity: for study_milestone, the milestone name, planned date, actual date and status; for escalation_record_context, the context description, created timestamp and status. Keep them in their current domains and do not create new products.
+
+
+=== Pass 5 (internal iteration v5 to v6, agent 5.3.6, scope datamanagement + laboratory) ===
+
+Evolve the clinical_trials model from v5 to v6. This is a narrow physical-naming correction pass only, scoped to the datamanagement and laboratory domains. Preserve every domain, product, attribute, foreign key, tag and metric view exactly as it is in v5, except for the end state described below. Do not add, remove or rename any domain, product, attribute, foreign key or metric view. Each instruction describes the desired end state of the model, not a transformation to narrate; do not create any column, product, tag or view whose name contains the words rename, renamed, column, instruction, schema, database, correct, fix or physical.
+
+1. The datamanagement domain lives in a schema named datamanagement.
+The datamanagement domain's physical schema name (its database_name) is datamanagement, the same as its domain name, exactly like every other domain in the model, where the schema name always equals the domain name. Every datamanagement table, primary key, foreign key, column tag and schema tag is created in the datamanagement schema. Every metric view owned by datamanagement (datamanagement_alcoa_audit_entry, datamanagement_data_quality_alcoa, datamanagement_coding_assignment, datamanagement_coding_quality, datamanagement_data_entry_productivity, datamanagement_data_entry_session, datamanagement_discrepancy_query, datamanagement_query_management, datamanagement_reconciliation, datamanagement_sdtm_dataset, datamanagement_sdtm_dataset_quality, datamanagement_validation_rule, datamanagement_validation_rule_effectiveness) reads its source tables from the datamanagement schema. No object anywhere in the model is created in, or reads from, a schema named data; data is not a domain of this model.
+
+2. Lineage tags on laboratory eSource attributes name a real domain.
+On laboratory.laboratory_lab_result and laboratory.laboratory_vital_sign, the four eSource attributes esource_record_id, esource_capture_datetime, esource_system_name and esource_verified_flag carry the source_domain tag value laboratory. No tag value anywhere in the model names clinops; clinops is not a domain of this model.
+
+3. Everything else is unchanged.
+The model keeps exactly its 20 domains (study, site, subject, safety, datamanagement, laboratory, supply, monitoring, biostatistics, consent, randomization, sponsor, agreement, regulatory, document, compliance, finance, workforce, program, terminology), all of their products and attributes, all foreign keys, all CDISC Controlled Terminology wiring to datamanagement.codelist_term, and all 168 metric views. No domain, schema, metric file or view is produced for names that are not among these 20 domains (for example clinops, data, into, listing, owner or owns).
+
+
+=== Pass 6 (internal iteration v6 to v7, agent 5.3.6, scope datamanagement + laboratory) ===
+
+Evolve the clinical_trials model from v6 to v7. This is a narrow pass scoped to the datamanagement and laboratory domains. Preserve every domain, product, attribute, foreign key, tag and metric view exactly as it is in v6, except for the end state described below. Do not add, remove or rename any domain, product, attribute, foreign key or metric view. Each instruction describes the desired end state of the model, not a transformation to narrate; do not create any column, product, tag or view whose name contains the words rename, renamed, column, instruction, schema, database, correct, fix, moved or physical.
+
+1. The datamanagement domain lives in a schema named datamanagement.
+Like every other domain in the model, the datamanagement domain's schema has the same name as the domain: datamanagement. Its tables, foreign keys, tags and its 13 metric views all use the datamanagement schema. No object anywhere in the model is created in, or reads from, a schema named data.
+
+2. Laboratory column descriptions describe the column, not its history.
+On laboratory.laboratory_lab_result and laboratory.laboratory_vital_sign, the attribute source_system_code has the description 'Foreign key to the source system reference that supplied this record.' No description in the laboratory domain mentions clinops; clinops is not a domain of this model.
+
+3. Everything else is unchanged.
+The model keeps exactly its 20 domains, all 456 products and all 168 metric views.
+
+
+=== Pass 7 (internal iteration v7 to v9, agent 5.3.6, scope study + subject + document) ===
+
+Evolve the clinical_trials model from v7 to v8. This is a narrow CDISC Controlled Terminology cleanup of exactly the columns named below, on four tables: study.dosing_regimen, subject.demographic, subject.concomitant_medication and document.tmf_artifact. Every column that is not named below keeps exactly its v7 name, type, foreign key, tags and description, on these four tables and on every other table. Each instruction describes the desired end state of the model, not a transformation to narrate; do not create any column, product, tag or view whose name contains the words rename, renamed, column, instruction, add, remove, correct, fix or moved.
+
+1. subject.demographic.
+- The column that v7 calls codelist_term_id is named sex_codelist_term_id: biological sex, foreign key to datamanagement.codelist_term.codelist_term_id, tagged codelist=SEX and implements=SDTM DM.SEX, described as the subject's sex from CDISC CT codelist SEX (C66731).
+- The column that v7 calls race is named race_codelist_term_id: same foreign key, tagged codelist=RACE, implements=SDTM DM.RACE, pii and special_category_pii, described as race from CDISC CT codelist RACE (C74457).
+- The column that v7 calls ethnicity is named ethnicity_codelist_term_id: same foreign key, tagged codelist=ETHNIC, implements=SDTM DM.ETHNIC, pii and special_category_pii, described as ethnicity from CDISC CT codelist ETHNIC (C66790).
+- The column that v7 calls age_unit is named age_unit_codelist_term_id: same foreign key, tagged codelist=AGEU and implements=SDTM DM.AGEU, described as the unit of age_at_screening from CDISC CT codelist AGEU (C66781).
+- demographic has no column named primary_demographic_race_codelist_term_id.
+
+2. study.dosing_regimen.
+- The column that v7 calls dose_unit is named dose_unit_codelist_term_id: foreign key to datamanagement.codelist_term.codelist_term_id, tagged codelist=UNIT and implements=SDTM EX.EXDOSU, described as the dose unit from CDISC CT codelist UNIT (C71620).
+- The column that v7 calls dosing_route is named route_codelist_term_id: same foreign key, tagged codelist=ROUTE and implements=SDTM EX.EXROUTE, described as the route of administration from CDISC CT codelist ROUTE (C66729).
+- The column that v7 calls primary_dosing_codelist_id is named dose_form_codelist_term_id: foreign key to datamanagement.codelist_term.codelist_term_id (not datamanagement.codelist), tagged codelist=FRM and implements=SDTM EX.EXDOSFRM, described as the pharmaceutical dose form from CDISC CT codelist FRM (C66726).
+- dosing_regimen has no column named codelist_term_id and no column named dosing_route_codelist_id.
+
+3. subject.concomitant_medication.
+- The column that v7 calls dose_form is named dose_form_codelist_term_id: foreign key to datamanagement.codelist_term.codelist_term_id, tagged codelist=FRM and implements=SDTM CM.CMDOSFRM, described as the dose form from CDISC CT codelist FRM (C66726).
+- The column that v7 calls dose_route is named route_codelist_term_id: same foreign key, tagged codelist=ROUTE and implements=SDTM CM.CMROUTE, described as the route from CDISC CT codelist ROUTE (C66729).
+- The column that v7 calls dose_unit is named dose_unit_codelist_term_id: same foreign key, tagged codelist=UNIT and implements=SDTM CM.CMDOSU, described as the dose unit from CDISC CT codelist UNIT (C71620).
+- concomitant_medication has no column named codelist_term_id.
+
+4. document.tmf_artifact.
+- tmf_artifact has no column named codelist_term_id. The TMF Reference Model is not CDISC Controlled Terminology.
+
+5. Columns that stay exactly as they are in v7 (same name, type, foreign key or none, tags and description). These are identifiers, dates, amounts, free text or sponsor-defined values, not controlled terminology:
+- subject.demographic: arm_id, country, date_of_birth, birth_year, age_at_screening, edc_subject_key, subject_number, unique_subject_identifier, sdtm_domain, gender_identity, race_other_description, and every other column not named in item 1.
+- study.dosing_regimen: arm_id, blinding_type, comparator_type, dose_level, dosing_frequency, and every other column not named in item 2.
+- subject.concomitant_medication: dose, start_date, end_date, indication, verbatim_term, whodrug_atc_code, whodrug_version, sdtm_domain, concomitant_medication_category, subcategory, dose_frequency, and every other column not named in item 3.
+- Every column of every other table in the model, including subject.trial_subject, subject.subject_contact and subject.stipend_payment.
+
+6. Everything else is unchanged.
+The model keeps exactly 20 domains, all 456 products and all 168 metric views. No product is added or removed.
+
+
+=== Pass 8 (internal iteration v9 to v10, agent 5.3.6, scope subject + datamanagement + randomization + terminology + safety + biostatistics) ===
+
+Evolve the clinical_trials model from v9 to v10. This is a narrow cleanup of exactly the 32 column tag sets and the 9 metric views named below. For the columns, only their tags change: their names, types, foreign keys and descriptions stay exactly as in v9. Every other column, product, foreign key and metric view in the model stays exactly as in v9. Each instruction describes the desired end state of the model, not a transformation to narrate.
+
+1. No tag key or tag value anywhere in the model contains a quote character. In v9 the columns below carry some tags twice, once wrapped in single quotes and once without; each such tag appears once, without quotes. The tags of each column below are exactly the ones listed for it, in this order:
+- subject.trial_subject.trial_subject_id: pii, PII, pii_field_type=subject_identifier, primary_key
+- subject.trial_subject.enrollment_status: implements=SDTM DS.DSDECOD, standard=FHIR, implements=FHIR ResearchSubject.status, standard_element=ResearchSubject.status
+- subject.trial_subject.ethnicity: PII, implements=SDTM DM.ETHNIC, pii_health, standard=SDTM, pii=true, pii_field_type=health, restricted, standard_element=DM.ETHNIC, pii_special_category_gdpr_article_9, gdpr_article9_special_category
+- subject.trial_subject.first_dose_date: implements=SDTM EX.EXSTDTC, standard=SDTM, standard_element=EX.EXSTDTC
+- subject.trial_subject.last_dose_date: implements=SDTM EX.EXENDTC, standard=SDTM, standard_element=EX.EXENDTC
+- subject.trial_subject.race: implements=SDTM DM.RACE, pii_health, standard=SDTM, standard_element=DM.RACE, pii=true, pii_field_type=health, restricted, pii_special_category_gdpr_article_9, gdpr_article9_special_category
+- subject.trial_subject.randomization_number: PII, implements=SDTM DM.RANDID, pii_field_type=subject_identifier, pii=true, pii_identifier, standard=SDTM, standard_element=DM.RANDID
+- subject.trial_subject.sex: implements=SDTM DM.SEX, pii_health, standard=SDTM, standard_element=DM.SEX, pii=true, pii_field_type=health, restricted
+- subject.trial_subject.subject_source_system: PII, implements=SDTM DM.SUBJID, pii_field_type=subject_identifier, pii_identifier, standard=SDTM, standard_element=DM.SUBJID
+- subject.enrollment.enrollment_status: implements=SDTM DS.DSDECOD, standard=FHIR, implements=FHIR ResearchSubject.status, standard_element=ResearchSubject.status
+- subject.randomization_assignment.country_code: PII, implements=SDTM DM.COUNTRY, pii_address, pii_field_type=address, standard=SDTM, standard_element=DM.COUNTRY
+- subject.randomization_assignment.epoch_name: implements=USDM StudyEpoch.name, standard=USDM, standard_element=StudyEpoch.name
+- subject.randomization_assignment.randomization_number: PII, implements=SDTM DM.RANDID, pii_field_type=subject_identifier, pii=true, pii_identifier, standard=SDTM, standard_element=DM.RANDID
+- subject.subject_visit.visit_number: implements=SDTM SV.VISITNUM, standard=SDTM, standard_element=SV.VISITNUM
+- subject.subject_visit.visit_type: implements=USDM Encounter.type, codelist=VISITTYPE, governing_standard=CDISC CT, standard=USDM, standard_element=Encounter.type
+- subject.disposition.codelist_id: governing_standard=CDISC CT, standard=SDTM, codelist=DSDECOD, implements=SDTM DS.DSDECOD, standard_element=DS.DSDECOD
+- subject.disposition.subject_number: PII, implements=SDTM DM.SUBJID, pii_field_type=subject_identifier, pii_identifier, standard=SDTM, pii=true, restricted, standard_element=DM.SUBJID
+- subject.subject_status_history.subject_number: PII, implements=SDTM DM.SUBJID, pii_field_type=subject_identifier, pii_identifier, standard=SDTM, pii=true, restricted, standard_element=DM.SUBJID
+- subject.subject_contact.address_line1: PII, pii_address, pii_field_type=address, standard=FHIR, standard_element=Patient.address, implements=FHIR Patient.address, pii=true, restricted
+- subject.subject_contact.country_code: PII, implements=SDTM DM.COUNTRY, pii_address, standard=SDTM, pii_field_type=address, restricted, standard_element=DM.COUNTRY
+- subject.population_assignment.randomization_number: PII, implements=SDTM DM.RANDID, pii_field_type=subject_identifier, pii=true, pii_identifier, standard=SDTM, standard_element=DM.RANDID
+- subject.population_assignment.subject_number: PII, implements=SDTM DM.SUBJID, pii_field_type=subject_identifier, pii=true, pii_identifier, restricted, standard=SDTM, standard_element=DM.SUBJID
+- subject.population_assignment.unique_subject_identifier: PII, implements=SDTM DM.USUBJID, pii_field_type=subject_identifier, pii_identifier, pii=true, restricted, standard=SDTM, standard_element=DM.USUBJID
+- subject.demographic.country: implements=SDTM DM.COUNTRY, PII, pii_address, pii_field_type=address, standard=SDTM, standard_element=DM.COUNTRY
+- subject.demographic.edc_subject_key: pii_field_type=subject_identifier, PII, implements=SDTM DM.SUBJID, pii_identifier, standard=SDTM, standard_element=DM.SUBJID, pii_direct
+- subject.medical_history.meddra_pt: pii_health, standard=MedDRA, implements=MedDRA PT, restricted, standard_element=PT
+- subject.subject_consent.consent_date: standard=SDTM, implements=SDTM DS.DSSTDTC, phi_adjacent, standard_element=DS.DSSTDTC, pii=true
+- datamanagement.sdtm_dataset.sdtm_dataset_id: standard=SDTM, implements=SDTM.DOMAIN, primary_key
+- datamanagement.sdtm_mapping.sdtm_mapping_id: standard=SDTM, implements=SDTM.DOMAIN, primary_key
+
+2. A column description is never also a tag. On subject.concomitant_medication, the columns dose_form_codelist_term_id, route_codelist_term_id and dose_unit_codelist_term_id have no tag named description; their tags are exactly:
+- dose_form_codelist_term_id: codelist=FRM, implements=SDTM CM.CMDOSFRM
+- route_codelist_term_id: codelist=ROUTE, implements=SDTM CM.CMROUTE
+- dose_unit_codelist_term_id: codelist=UNIT, implements=SDTM CM.CMDOSU
+Their descriptions stay exactly as in v9.
+
+3. Nine metric views are valid Unity Catalog metric views. Each keeps its name, owner, source table, dimensions and measures, and changes only as described:
+- subject_concomitant_medication and subject_adverse_event_conmed: the route dimension reads the column route_codelist_term_id (the v9 name of the former dose_route column). Neither view references a column named dose_route.
+- terminology_snomed_ct: the parent concept dimension and the measure that counts concepts with a parent read the column parent_snomed_ct_id. The view does not reference parent_concept_id.
+- safety_icsr: the average days-to-submission measure is AVG(CAST(DATEDIFF(submission_date, awareness_date) AS DOUBLE)). The view does not reference a column named days_to_submission.
+- terminology_code_system_version: the Release Year dimension is YEAR(release_date) with no format block, because it is an integer year, not a date.
+- terminology_whodrug_atc_level4: the year dimension built from YEAR(effective_from_date) has no format block, for the same reason.
+- biostatistics_analysis: every window order names a dimension of the view (Analysis Month or Analysis Year). No window order names the column created_timestamp.
+- datamanagement_alcoa_audit_entry: its boolean flag dimensions (is_accurate, is_attributable and the other ALCOA+ flags) have no format block; boolean is not a supported metric view format.
+- randomization_subject_randomization: the Randomizations MoM Growth measure is ROUND(100.0 * (MEASURE(`Randomizations CM`) - MEASURE(`Randomizations PM`)) / NULLIF(MEASURE(`Randomizations PM`), 0), 2), composing the two measures by their backticked names.
+
+4. Everything else is unchanged.
+The model keeps exactly 20 domains, all 456 products and all 168 metric views. No column is added, removed or renamed, and no metric view other than the nine above changes.
+
+
+=== Pass 9 (internal iteration v10 to v11, agent 5.3.6, scope subject) ===
+
+Evolve the clinical_trials model from v10 to v11. This is a narrow fix of exactly two metric views in the subject domain: subject_concomitant_medication and subject_adverse_event_conmed. Every column, product, foreign key, tag and every other metric view in the model stays exactly as in v10. Each instruction describes the desired end state of the model, not a transformation to narrate.
+
+1. The two concomitant medication metric views read only columns that exist on subject.concomitant_medication.
+In subject_concomitant_medication and in subject_adverse_event_conmed, the dose form dimension reads the column dose_form_codelist_term_id (the v10 name of the former dose_form column). Neither view references a column named dose_form, dose_route or dose_unit; where a view uses the route or the dose unit, it reads route_codelist_term_id or dose_unit_codelist_term_id. Each view keeps its name, owner, source table, other dimensions and measures.
+
+2. Everything else is unchanged.
+The model keeps exactly 20 domains, all 456 products and all 168 metric views. No column is added, removed or renamed, and no metric view other than these two changes.
+
+
+=== Pass 10 (internal iteration v11 to v12, agent 5.3.6, scope subject) ===
+
+Evolve the clinical_trials model from v11 to v12. This pass only removes two metric views in the subject domain. Every domain, product, column, foreign key, tag and every other metric view in the model stays exactly as in v11. Each instruction describes the desired end state of the model, not a transformation to narrate.
+
+1. The model has no metric view named subject_concomitant_medication and no metric view named subject_adverse_event_conmed. This is a drop_metric_view of each of these two views. The table subject.concomitant_medication and all of its columns stay exactly as in v11.
+
+2. Everything else is unchanged.
+The model keeps exactly 20 domains, all 456 products and the other 166 metric views exactly as in v11. No column is added, removed or renamed.
+
+
+=== Pass 11 (internal iteration v12 to v13, agent 5.3.6, scope laboratory + datamanagement) ===
+
+Evolve the clinical_trials model from v12 to v13. This is a narrow tag consistency pass on exactly the 10 columns named below, in the laboratory and datamanagement domains. Only the tags of these columns change; their names, types, foreign keys and descriptions stay exactly as in v12. Every other column, product, foreign key and metric view in the model stays exactly as in v12. Each instruction describes the desired end state of the model, not a transformation to narrate.
+
+1. The tags of each column below are exactly the ones listed for it. No tag key or value contains a quote character, and no tag value names clinops, which is not a domain of this model:
+- laboratory.laboratory_lab_result.esource_record_id: content_type=eSource, source_domain=laboratory
+- laboratory.laboratory_lab_result.esource_capture_datetime: content_type=eSource, source_domain=laboratory
+- laboratory.laboratory_lab_result.esource_system_name: content_type=eSource, source_domain=laboratory
+- laboratory.laboratory_lab_result.esource_verified_flag: content_type=eSource, source_domain=laboratory
+- laboratory.laboratory_vital_sign.esource_record_id: content_type=eSource, source_domain=laboratory
+- laboratory.laboratory_vital_sign.esource_capture_datetime: content_type=eSource, source_domain=laboratory
+- laboratory.laboratory_vital_sign.esource_system_name: content_type=eSource, source_domain=laboratory
+- laboratory.laboratory_vital_sign.esource_verified_flag: content_type=eSource, source_domain=laboratory
+- datamanagement.sdtm_dataset.sdtm_dataset_id: standard=SDTM, implements=SDTM.DOMAIN, primary_key
+- datamanagement.sdtm_mapping.sdtm_mapping_id: standard=SDTM, implements=SDTM.DOMAIN, primary_key
+
+2. Everything else is unchanged.
+The model keeps exactly 20 domains, all 456 products and all 166 metric views. No column is added, removed or renamed.
+
+
