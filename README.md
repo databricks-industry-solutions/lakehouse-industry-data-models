@@ -196,7 +196,7 @@ Click an industry to open its folder. The installer resolves the highest version
 | [Healthcare](./data-models/healthcare/) | v2 | [542](./data-models/healthcare/v2/ecm/) | [121](./data-models/healthcare/v2/mvm/) |
 | [Pharmaceuticals](./data-models/pharmaceuticals/) | v1 | [441](./data-models/pharmaceuticals/v1/ecm/) | [213](./data-models/pharmaceuticals/v1/mvm/) |
 | [Genomics & Biotech](./data-models/genomics_biotech/) | v1 | [403](./data-models/genomics_biotech/v1/ecm/) | [182](./data-models/genomics_biotech/v1/mvm/) |
-| [Clinical Trials](./data-models/clinical_trials/) | v2 | [445](./data-models/clinical_trials/v2/ecm/) | [193](./data-models/clinical_trials/v1/mvm/) (v1) |
+| [Clinical Trials](./data-models/clinical_trials/) | v2 | [445](./data-models/clinical_trials/v2/ecm/) | [172](./data-models/clinical_trials/v2/mvm/) |
 
 </details>
 
