@@ -1,5 +1,5 @@
 -- Schema for Domain: biostatistics | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:31
+-- Generated on: 2026-11-20 10:02:57
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`biostatistics` COMMENT 'Owns the statistical planning and analysis lifecycle for clinical trials. Manages the source system versioning, randomization scheme design, sample size calculations, ADaM dataset specifications, TLF production, interim and final analyses';
 
@@ -3059,7 +3059,7 @@ ALTER TABLE `clinical_trials_ecm`.`biostatistics`.`analysis_method` ADD CONSTRAI
 
 ALTER TABLE `clinical_trials_ecm`.`biostatistics`.`analysis_method` ADD CONSTRAINT `fk_biostatistics_analysis_method_tlf_shell_id` FOREIGN KEY (`tlf_shell_id`) REFERENCES `clinical_trials_ecm`.`biostatistics`.`tlf_shell`(`tlf_shell_id`);
 
-ALTER TABLE `clinical_trials_ecm`.`biostatistics`.`analysis_method` SET TAGS ('dbx_data_type' = 'reference_data');
+ALTER TABLE `clinical_trials_ecm`.`biostatistics`.`analysis_method` SET TAGS ('dbx_data_type' = 'master_data');
 
 ALTER TABLE `clinical_trials_ecm`.`biostatistics`.`analysis_method` SET TAGS ('dbx_domain' = 'biostatistics');
 
@@ -3123,7 +3123,7 @@ ALTER TABLE `clinical_trials_ecm`.`biostatistics`.`analysis_set` ADD CONSTRAINT 
 
 ALTER TABLE `clinical_trials_ecm`.`biostatistics`.`analysis_set` ADD CONSTRAINT `fk_biostatistics_analysis_set_tlf_shell_id` FOREIGN KEY (`tlf_shell_id`) REFERENCES `clinical_trials_ecm`.`biostatistics`.`tlf_shell`(`tlf_shell_id`);
 
-ALTER TABLE `clinical_trials_ecm`.`biostatistics`.`analysis_set` SET TAGS ('dbx_data_type' = 'reference_data');
+ALTER TABLE `clinical_trials_ecm`.`biostatistics`.`analysis_set` SET TAGS ('dbx_data_type' = 'master_data');
 
 ALTER TABLE `clinical_trials_ecm`.`biostatistics`.`analysis_set` SET TAGS ('dbx_domain' = 'biostatistics');
 

@@ -1,5 +1,5 @@
 -- Schema for Domain: study | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:35
+-- Generated on: 2026-11-20 10:03:01
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`study` COMMENT 'Core operational domain managing clinical study protocols, design, phases, objectives, endpoints, inclusion/exclusion criteria, visit schedules, and study lifecycle from protocol development through database lock.';
 
@@ -3931,7 +3931,7 @@ ALTER TABLE `clinical_trials_ecm`.`study`.`cohort` ADD CONSTRAINT `fk_study_coho
 
 ALTER TABLE `clinical_trials_ecm`.`study`.`cohort` ADD CONSTRAINT `fk_study_cohort_study_id` FOREIGN KEY (`study_id`) REFERENCES `clinical_trials_ecm`.`study`.`study`(`study_id`);
 
-ALTER TABLE `clinical_trials_ecm`.`study`.`cohort` SET TAGS ('dbx_data_type' = 'reference_data');
+ALTER TABLE `clinical_trials_ecm`.`study`.`cohort` SET TAGS ('dbx_data_type' = 'master_data');
 
 ALTER TABLE `clinical_trials_ecm`.`study`.`cohort` SET TAGS ('dbx_domain' = 'study');
 
@@ -4225,7 +4225,7 @@ ALTER TABLE `clinical_trials_ecm`.`study`.`encounter` ADD CONSTRAINT `fk_study_e
 
 ALTER TABLE `clinical_trials_ecm`.`study`.`encounter` ADD CONSTRAINT `fk_study_encounter_study_id` FOREIGN KEY (`study_id`) REFERENCES `clinical_trials_ecm`.`study`.`study`(`study_id`);
 
-ALTER TABLE `clinical_trials_ecm`.`study`.`encounter` SET TAGS ('dbx_data_type' = 'reference_data');
+ALTER TABLE `clinical_trials_ecm`.`study`.`encounter` SET TAGS ('dbx_data_type' = 'transactional_data');
 
 ALTER TABLE `clinical_trials_ecm`.`study`.`encounter` SET TAGS ('dbx_domain' = 'study');
 
@@ -4375,7 +4375,7 @@ ALTER TABLE `clinical_trials_ecm`.`study`.`activity` ADD CONSTRAINT `fk_study_ac
 
 ALTER TABLE `clinical_trials_ecm`.`study`.`activity` ADD CONSTRAINT `fk_study_activity_study_id` FOREIGN KEY (`study_id`) REFERENCES `clinical_trials_ecm`.`study`.`study`(`study_id`);
 
-ALTER TABLE `clinical_trials_ecm`.`study`.`activity` SET TAGS ('dbx_data_type' = 'reference_data');
+ALTER TABLE `clinical_trials_ecm`.`study`.`activity` SET TAGS ('dbx_data_type' = 'master_data');
 
 ALTER TABLE `clinical_trials_ecm`.`study`.`activity` SET TAGS ('dbx_domain' = 'study');
 

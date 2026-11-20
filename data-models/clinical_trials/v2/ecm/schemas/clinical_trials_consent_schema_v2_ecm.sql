@@ -1,5 +1,5 @@
 -- Schema for Domain: consent | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:31
+-- Generated on: 2026-11-20 10:02:58
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`consent` COMMENT 'Manages the informed consent lifecycle for trial subjects. Owns ICF versions and amendments, eConsent workflows (Clinpal), subject consent status, re-consent triggers, capacity assessments, withdrawal tracking, consent audit trails, and IRB/IEC-approved';
 

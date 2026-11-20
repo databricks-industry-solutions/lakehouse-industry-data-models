@@ -1,5 +1,5 @@
 -- Schema for Domain: terminology | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:36
+-- Generated on: 2026-11-20 10:03:02
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`terminology` COMMENT 'The terminology domain.';
 

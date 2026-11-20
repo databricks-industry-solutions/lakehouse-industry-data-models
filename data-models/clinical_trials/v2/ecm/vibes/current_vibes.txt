@@ -281,4 +281,83 @@ Evolve the clinical_trials model from v12 to v13. This is a narrow tag consisten
 2. Everything else is unchanged.
 The model keeps exactly 20 domains, all 456 products and all 166 metric views. No column is added, removed or renamed.
 
+=== Pass 12 (internal iteration v13 to v14, agent 5.3.6 + stale-database-name fix, scope datamanagement) ===
 
+Evolve the clinical_trials model from v13 to v14. This pass gives CDISC Controlled Terminology one clean owner in the datamanagement domain: one codelist header table and one codelist term table, the shape NCI EVS publishes it in. Only datamanagement.codelist, datamanagement.codelist_term and the eleven per-codelist tables named in item 1 change. Every other product, column, foreign key, tag and metric view in the model stays exactly as in v13, including every foreign key that points at datamanagement.codelist_term.codelist_term_id. Each instruction describes the desired end state of the model, not a transformation to narrate; do not create any column, product or tag whose name contains the words rename, renamed, column, instruction, add, remove, drop, correct or fix.
+
+1. One owner for Controlled Terminology. The model has no products named codelist_sex, codelist_race, codelist_ethnic, codelist_ageu, codelist_out, codelist_acn, codelist_aesev, codelist_ncomplt, codelist_route, codelist_frm or codelist_unit. No foreign key points at any of them. Each is a drop_product: the terms of every CDISC codelist (SEX, RACE, ETHNIC, AGEU, OUT, ACN, AESEV, NCOMPLT, ROUTE, FRM, UNIT and every other) are rows of datamanagement.codelist_term, and the codelists themselves are rows of datamanagement.codelist.
+
+2. datamanagement.codelist is the codelist header table. Its columns are exactly these:
+- codelist_id BIGINT, primary key: surrogate key of the codelist.
+- cdisc_standard_id BIGINT, foreign key to datamanagement.cdisc_standard.cdisc_standard_id: the CDISC standard (for example SDTM or ADaM) the codelist is published for.
+- nci_codelist_code STRING: NCI Thesaurus C-code of the codelist, for example C66731 for SEX.
+- short_name STRING: CDISC codelist short name, for example SEX, RACE or AGEU.
+- codelist_name STRING: CDISC codelist name, for example Sex.
+- codelist_description STRING: CDISC definition of the codelist.
+- extensibility_flag BOOLEAN: true when sponsors may add terms to the codelist (CDISC Codelist Extensible = Yes).
+- package_version STRING: CDISC Controlled Terminology package the codelist was loaded from, for example 2024-03-29.
+codelist has no other columns: no column per codelist (such as sex_codelist or sex_codelist_record, acn_codelist or acn_codelist_record, and the same for aesev, ageu, ethnic, frm, ncomplt, out, race, route and unit), no nci_concept_code column and no submission_value column.
+
+3. datamanagement.codelist_term is the codelist term table. Its columns are exactly these:
+- codelist_term_id BIGINT, primary key: surrogate key of the term.
+- codelist_id BIGINT, foreign key to datamanagement.codelist.codelist_id: the codelist the term belongs to.
+- nci_concept_code STRING: NCI Thesaurus C-code of the term, for example C20197 for Male.
+- submission_value STRING: the CDISC submission value used in SDTM and ADaM datasets, for example M, F, U or HISPANIC OR LATINO.
+- preferred_term STRING: the NCI preferred term, for example Male.
+- decoded_value STRING: the human-readable decode shown to reviewers.
+- synonyms STRING: CDISC synonyms of the term, separated by semicolons.
+- definition STRING: the CDISC definition of the term.
+Every other foreign key in the model that points at datamanagement.codelist_term.codelist_term_id keeps pointing at it.
+
+4. Everything else is unchanged.
+The model keeps exactly 20 domains, all 166 metric views, and every product other than the eleven dropped in item 1, so it has 445 products. No column outside datamanagement.codelist and datamanagement.codelist_term is added, removed, renamed or retyped.
+
+
+=== Pass 13 (internal iteration v14 to v15, agent 5.3.6 + stale-database-name fix, scope datamanagement) ===
+
+Evolve the clinical_trials model from v14 to v15 with exactly the thirteen changes below, all in the datamanagement domain. Nothing else in the model changes.
+
+1. Drop the product datamanagement.codelist_sex.
+2. Drop the product datamanagement.codelist_race.
+3. Drop the product datamanagement.codelist_ethnic.
+4. Drop the product datamanagement.codelist_ageu.
+5. Drop the product datamanagement.codelist_out.
+6. Drop the product datamanagement.codelist_acn.
+7. Drop the product datamanagement.codelist_aesev.
+8. Drop the product datamanagement.codelist_ncomplt.
+9. Drop the product datamanagement.codelist_route.
+10. Drop the product datamanagement.codelist_frm.
+11. Drop the product datamanagement.codelist_unit.
+12. Retype the column datamanagement.codelist_term.submission_value from DECIMAL(18,2) to STRING. It holds CDISC submission values such as M, F or HISPANIC OR LATINO.
+13. Retype the column datamanagement.codelist_term.decoded_value from DECIMAL(18,2) to STRING. It holds the human-readable decode of the term.
+
+No other product, column, foreign key, tag or metric view changes. The model keeps 20 domains, 445 products and 166 metric views.
+
+
+=== Pass 14 (internal iteration v15 to v16, agent 5.3.6 + stale-database-name fix + harvest-skip-removals fix, scope datamanagement) ===
+
+Evolve the clinical_trials model from v15 to v16 with exactly the eleven changes below, all in the datamanagement domain. Nothing else in the model changes.
+
+1. Drop the product datamanagement.codelist_sex.
+2. Drop the product datamanagement.codelist_race.
+3. Drop the product datamanagement.codelist_ethnic.
+4. Drop the product datamanagement.codelist_ageu.
+5. Drop the product datamanagement.codelist_out.
+6. Drop the product datamanagement.codelist_acn.
+7. Drop the product datamanagement.codelist_aesev.
+8. Drop the product datamanagement.codelist_ncomplt.
+9. Drop the product datamanagement.codelist_route.
+10. Drop the product datamanagement.codelist_frm.
+11. Drop the product datamanagement.codelist_unit.
+
+No other product, column, foreign key, tag or metric view changes. The model keeps 20 domains, 445 products and 166 metric views.
+
+=== Pass 15 (internal iteration v16 to v17, agent 5.3.6 + stale-database-name fix + harvest-skip-removals fix, scope datamanagement) ===
+
+Evolve the clinical_trials model from v16 to v17. This pass changes only the source of twelve metric views owned by the datamanagement domain. Every product, column, foreign key, tag and every other metric view in the model stays exactly as in v16. Each instruction describes the desired end state of the model, not a transformation to narrate.
+
+1. The datamanagement metric views read from the datamanagement schema.
+Like every other domain, datamanagement's schema has the same name as the domain. Each of these twelve metric views reads its source table from the datamanagement schema, with its name, dimensions and measures unchanged: datamanagement_coding_assignment, datamanagement_coding_quality, datamanagement_data_entry_productivity, datamanagement_data_entry_session, datamanagement_data_quality_alcoa, datamanagement_discrepancy_query, datamanagement_query_management, datamanagement_reconciliation, datamanagement_sdtm_dataset, datamanagement_sdtm_dataset_quality, datamanagement_validation_rule and datamanagement_validation_rule_effectiveness. No metric view reads from a schema named data; data is not a domain of this model.
+
+2. Everything else is unchanged.
+The model keeps exactly 20 domains, 445 products and 166 metric views.

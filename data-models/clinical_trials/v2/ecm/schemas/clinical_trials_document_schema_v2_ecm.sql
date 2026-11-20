@@ -1,5 +1,5 @@
 -- Schema for Domain: document | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:32
+-- Generated on: 2026-11-20 10:02:58
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`document` COMMENT 'SSOT for Trial Master File (TMF/eTMF) essential documents, SOP library, regulatory binders, site files, controlled document versioning, document workflows, DIA TMF Reference Model compliance, inspection readiness, and archival per ICH GCP requirements.';
 

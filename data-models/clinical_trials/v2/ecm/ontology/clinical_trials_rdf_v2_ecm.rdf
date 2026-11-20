@@ -769,61 +769,6 @@ ind:EhrFhirCrosswalk rdf:type rdfs:Class ;
     rdfs:label 'Ehr Fhir Crosswalk' ;
     rdfs:comment 'Crosswalk mapping between EHR source systems and FHIR ResearchStudy and ResearchSubject resources for clinical trial data integration' .
 
-ind:CodelistSex rdf:type rdfs:Class ;
-    rdfs:subClassOf ind:Datamanagement ;
-    rdfs:label 'Codelist Sex' ;
-    rdfs:comment 'Reference table for CDISC Controlled Terminology SEX codelist' .
-
-ind:CodelistRace rdf:type rdfs:Class ;
-    rdfs:subClassOf ind:Datamanagement ;
-    rdfs:label 'Codelist Race' ;
-    rdfs:comment 'Reference table for CDISC Controlled Terminology RACE codelist' .
-
-ind:CodelistEthnic rdf:type rdfs:Class ;
-    rdfs:subClassOf ind:Datamanagement ;
-    rdfs:label 'Codelist Ethnic' ;
-    rdfs:comment 'Reference table for CDISC Controlled Terminology ETHNIC codelist' .
-
-ind:CodelistAgeu rdf:type rdfs:Class ;
-    rdfs:subClassOf ind:Datamanagement ;
-    rdfs:label 'Codelist Ageu' ;
-    rdfs:comment 'Reference table for CDISC Controlled Terminology AGEU codelist' .
-
-ind:CodelistOut rdf:type rdfs:Class ;
-    rdfs:subClassOf ind:Datamanagement ;
-    rdfs:label 'Codelist Out' ;
-    rdfs:comment 'Reference table for CDISC Controlled Terminology OUT codelist' .
-
-ind:CodelistAcn rdf:type rdfs:Class ;
-    rdfs:subClassOf ind:Datamanagement ;
-    rdfs:label 'Codelist Acn' ;
-    rdfs:comment 'Reference table for CDISC Controlled Terminology ACN codelist' .
-
-ind:CodelistAesev rdf:type rdfs:Class ;
-    rdfs:subClassOf ind:Datamanagement ;
-    rdfs:label 'Codelist Aesev' ;
-    rdfs:comment 'Reference table for CDISC Controlled Terminology AESEV codelist' .
-
-ind:CodelistNcomplt rdf:type rdfs:Class ;
-    rdfs:subClassOf ind:Datamanagement ;
-    rdfs:label 'Codelist Ncomplt' ;
-    rdfs:comment 'Reference table for CDISC Controlled Terminology NCOMPLT codelist' .
-
-ind:CodelistRoute rdf:type rdfs:Class ;
-    rdfs:subClassOf ind:Datamanagement ;
-    rdfs:label 'Codelist Route' ;
-    rdfs:comment 'Reference table for CDISC Controlled Terminology ROUTE codelist' .
-
-ind:CodelistFrm rdf:type rdfs:Class ;
-    rdfs:subClassOf ind:Datamanagement ;
-    rdfs:label 'Codelist Frm' ;
-    rdfs:comment 'Reference table for CDISC Controlled Terminology FRM codelist' .
-
-ind:CodelistUnit rdf:type rdfs:Class ;
-    rdfs:subClassOf ind:Datamanagement ;
-    rdfs:label 'Codelist Unit' ;
-    rdfs:comment 'Reference table for CDISC Controlled Terminology UNIT codelist' .
-
 ind:LabPanel rdf:type rdfs:Class ;
     rdfs:subClassOf ind:Laboratory ;
     rdfs:label 'Lab Panel' ;
@@ -3740,7 +3685,7 @@ ind:criterionType rdf:type rdf:Property ;
 ind:displayOrder rdf:type rdf:Property ;
     rdfs:label 'Display Order' ;
     rdfs:comment 'The display sequence order for this criterion within its type group (inclusion or exclusion) as it should appear in site screening checklists, EDC eligibility modules, and protocol documents.' ;
-    rdfs:domain ind:ClinicalTrials ;
+    rdfs:domain ind:EligibilityCriterion ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:integer .
 
@@ -16813,225 +16758,71 @@ ind:transferredRecordCount rdf:type rdf:Property ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:integer .
 
-ind:acnCodelist rdf:type rdf:Property ;
-    rdfs:label 'Acn Codelist' ;
-    rdfs:comment 'CDISC ACN codelist (NCI C66767) for adverse event action taken values' ;
+ind:nciCodelistCode rdf:type rdf:Property ;
+    rdfs:label 'Nci Codelist Code' ;
+    rdfs:comment 'NCI Thesaurus C-code of the codelist, for example C66731 for SEX' ;
     rdfs:domain ind:Codelist ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:string .
-
-ind:acnCodelistRecord rdf:type rdf:Property ;
-    rdfs:label 'Acn Codelist Record' ;
-    rdfs:comment 'CDISC ACN codelist (NCI C66767) for action taken values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:aesevCodelist rdf:type rdf:Property ;
-    rdfs:label 'Aesev Codelist' ;
-    rdfs:comment 'CDISC AESEV codelist (NCI C66769) for adverse event severity values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:aesevCodelistRecord rdf:type rdf:Property ;
-    rdfs:label 'Aesev Codelist Record' ;
-    rdfs:comment 'CDISC AESEV codelist (NCI C66769) for severity and intensity values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:ageuCodelist rdf:type rdf:Property ;
-    rdfs:label 'Ageu Codelist' ;
-    rdfs:comment 'CDISC AGEU codelist (NCI C66781) for age unit values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:ageuCodelistRecord rdf:type rdf:Property ;
-    rdfs:label 'Ageu Codelist Record' ;
-    rdfs:comment 'CDISC AGEU codelist (NCI C66781) for age unit values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:codelistDescription rdf:type rdf:Property ;
-    rdfs:label 'Codelist Description' ;
-    rdfs:comment 'Codelist description.' ;
-    rdfs:domain ind:ClinicalTrials ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:ethnicCodelist rdf:type rdf:Property ;
-    rdfs:label 'Ethnic Codelist' ;
-    rdfs:comment 'CDISC ETHNIC codelist (NCI C66790) for subject ethnicity values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:ethnicCodelistRecord rdf:type rdf:Property ;
-    rdfs:label 'Ethnic Codelist Record' ;
-    rdfs:comment 'CDISC ETHNIC codelist (NCI C66790) for subject ethnicity values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:extensibilityFlag rdf:type rdf:Property ;
-    rdfs:label 'Extensibility Flag' ;
-    rdfs:comment 'Indicates whether the codelist is extensible per CDISC CT rules' ;
-    rdfs:domain ind:Datamanagement ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:frmCodelist rdf:type rdf:Property ;
-    rdfs:label 'Frm Codelist' ;
-    rdfs:comment 'CDISC FRM codelist (NCI C66726) for pharmaceutical dosage form values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:frmCodelistRecord rdf:type rdf:Property ;
-    rdfs:label 'Frm Codelist Record' ;
-    rdfs:comment 'CDISC FRM codelist (NCI C66726) for pharmaceutical dosage form values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
 
 ind:codelistName rdf:type rdf:Property ;
     rdfs:label 'Codelist Name' ;
-    rdfs:comment 'Codelist name.' ;
+    rdfs:comment 'CDISC codelist name, for example Sex' ;
     rdfs:domain ind:ClinicalTrials ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:string .
 
-ind:nciCodelistCode rdf:type rdf:Property ;
-    rdfs:label 'Nci Codelist Code' ;
-    rdfs:comment 'NCI Thesaurus concept code (C-code) for the CDISC codelist' ;
-    rdfs:domain ind:Codelist ;
+ind:codelistDescription rdf:type rdf:Property ;
+    rdfs:label 'Codelist Description' ;
+    rdfs:comment 'CDISC definition of the codelist' ;
+    rdfs:domain ind:ClinicalTrials ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:string .
 
-ind:nciConceptCode rdf:type rdf:Property ;
-    rdfs:label 'Nci Concept Code' ;
-    rdfs:comment 'NCI Thesaurus C-code for the codelist (e.g., C66731 for SEX, C74457 for RACE, C66790 for ETHNIC, C66781 for AGEU, C66768 for OUT, C66767 for ACN, C66769 for AESEV, C66727 for NCOMPLT, C66729 for ROUTE, C66726 for FRM, C71620 for UNIT)' ;
-    rdfs:domain ind:Datamanagement ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:ncompltCodelist rdf:type rdf:Property ;
-    rdfs:label 'Ncomplt Codelist' ;
-    rdfs:comment 'CDISC NCOMPLT codelist (NCI C66727) for disposition coded reason values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:ncompltCodelistRecord rdf:type rdf:Property ;
-    rdfs:label 'Ncomplt Codelist Record' ;
-    rdfs:comment 'CDISC NCOMPLT codelist (NCI C66727) for completion and non-completion reason values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:outCodelist rdf:type rdf:Property ;
-    rdfs:label 'Out Codelist' ;
-    rdfs:comment 'CDISC OUT codelist (NCI C66768) for adverse event outcome values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:outCodelistRecord rdf:type rdf:Property ;
-    rdfs:label 'Out Codelist Record' ;
-    rdfs:comment 'CDISC OUT codelist (NCI C66768) for adverse event outcome values' ;
+ind:extensibilityFlag rdf:type rdf:Property ;
+    rdfs:label 'Extensibility Flag' ;
+    rdfs:comment 'true when sponsors may add terms to the codelist' ;
     rdfs:domain ind:Codelist ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:boolean .
 
 ind:packageVersion rdf:type rdf:Property ;
     rdfs:label 'Package Version' ;
-    rdfs:comment 'CDISC Controlled Terminology package version (e.g., 2023-12-15)' ;
+    rdfs:comment 'CDISC Controlled Terminology package the codelist was loaded from, for example 2024-03-29' ;
     rdfs:domain ind:ClinicalTrials ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:string .
-
-ind:raceCodelist rdf:type rdf:Property ;
-    rdfs:label 'Race Codelist' ;
-    rdfs:comment 'CDISC RACE codelist (NCI C74457) for subject race values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:raceCodelistRecord rdf:type rdf:Property ;
-    rdfs:label 'Race Codelist Record' ;
-    rdfs:comment 'CDISC RACE codelist (NCI C74457) for subject race values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:routeCodelist rdf:type rdf:Property ;
-    rdfs:label 'Route Codelist' ;
-    rdfs:comment 'CDISC ROUTE codelist (NCI C66729) for dosing route values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:routeCodelistRecord rdf:type rdf:Property ;
-    rdfs:label 'Route Codelist Record' ;
-    rdfs:comment 'CDISC ROUTE codelist (NCI C66729) for route of administration values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:sexCodelist rdf:type rdf:Property ;
-    rdfs:label 'Sex Codelist' ;
-    rdfs:comment 'CDISC SEX codelist (NCI C66731) for subject sex values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:sexCodelistRecord rdf:type rdf:Property ;
-    rdfs:label 'Sex Codelist Record' ;
-    rdfs:comment 'CDISC SEX codelist (NCI C66731) for subject sex values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:submissionValue rdf:type rdf:Property ;
-    rdfs:label 'Submission Value' ;
-    rdfs:comment 'Codelist submission value.' ;
-    rdfs:domain ind:ClinicalTrials ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:decimal .
-
-ind:unitCodelist rdf:type rdf:Property ;
-    rdfs:label 'Unit Codelist' ;
-    rdfs:comment 'CDISC UNIT codelist (NCI C71620) for dose unit values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:unitCodelistRecord rdf:type rdf:Property ;
-    rdfs:label 'Unit Codelist Record' ;
-    rdfs:comment 'CDISC UNIT codelist (NCI C71620) for dose unit values' ;
-    rdfs:domain ind:Codelist ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
 
 ind:codelistTermId rdf:type rdf:Property ;
     rdfs:label 'Codelist Term Id' ;
     rdfs:comment 'BIGINT' ;
-    rdfs:domain ind:Datamanagement ;
-    rdf:type owl:ObjectProperty ;
-    rdfs:range ind:CodelistTerm .
+    rdfs:domain ind:CodelistTerm ;
+    rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:integer .
 
 ind:decodedValue rdf:type rdf:Property ;
     rdfs:label 'Decoded Value' ;
     rdfs:comment 'STRING' ;
     rdfs:domain ind:CodelistTerm ;
     rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:decimal .
+    rdfs:range xsd:string .
+
+ind:nciConceptCode rdf:type rdf:Property ;
+    rdfs:label 'Nci Concept Code' ;
+    rdfs:comment 'NCI Thesaurus concept code (C-code) for the controlled terminology term' ;
+    rdfs:domain ind:CodelistTerm ;
+    rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:string .
 
 ind:preferredTerm rdf:type rdf:Property ;
     rdfs:label 'Preferred Term' ;
+    rdfs:comment 'STRING' ;
+    rdfs:domain ind:ClinicalTrials ;
+    rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:string .
+
+ind:submissionValue rdf:type rdf:Property ;
+    rdfs:label 'Submission Value' ;
     rdfs:comment 'STRING' ;
     rdfs:domain ind:ClinicalTrials ;
     rdf:type owl:DatatypeProperty ;
@@ -17041,6 +16832,13 @@ ind:synonyms rdf:type rdf:Property ;
     rdfs:label 'Synonyms' ;
     rdfs:comment 'Term synonyms.' ;
     rdfs:domain ind:ClinicalTrials ;
+    rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:string .
+
+ind:definition rdf:type rdf:Property ;
+    rdfs:label 'Definition' ;
+    rdfs:comment 'datamanagement.codelist_term has column definition STRING (CDISC definition of the term). definition STRING: the CDISC definition of the term.' ;
+    rdfs:domain ind:CodelistTerm ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:string .
 
@@ -19505,335 +19303,6 @@ ind:researchSubjectFhirReference rdf:type rdf:Property ;
     rdfs:label 'Research Subject Fhir Reference' ;
     rdfs:comment 'description' ;
     rdfs:domain ind:EhrFhirCrosswalk ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:codelistSexId rdf:type rdf:Property ;
-    rdfs:label 'Codelist Sex Id' ;
-    rdfs:comment 'Primary key for codelist_sex' ;
-    rdfs:domain ind:CodelistSex ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:definition rdf:type rdf:Property ;
-    rdfs:label 'Definition' ;
-    rdfs:comment 'The formal definition of the sex term as provided by CDISC Controlled Terminology, clarifying the precise meaning and usage context.' ;
-    rdfs:domain ind:Datamanagement ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:ordinal rdf:type rdf:Property ;
-    rdfs:label 'Ordinal' ;
-    rdfs:comment 'Numeric ordering value for consistent display sequence of sex terms in user interfaces, pick-lists, and reports, ensuring standardized presentation.' ;
-    rdfs:domain ind:ClinicalTrials ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:codelistSexStatus rdf:type rdf:Property ;
-    rdfs:label 'Codelist Sex Status' ;
-    rdfs:comment 'Current lifecycle status of the sex term within the controlled terminology framework. Active terms are available for use; deprecated terms are discouraged; retired terms are obsolete.' ;
-    rdfs:domain ind:CodelistSex ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:synonym rdf:type rdf:Property ;
-    rdfs:label 'Synonym' ;
-    rdfs:comment 'Alternative term or synonym for the sex value, supporting varied terminology usage across different clinical contexts and legacy systems.' ;
-    rdfs:domain ind:ClinicalTrials ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:codelistRaceId rdf:type rdf:Property ;
-    rdfs:label 'Codelist Race Id' ;
-    rdfs:comment 'Primary key for codelist_race' ;
-    rdfs:domain ind:CodelistRace ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:extensibleFlag rdf:type rdf:Property ;
-    rdfs:label 'Extensible Flag' ;
-    rdfs:comment 'Indicates whether the RACE codelist allows sponsor-defined extensions beyond the standard CDISC terms.' ;
-    rdfs:domain ind:Datamanagement ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:publicationDate rdf:type rdf:Property ;
-    rdfs:label 'Publication Date' ;
-    rdfs:comment 'The date when the CT package version containing this race term was officially published by CDISC.' ;
-    rdfs:domain ind:ClinicalTrials ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:date .
-
-ind:regulatorySubmissionFlag rdf:type rdf:Property ;
-    rdfs:label 'Regulatory Submission Flag' ;
-    rdfs:comment 'Indicates whether this race term is approved for use in regulatory submissions to health authorities.' ;
-    rdfs:domain ind:ClinicalTrials ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:sponsorDefinedFlag rdf:type rdf:Property ;
-    rdfs:label 'Sponsor Defined Flag' ;
-    rdfs:comment 'Indicates whether this race term is a sponsor-defined extension rather than a standard CDISC term.' ;
-    rdfs:domain ind:CodelistRace ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:codelistRaceStatus rdf:type rdf:Property ;
-    rdfs:label 'Codelist Race Status' ;
-    rdfs:comment 'The lifecycle status of this race term within the CDISC Controlled Terminology governance process.' ;
-    rdfs:domain ind:CodelistRace ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:synonymList rdf:type rdf:Property ;
-    rdfs:label 'Synonym List' ;
-    rdfs:comment 'Pipe-separated list of alternative terms and synonyms for this race concept recognized by CDISC standards.' ;
-    rdfs:domain ind:Datamanagement ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:termOrder rdf:type rdf:Property ;
-    rdfs:label 'Term Order' ;
-    rdfs:comment 'The display order sequence number for this race term within the codelist for consistent presentation in user interfaces.' ;
-    rdfs:domain ind:CodelistRace ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:codelistEthnicId rdf:type rdf:Property ;
-    rdfs:label 'Codelist Ethnic Id' ;
-    rdfs:comment 'Primary key for codelist_ethnic' ;
-    rdfs:domain ind:CodelistEthnic ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:termStatus rdf:type rdf:Property ;
-    rdfs:label 'Term Status' ;
-    rdfs:comment 'Current lifecycle status of the ethnicity term indicating whether it is active for use in new studies or deprecated.' ;
-    rdfs:domain ind:Datamanagement ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:codelistAgeuId rdf:type rdf:Property ;
-    rdfs:label 'Codelist Ageu Id' ;
-    rdfs:comment 'Primary key for codelist_ageu' ;
-    rdfs:domain ind:CodelistAgeu ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:sortOrder rdf:type rdf:Property ;
-    rdfs:label 'Sort Order' ;
-    rdfs:comment 'Numeric value indicating the preferred display order of this term within the AGEU codelist.' ;
-    rdfs:domain ind:ClinicalTrials ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:usageNote rdf:type rdf:Property ;
-    rdfs:label 'Usage Note' ;
-    rdfs:comment 'Additional guidance or notes on the appropriate usage context and application of this age unit term in clinical data collection.' ;
-    rdfs:domain ind:Datamanagement ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:codelistOutId rdf:type rdf:Property ;
-    rdfs:label 'Codelist Out Id' ;
-    rdfs:comment 'Primary key for codelist_out' ;
-    rdfs:domain ind:CodelistOut ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:codelistOutStatus rdf:type rdf:Property ;
-    rdfs:label 'Codelist Out Status' ;
-    rdfs:comment 'The current lifecycle status of this outcome term within the controlled terminology framework.' ;
-    rdfs:domain ind:CodelistOut ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:codelistAcnId rdf:type rdf:Property ;
-    rdfs:label 'Codelist Acn Id' ;
-    rdfs:comment 'Primary key for codelist_acn' ;
-    rdfs:domain ind:CodelistAcn ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:codelistAesevId rdf:type rdf:Property ;
-    rdfs:label 'Codelist Aesev Id' ;
-    rdfs:comment 'Primary key for codelist_aesev' ;
-    rdfs:domain ind:CodelistAesev ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:codelistTermDefinition rdf:type rdf:Property ;
-    rdfs:label 'Codelist Term Definition' ;
-    rdfs:comment 'The official CDISC definition describing the meaning and clinical interpretation of this severity level.' ;
-    rdfs:domain ind:CodelistAesev ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:preferredTermFlag rdf:type rdf:Property ;
-    rdfs:label 'Preferred Term Flag' ;
-    rdfs:comment 'Indicates whether this term is the preferred representation within the AESEV codelist for regulatory submission purposes.' ;
-    rdfs:domain ind:CodelistAesev ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:codelistNcompltId rdf:type rdf:Property ;
-    rdfs:label 'Codelist Ncomplt Id' ;
-    rdfs:comment 'Primary key for codelist_ncomplt' ;
-    rdfs:domain ind:CodelistNcomplt ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:notation rdf:type rdf:Property ;
-    rdfs:label 'Notation' ;
-    rdfs:comment 'Additional usage notes or guidance for applying this non-completion reason term in clinical trial disposition data collection.' ;
-    rdfs:domain ind:CodelistNcomplt ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:parentConceptCode rdf:type rdf:Property ;
-    rdfs:label 'Parent Concept Code' ;
-    rdfs:comment 'NCI concept code of the parent term in the terminology hierarchy, supporting hierarchical navigation and grouping of non-completion reasons.' ;
-    rdfs:domain ind:Datamanagement ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:codelistRouteId rdf:type rdf:Property ;
-    rdfs:label 'Codelist Route Id' ;
-    rdfs:comment 'Primary key for codelist_route' ;
-    rdfs:domain ind:CodelistRoute ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:administrationMethod rdf:type rdf:Property ;
-    rdfs:label 'Administration Method' ;
-    rdfs:comment 'The specific technique or procedure used to administer medication via this route, providing additional context beyond the route itself.' ;
-    rdfs:domain ind:CodelistRoute ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:anatomicalSite rdf:type rdf:Property ;
-    rdfs:label 'Anatomical Site' ;
-    rdfs:comment 'The anatomical location or body system associated with this route of administration when applicable.' ;
-    rdfs:domain ind:CodelistRoute ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:emaPreferredTerm rdf:type rdf:Property ;
-    rdfs:label 'Ema Preferred Term' ;
-    rdfs:comment 'The EMA-preferred terminology for this route of administration used in regulatory submissions to the European Medicines Agency.' ;
-    rdfs:domain ind:CodelistRoute ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:externalCode rdf:type rdf:Property ;
-    rdfs:label 'External Code' ;
-    rdfs:comment 'The corresponding code for this route of administration in external terminology systems such as SNOMED CT or MedDRA.' ;
-    rdfs:domain ind:CodelistRoute ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:fdaPreferredTerm rdf:type rdf:Property ;
-    rdfs:label 'Fda Preferred Term' ;
-    rdfs:comment 'The FDA-preferred terminology for this route of administration used in regulatory submissions to the United States FDA.' ;
-    rdfs:domain ind:CodelistRoute ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:invasiveFlag rdf:type rdf:Property ;
-    rdfs:label 'Invasive Flag' ;
-    rdfs:comment 'Indicates whether this route of administration requires penetration of body tissues or cavities, relevant for safety and monitoring protocols.' ;
-    rdfs:domain ind:CodelistRoute ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:mappingSource rdf:type rdf:Property ;
-    rdfs:label 'Mapping Source' ;
-    rdfs:comment 'The external terminology system or standard from which this route term was originally mapped or harmonized.' ;
-    rdfs:domain ind:CodelistRoute ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:pmdaPreferredTerm rdf:type rdf:Property ;
-    rdfs:label 'Pmda Preferred Term' ;
-    rdfs:comment 'The PMDA-preferred terminology for this route of administration used in regulatory submissions to the Japanese PMDA.' ;
-    rdfs:domain ind:CodelistRoute ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:routeCategory rdf:type rdf:Property ;
-    rdfs:label 'Route Category' ;
-    rdfs:comment 'High-level classification grouping of the route of administration for analytical and reporting purposes.' ;
-    rdfs:domain ind:CodelistRoute ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:systemicEffectFlag rdf:type rdf:Property ;
-    rdfs:label 'Systemic Effect Flag' ;
-    rdfs:comment 'Indicates whether this route of administration typically results in systemic distribution of the drug throughout the body.' ;
-    rdfs:domain ind:CodelistRoute ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:usageNotes rdf:type rdf:Property ;
-    rdfs:label 'Usage Notes' ;
-    rdfs:comment 'Additional guidance and clarifications for proper application of this route term in clinical trial data collection and coding.' ;
-    rdfs:domain ind:Datamanagement ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:codelistFrmId rdf:type rdf:Property ;
-    rdfs:label 'Codelist Frm Id' ;
-    rdfs:comment 'Primary key for codelist_frm' ;
-    rdfs:domain ind:CodelistFrm ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:codelistUnitId rdf:type rdf:Property ;
-    rdfs:label 'Codelist Unit Id' ;
-    rdfs:comment 'Primary key for codelist_unit' ;
-    rdfs:domain ind:CodelistUnit ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:integer .
-
-ind:baseUnit rdf:type rdf:Property ;
-    rdfs:label 'Base Unit' ;
-    rdfs:comment 'The base or reference unit to which this unit can be converted (e.g., gram for milligram).' ;
-    rdfs:domain ind:CodelistUnit ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:conversionFactor rdf:type rdf:Property ;
-    rdfs:label 'Conversion Factor' ;
-    rdfs:comment 'Numeric factor used to convert this unit to a base or standard unit within the same category.' ;
-    rdfs:domain ind:CodelistUnit ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:decimal .
-
-ind:siUnitFlag rdf:type rdf:Property ;
-    rdfs:label 'Si Unit Flag' ;
-    rdfs:comment 'Indicates whether this unit is part of the International System of Units (SI) standard.' ;
-    rdfs:domain ind:CodelistUnit ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:boolean .
-
-ind:codelistUnitStatus rdf:type rdf:Property ;
-    rdfs:label 'Codelist Unit Status' ;
-    rdfs:comment 'Current lifecycle status of the unit term within the CDISC Controlled Terminology.' ;
-    rdfs:domain ind:CodelistUnit ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:ucumCode rdf:type rdf:Property ;
-    rdfs:label 'Ucum Code' ;
-    rdfs:comment 'The UCUM standard code for this unit of measure, enabling interoperability across systems.' ;
-    rdfs:domain ind:CodelistUnit ;
-    rdf:type owl:DatatypeProperty ;
-    rdfs:range xsd:string .
-
-ind:unitCategory rdf:type rdf:Property ;
-    rdfs:label 'Unit Category' ;
-    rdfs:comment 'The classification category of the unit (e.g., mass, volume, time, length, temperature, concentration).' ;
-    rdfs:domain ind:CodelistUnit ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:string .
 
@@ -28237,6 +27706,13 @@ ind:sectionName rdf:type rdf:Property ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:string .
 
+ind:sortOrder rdf:type rdf:Property ;
+    rdfs:label 'Sort Order' ;
+    rdfs:comment 'Numeric sequence defining the display order of this checklist item within its parent checklist or category grouping.' ;
+    rdfs:domain ind:ClinicalTrials ;
+    rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:integer .
+
 ind:checklistItemStatus rdf:type rdf:Property ;
     rdfs:label 'Checklist Item Status' ;
     rdfs:comment 'Current lifecycle status of the checklist item in the master reference table, controlling its availability for use in monitoring visit checklists.' ;
@@ -30253,6 +29729,13 @@ ind:rSquaredThreshold rdf:type rdf:Property ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:decimal .
 
+ind:regulatorySubmissionFlag rdf:type rdf:Property ;
+    rdfs:label 'Regulatory Submission Flag' ;
+    rdfs:comment 'Indicates whether the PK analysis outputs from this specification are intended for inclusion in a regulatory submission (IND, NDA, BLA, MAA, or eCTD package). Triggers additional CDISC compliance validation and 21 CFR Part 11 audit requirements.' ;
+    rdfs:domain ind:ClinicalTrials ;
+    rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:boolean .
+
 ind:samplingScheduleType rdf:type rdf:Property ;
     rdfs:label 'Sampling Schedule Type' ;
     rdfs:comment 'Classifies the blood sampling schedule design for PK data collection. Intensive sampling (rich PK) is used in Phase I; sparse/population sampling is used in Phase II/III for population PK modeling. Trough-only is used for therapeutic drug monitoring.' ;
@@ -30721,6 +30204,13 @@ ind:fileSpecification rdf:type rdf:Property ;
     rdfs:domain ind:AnalysisOutput ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:string .
+
+ind:ordinal rdf:type rdf:Property ;
+    rdfs:label 'Ordinal' ;
+    rdfs:comment 'Order of the output within the reporting event.' ;
+    rdfs:domain ind:Biostatistics ;
+    rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:integer .
 
 ind:outputDescription rdf:type rdf:Property ;
     rdfs:label 'Output Description' ;
@@ -43174,6 +42664,13 @@ ind:publicCommentSubmittedFlag rdf:type rdf:Property ;
     rdfs:domain ind:Intelligence ;
     rdf:type owl:DatatypeProperty ;
     rdfs:range xsd:boolean .
+
+ind:publicationDate rdf:type rdf:Property ;
+    rdfs:label 'Publication Date' ;
+    rdfs:comment 'Date on which the regulatory guidance, regulation, or policy was officially published by the issuing health authority. Used to establish the regulatory intelligence timeline.' ;
+    rdfs:domain ind:Intelligence ;
+    rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:date .
 
 ind:recommendedActions rdf:type rdf:Property ;
     rdfs:label 'Recommended Actions' ;
@@ -56190,6 +55687,13 @@ ind:cCode rdf:type rdf:Property ;
 
 ind:terminologyCodelistTermDescription rdf:type rdf:Property ;
     rdfs:label 'Terminology Codelist Term Description' ;
+    rdfs:comment 'STRING' ;
+    rdfs:domain ind:TerminologyCodelistTerm ;
+    rdf:type owl:DatatypeProperty ;
+    rdfs:range xsd:string .
+
+ind:synonym rdf:type rdf:Property ;
+    rdfs:label 'Synonym' ;
     rdfs:comment 'STRING' ;
     rdfs:domain ind:TerminologyCodelistTerm ;
     rdf:type owl:DatatypeProperty ;

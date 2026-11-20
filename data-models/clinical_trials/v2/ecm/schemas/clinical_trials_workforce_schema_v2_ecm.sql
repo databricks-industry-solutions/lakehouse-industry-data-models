@@ -1,5 +1,5 @@
 -- Schema for Domain: workforce | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:36
+-- Generated on: 2026-11-20 10:03:02
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`workforce` COMMENT 'Manages the clinical research workforce including CRAs, CRCs, biostatisticians, data managers, medical monitors, and regulatory specialists. Owns employee profiles, GCP training and certification records, delegation logs, resource allocation to studies';
 

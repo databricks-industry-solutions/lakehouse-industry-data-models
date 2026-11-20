@@ -1,5 +1,5 @@
 -- Schema for Domain: subject | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:35
+-- Generated on: 2026-11-20 10:03:01
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`subject` COMMENT 'SSOT for trial participants (subjects/patients) across all studies. Owns subject enrollment, demographics, randomization assignments via IRT/RTSM, treatment arms, visit compliance, protocol deviations, and subject disposition from screening through study';
 

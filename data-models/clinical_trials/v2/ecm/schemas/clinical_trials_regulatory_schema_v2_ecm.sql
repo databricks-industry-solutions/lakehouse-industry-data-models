@@ -1,5 +1,5 @@
 -- Schema for Domain: regulatory | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:34
+-- Generated on: 2026-11-20 10:03:00
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`regulatory` COMMENT 'Manages regulatory submissions, approvals, and agency interactions across global health authorities (FDA, EMA, PMDA, MHRA, Health Canada). Owns IND/NDA/BLA/MAA applications, clinical trial authorizations, protocol amendments, regulatory correspondence';
 

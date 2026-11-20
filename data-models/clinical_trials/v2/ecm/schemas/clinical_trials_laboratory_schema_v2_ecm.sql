@@ -1,5 +1,5 @@
 -- Schema for Domain: laboratory | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:32
+-- Generated on: 2026-11-20 10:02:59
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`laboratory` COMMENT 'Manages central and local laboratory operations for clinical trials. Owns lab panel definitions, specimen collection and processing workflows, lab results (including PK/PD and DMPK data), reference ranges, critical values, sample chain of custody';
 

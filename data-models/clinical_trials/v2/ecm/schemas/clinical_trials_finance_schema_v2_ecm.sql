@@ -1,5 +1,5 @@
 -- Schema for Domain: finance | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:32
+-- Generated on: 2026-11-20 10:02:59
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`finance` COMMENT 'Manages clinical trial financial operations including study budgets, investigator grants, site payment milestones, patient stipends, pass-through cost tracking, sponsor invoicing, accounts payable/receivable, accruals, financial forecasting, and project';
 

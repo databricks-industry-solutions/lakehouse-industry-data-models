@@ -1,5 +1,5 @@
 -- Schema for Domain: randomization | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:33
+-- Generated on: 2026-11-20 10:03:00
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`randomization` COMMENT 'Manages subject allocation algorithms, stratification factors, randomization codes, blinding integrity, and unblinding procedures. Integrated with eCRF and supply domains for kit assignment and treatment arm allocation via IRT/IVRS/RTSM systems.';
 

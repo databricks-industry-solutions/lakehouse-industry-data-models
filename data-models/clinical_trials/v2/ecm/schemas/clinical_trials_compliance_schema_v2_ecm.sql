@@ -1,5 +1,5 @@
 -- Schema for Domain: compliance | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:31
+-- Generated on: 2026-11-20 10:02:58
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`compliance` COMMENT 'Manages GCP quality assurance (QA), quality control (QC), internal and external audits, regulatory inspections, CAPA lifecycle, protocol deviation classifications, SOP compliance tracking, and audit readiness.';
 

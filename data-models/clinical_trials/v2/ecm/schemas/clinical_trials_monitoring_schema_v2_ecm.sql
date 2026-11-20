@@ -1,5 +1,5 @@
 -- Schema for Domain: monitoring | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:33
+-- Generated on: 2026-11-20 10:02:59
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`monitoring` COMMENT 'Manages CRA monitoring activities including risk-based monitoring (RBM) strategies, on-site and remote monitoring visits (initiation, interim, close-out), source data verification (SDV), monitoring visit reports, query management, protocol deviation';
 

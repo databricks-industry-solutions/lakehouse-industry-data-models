@@ -1,5 +1,5 @@
 -- Schema for Domain: datamanagement | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:32
+-- Generated on: 2026-11-20 10:02:58
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`datamanagement` COMMENT 'Governs clinical data collection, validation, and lock processes. Owns EDC/eCRF design and build (Medidata Rave), data validation rules, query management, discrepancy resolution, medical coding (MedDRA, WHO-DD), database lock (DBL) workflows, DMP, CDISC';
 
@@ -185,49 +185,26 @@ CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`ehr_data_transfe
 ) COMMENT 'A single eSource data transfer batch from an EHR source system into the EDC.';
 
 CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` (
-    `codelist_id` BIGINT COMMENT 'BIGINT',
-    `cdisc_standard_id` BIGINT COMMENT 'add column cdisc_standard_id (BIGINT) with FK to datamanagement.cdisc_standard.cdisc_standard_id — codelists belong to specific CDISC standard versions',
-    `acn_codelist` STRING COMMENT 'CDISC ACN codelist (NCI C66767) for adverse event action taken values',
-    `acn_codelist_record` BOOLEAN COMMENT 'CDISC ACN codelist (NCI C66767) for action taken values',
-    `aesev_codelist` STRING COMMENT 'CDISC AESEV codelist (NCI C66769) for adverse event severity values',
-    `aesev_codelist_record` BOOLEAN COMMENT 'CDISC AESEV codelist (NCI C66769) for severity and intensity values',
-    `ageu_codelist` STRING COMMENT 'CDISC AGEU codelist (NCI C66781) for age unit values',
-    `ageu_codelist_record` BOOLEAN COMMENT 'CDISC AGEU codelist (NCI C66781) for age unit values',
-    `codelist_description` STRING COMMENT 'Codelist description.',
-    `ethnic_codelist` STRING COMMENT 'CDISC ETHNIC codelist (NCI C66790) for subject ethnicity values',
-    `ethnic_codelist_record` BOOLEAN COMMENT 'CDISC ETHNIC codelist (NCI C66790) for subject ethnicity values',
-    `extensibility_flag` BOOLEAN COMMENT 'Indicates whether the codelist is extensible per CDISC CT rules',
-    `frm_codelist` STRING COMMENT 'CDISC FRM codelist (NCI C66726) for pharmaceutical dosage form values',
-    `frm_codelist_record` BOOLEAN COMMENT 'CDISC FRM codelist (NCI C66726) for pharmaceutical dosage form values',
-    `codelist_name` STRING COMMENT 'Codelist name.',
-    `nci_codelist_code` STRING COMMENT 'NCI Thesaurus concept code (C-code) for the CDISC codelist',
-    `nci_concept_code` STRING COMMENT 'NCI Thesaurus C-code for the codelist (e.g., C66731 for SEX, C74457 for RACE, C66790 for ETHNIC, C66781 for AGEU, C66768 for OUT, C66767 for ACN, C66769 for AESEV, C66727 for NCOMPLT, C66729 for ROUTE, C66726 for FRM, C71620 for UNIT)',
-    `ncomplt_codelist` STRING COMMENT 'CDISC NCOMPLT codelist (NCI C66727) for disposition coded reason values',
-    `ncomplt_codelist_record` BOOLEAN COMMENT 'CDISC NCOMPLT codelist (NCI C66727) for completion and non-completion reason values',
-    `out_codelist` STRING COMMENT 'CDISC OUT codelist (NCI C66768) for adverse event outcome values',
-    `out_codelist_record` BOOLEAN COMMENT 'CDISC OUT codelist (NCI C66768) for adverse event outcome values',
-    `package_version` STRING COMMENT 'CDISC Controlled Terminology package version (e.g., 2023-12-15)',
-    `race_codelist` STRING COMMENT 'CDISC RACE codelist (NCI C74457) for subject race values',
-    `race_codelist_record` BOOLEAN COMMENT 'CDISC RACE codelist (NCI C74457) for subject race values',
-    `route_codelist` STRING COMMENT 'CDISC ROUTE codelist (NCI C66729) for dosing route values',
-    `route_codelist_record` BOOLEAN COMMENT 'CDISC ROUTE codelist (NCI C66729) for route of administration values',
-    `sex_codelist` STRING COMMENT 'CDISC SEX codelist (NCI C66731) for subject sex values',
-    `sex_codelist_record` BOOLEAN COMMENT 'CDISC SEX codelist (NCI C66731) for subject sex values',
-    `short_name` STRING COMMENT 'The short name of the codelist.',
-    `submission_value` DECIMAL(18,2) COMMENT 'Codelist submission value.',
-    `unit_codelist` STRING COMMENT 'CDISC UNIT codelist (NCI C71620) for dose unit values',
-    `unit_codelist_record` BOOLEAN COMMENT 'CDISC UNIT codelist (NCI C71620) for dose unit values',
+    `codelist_id` BIGINT COMMENT 'surrogate key of the codelist',
+    `cdisc_standard_id` BIGINT COMMENT 'the CDISC standard such as SDTM or ADaM the codelist is published for',
+    `nci_codelist_code` STRING COMMENT 'NCI Thesaurus C-code of the codelist, for example C66731 for SEX',
+    `short_name` STRING COMMENT 'CDISC codelist short name, for example SEX, RACE or AGEU',
+    `codelist_name` STRING COMMENT 'CDISC codelist name, for example Sex',
+    `codelist_description` STRING COMMENT 'CDISC definition of the codelist',
+    `extensibility_flag` BOOLEAN COMMENT 'true when sponsors may add terms to the codelist',
+    `package_version` STRING COMMENT 'CDISC Controlled Terminology package the codelist was loaded from, for example 2024-03-29',
     CONSTRAINT pk_codelist PRIMARY KEY(`codelist_id`)
 ) COMMENT 'CDISC Controlled Terminology codelist reference table. Includes UNIT codelist (NCI C71620) for dose and age units, SEX (NCI C66731), RACE (NCI C74457), ETHNIC (NCI C66790), AGEU (NCI C66781), OUT (NCI C66768), ACN (NCI C66767), AESEV (NCI C66769), NCOMPLT';
 
 CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_term` (
     `codelist_term_id` BIGINT COMMENT 'BIGINT',
     `codelist_id` BIGINT COMMENT 'BIGINT',
-    `decoded_value` DECIMAL(18,2) COMMENT 'STRING',
+    `decoded_value` STRING COMMENT 'STRING',
     `nci_concept_code` STRING COMMENT 'NCI Thesaurus concept code (C-code) for the controlled terminology term',
     `preferred_term` STRING COMMENT 'STRING',
-    `submission_value` DECIMAL(18,2) COMMENT 'STRING',
+    `submission_value` STRING COMMENT 'STRING',
     `synonyms` STRING COMMENT 'Term synonyms.',
+    `definition` STRING COMMENT 'datamanagement.codelist_term has column definition STRING (CDISC definition of the term). definition STRING: the CDISC definition of the term.',
     CONSTRAINT pk_codelist_term PRIMARY KEY(`codelist_term_id`)
 ) COMMENT 'CDISC Controlled Terminology codelist term/member.';
 
@@ -933,276 +910,6 @@ CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`ehr_fhir_crosswa
     CONSTRAINT pk_ehr_fhir_crosswalk PRIMARY KEY(`ehr_fhir_crosswalk_id`)
 ) COMMENT 'Crosswalk mapping between EHR source systems and FHIR ResearchStudy and ResearchSubject resources for clinical trial data integration';
 
-CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` (
-    `codelist_sex_id` BIGINT COMMENT 'Primary key for codelist_sex',
-    `cdisc_standard_id` BIGINT COMMENT 'Foreign key reference to the CDISC standard version (SDTM, CDASH, ADaM) that governs this sex codelist, ensuring version-specific compliance.',
-    `codelist_id` BIGINT COMMENT 'Foreign key reference to the parent SEX codelist in the datamanagement.codelist table (NCI C66731), establishing the codelist membership.',
-    `codelist_term_id` BIGINT COMMENT 'Foreign key reference to the parent codelist term in the datamanagement.codelist_term table, linking this sex term to the broader controlled terminology framework.',
-    `created_timestamp` TIMESTAMP COMMENT 'The date and time when this sex codelist term record was first created in the data management system, supporting audit trail and data lineage.',
-    `definition` STRING COMMENT 'The formal definition of the sex term as provided by CDISC Controlled Terminology, clarifying the precise meaning and usage context.',
-    `effective_end_date` DATE COMMENT 'The date after which this sex term is no longer valid for new data collection, supporting deprecation and version management. Null indicates currently active.',
-    `effective_start_date` DATE COMMENT 'The date from which this sex term became valid and available for use in clinical data collection and submissions, supporting temporal validity tracking.',
-    `extensibility_flag` BOOLEAN COMMENT 'Indicates whether the SEX codelist permits sponsor-defined extensions beyond the standard CDISC terms. True if extensible, False if restricted to standard terms only.',
-    `modified_timestamp` TIMESTAMP COMMENT 'The date and time when this sex codelist term record was last updated, enabling change tracking and version control for controlled terminology management.',
-    `nci_concept_code` STRING COMMENT 'The NCI Thesaurus concept code (C-code) uniquely identifying this sex term within the NCI Enterprise Vocabulary Services, enabling semantic interoperability.',
-    `ordinal` BIGINT COMMENT 'Numeric ordering value for consistent display sequence of sex terms in user interfaces, pick-lists, and reports, ensuring standardized presentation.',
-    `package_version` STRING COMMENT 'The CDISC Controlled Terminology package version date (YYYY-MM-DD format) from which this sex term was sourced, enabling temporal traceability.',
-    `preferred_term` STRING COMMENT 'The human-readable preferred term for the sex value as defined in CDISC Controlled Terminology, used for display and reporting purposes.',
-    `codelist_sex_status` STRING COMMENT 'Current lifecycle status of the sex term within the controlled terminology framework. Active terms are available for use; deprecated terms are discouraged; retired terms are obsolete.',
-    `submission_value` DECIMAL(18,2) COMMENT 'The standardized CDISC submission value for sex used in regulatory submissions and SDTM datasets. Values: M (Male), F (Female), U (Unknown), UNDIFFERENTIATED.',
-    `synonym` STRING COMMENT 'Alternative term or synonym for the sex value, supporting varied terminology usage across different clinical contexts and legacy systems.',
-    CONSTRAINT pk_codelist_sex PRIMARY KEY(`codelist_sex_id`)
-) COMMENT 'Reference table for CDISC Controlled Terminology SEX codelist';
-
-CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` (
-    `codelist_race_id` BIGINT COMMENT 'Primary key for codelist_race',
-    `cdisc_standard_id` BIGINT COMMENT 'add column cdisc_standard_id (BIGINT) with FK to datamanagement.cdisc_standard.cdisc_standard_id — codelist_race references codelist and codelist_term but lacks a link to the CDISC standard version',
-    `codelist_id` BIGINT COMMENT 'Foreign key reference to the codelist table identifying this as the RACE codelist (NCI C74457).',
-    `codelist_term_id` BIGINT COMMENT 'Foreign key reference to the parent codelist_term table containing the standardized CDISC term metadata.',
-    `created_timestamp` TIMESTAMP COMMENT 'The timestamp when this race codelist term record was first created in the data management system.',
-    `definition` STRING COMMENT 'The formal definition of the race term as provided by the NCI Thesaurus and adopted by CDISC standards.',
-    `effective_date` DATE COMMENT 'The date from which this race term became valid and available for use in clinical trial data collection.',
-    `expiration_date` DATE COMMENT 'The date after which this race term is no longer valid for new data collection, null if currently active.',
-    `extensible_flag` BOOLEAN COMMENT 'Indicates whether the RACE codelist allows sponsor-defined extensions beyond the standard CDISC terms.',
-    `modified_timestamp` TIMESTAMP COMMENT 'The timestamp when this race codelist term record was last modified in the data management system.',
-    `nci_concept_code` STRING COMMENT 'The NCI Thesaurus concept code uniquely identifying this race term within the NCI Enterprise Vocabulary Services.',
-    `notes` STRING COMMENT 'Additional implementation guidance or usage notes for this race term provided by CDISC or the sponsor.',
-    `package_version` STRING COMMENT 'The CDISC Controlled Terminology package version from which this race term was sourced.',
-    `preferred_term` STRING COMMENT 'The human-readable preferred term label for the race concept as defined in CDISC Controlled Terminology.',
-    `publication_date` DATE COMMENT 'The date when the CT package version containing this race term was officially published by CDISC.',
-    `regulatory_submission_flag` BOOLEAN COMMENT 'Indicates whether this race term is approved for use in regulatory submissions to health authorities.',
-    `sponsor_defined_flag` BOOLEAN COMMENT 'Indicates whether this race term is a sponsor-defined extension rather than a standard CDISC term.',
-    `codelist_race_status` STRING COMMENT 'The lifecycle status of this race term within the CDISC Controlled Terminology governance process.',
-    `submission_value` DECIMAL(18,2) COMMENT 'The standardized CDISC submission value for the race term used in regulatory submissions and SDTM datasets.',
-    `synonym_list` STRING COMMENT 'Pipe-separated list of alternative terms and synonyms for this race concept recognized by CDISC standards.',
-    `term_order` BIGINT COMMENT 'The display order sequence number for this race term within the codelist for consistent presentation in user interfaces.',
-    CONSTRAINT pk_codelist_race PRIMARY KEY(`codelist_race_id`)
-) COMMENT 'Reference table for CDISC Controlled Terminology RACE codelist';
-
-CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` (
-    `codelist_ethnic_id` BIGINT COMMENT 'Primary key for codelist_ethnic',
-    `cdisc_standard_id` BIGINT COMMENT 'Foreign key reference to the CDISC standard (SDTM, ADaM, CDASH) that governs the use of this ethnicity codelist.',
-    `codelist_id` BIGINT COMMENT 'Foreign key reference to the parent ETHNIC codelist in the codelist master table.',
-    `created_timestamp` TIMESTAMP COMMENT 'The date and time when this ethnicity term record was first created in the data management system.',
-    `definition` STRING COMMENT 'The formal definition of the ethnicity term as provided by CDISC Controlled Terminology and NCI Thesaurus.',
-    `display_order` BIGINT COMMENT 'Numeric sequence indicating the recommended display order of ethnicity terms in electronic data capture forms and reports.',
-    `effective_date` DATE COMMENT 'The date from which this ethnicity term became effective and available for use in clinical trial data collection.',
-    `expiration_date` DATE COMMENT 'The date after which this ethnicity term is no longer valid for use, applicable only to deprecated or retired terms.',
-    `extensible_flag` BOOLEAN COMMENT 'Indicates whether the ETHNIC codelist allows sponsor-defined extensions beyond the standard CDISC terms.',
-    `modified_timestamp` TIMESTAMP COMMENT 'The date and time when this ethnicity term record was last updated or modified in the data management system.',
-    `nci_concept_code` STRING COMMENT 'The NCI Thesaurus concept code (C-code) that uniquely identifies this ethnicity term in the NCI Enterprise Vocabulary Services.',
-    `package_version` STRING COMMENT 'The CDISC Controlled Terminology package version from which this ethnicity term was sourced, enabling version-specific validation.',
-    `preferred_term` STRING COMMENT 'The preferred display label for the ethnicity term as defined in CDISC Controlled Terminology.',
-    `submission_value` DECIMAL(18,2) COMMENT 'The standardized CDISC submission value for the ethnicity term used in regulatory submissions and SDTM datasets.',
-    `synonym` STRING COMMENT 'Alternative term or synonym for the ethnicity concept that may be used in source data or verbatim reporting.',
-    `term_status` STRING COMMENT 'Current lifecycle status of the ethnicity term indicating whether it is active for use in new studies or deprecated.',
-    CONSTRAINT pk_codelist_ethnic PRIMARY KEY(`codelist_ethnic_id`)
-) COMMENT 'Reference table for CDISC Controlled Terminology ETHNIC codelist';
-
-CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` (
-    `codelist_ageu_id` BIGINT COMMENT 'Primary key for codelist_ageu',
-    `cdisc_standard_id` BIGINT COMMENT 'Foreign key reference to the CDISC standard (e.g., SDTM, ADaM, SEND) that this codelist term applies to.',
-    `codelist_id` BIGINT COMMENT 'Foreign key reference to the parent AGEU codelist in the codelist master table.',
-    `codelist_term_id` BIGINT COMMENT 'add column codelist_term_id (BIGINT) with FK to datamanagement.codelist_term.codelist_term_id — age unit codelist should reference the standard codelist_term structure',
-    `created_timestamp` TIMESTAMP COMMENT 'The date and time when this codelist term record was first created in the system.',
-    `definition` STRING COMMENT 'The official CDISC definition describing the meaning and usage of this age unit term.',
-    `effective_date` DATE COMMENT 'The date when this codelist term became effective and available for use in clinical trial submissions.',
-    `expiration_date` DATE COMMENT 'The date when this codelist term was deprecated or retired and should no longer be used in new submissions.',
-    `extensible_flag` BOOLEAN COMMENT 'Indicates whether this codelist term can be extended with sponsor-defined values (true) or is restricted to CDISC-defined values only (false).',
-    `modified_timestamp` TIMESTAMP COMMENT 'The date and time when this codelist term record was last modified or updated.',
-    `nci_concept_code` STRING COMMENT 'NCI Thesaurus concept code for this age unit term (e.g., C29848 for YEARS, C29846 for MONTHS).',
-    `package_version` STRING COMMENT 'The CDISC CT package version identifier (e.g., 2023-12-15) from which this term was sourced.',
-    `preferred_term` STRING COMMENT 'The preferred display term for the age unit in human-readable format.',
-    `sort_order` BIGINT COMMENT 'Numeric value indicating the preferred display order of this term within the AGEU codelist.',
-    `submission_value` DECIMAL(18,2) COMMENT 'The standardized CDISC submission value for the age unit (e.g., YEARS, MONTHS, WEEKS, DAYS, HOURS).',
-    `synonym` STRING COMMENT 'Alternative term or synonym for the age unit that may appear in source data or legacy systems.',
-    `term_status` STRING COMMENT 'Current lifecycle status of the codelist term indicating whether it is active for use, deprecated, retired, or provisional.',
-    `usage_note` STRING COMMENT 'Additional guidance or notes on the appropriate usage context and application of this age unit term in clinical data collection.',
-    CONSTRAINT pk_codelist_ageu PRIMARY KEY(`codelist_ageu_id`)
-) COMMENT 'Reference table for CDISC Controlled Terminology AGEU codelist';
-
-CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` (
-    `codelist_out_id` BIGINT COMMENT 'Primary key for codelist_out',
-    `cdisc_standard_id` BIGINT COMMENT 'add column cdisc_standard_id (BIGINT) with FK to datamanagement.cdisc_standard.cdisc_standard_id — codelist_out references codelist and codelist_term but lacks a link to the CDISC standard version',
-    `codelist_id` BIGINT COMMENT 'Foreign key reference to the parent codelist entity for the OUT codelist (NCI C66768).',
-    `codelist_term_id` BIGINT COMMENT 'Foreign key reference to the codelist term entity containing NCI C-code and CT package metadata.',
-    `created_timestamp` TIMESTAMP COMMENT 'The date and time when this codelist OUT record was first created in the data management system.',
-    `definition` STRING COMMENT 'The formal definition of the outcome term as specified in CDISC Controlled Terminology, describing the clinical meaning of the outcome.',
-    `effective_date` DATE COMMENT 'The date from which this outcome term became valid and available for use in clinical data collection.',
-    `expiration_date` DATE COMMENT 'The date after which this outcome term is no longer valid for new data collection, null if still active.',
-    `extensible_flag` BOOLEAN COMMENT 'Indicates whether the OUT codelist allows sponsor-defined extensions beyond the standard CDISC terms.',
-    `modified_timestamp` TIMESTAMP COMMENT 'The date and time when this codelist OUT record was last updated or modified.',
-    `nci_concept_code` STRING COMMENT 'The NCI Thesaurus concept code (C-code) uniquely identifying this outcome term within the NCI Enterprise Vocabulary Services.',
-    `package_version` STRING COMMENT 'The version date of the CDISC Controlled Terminology package from which this outcome term was sourced, in YYYY-MM-DD format.',
-    `preferred_term` STRING COMMENT 'The preferred display term for the outcome value, used in reports and user interfaces.',
-    `sort_order` BIGINT COMMENT 'The numeric sequence for displaying outcome terms in a consistent order within user interfaces and reports.',
-    `codelist_out_status` STRING COMMENT 'The current lifecycle status of this outcome term within the controlled terminology framework.',
-    `submission_value` DECIMAL(18,2) COMMENT 'The standardized CDISC submission value for the adverse event outcome as it appears in regulatory submissions.',
-    `synonym` STRING COMMENT 'Alternative term or synonym for the outcome value, used for mapping verbatim terms to controlled terminology.',
-    CONSTRAINT pk_codelist_out PRIMARY KEY(`codelist_out_id`)
-) COMMENT 'Reference table for CDISC Controlled Terminology OUT codelist';
-
-CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` (
-    `codelist_acn_id` BIGINT COMMENT 'Primary key for codelist_acn',
-    `cdisc_standard_id` BIGINT COMMENT 'add column cdisc_standard_id (BIGINT) with FK to datamanagement.cdisc_standard.cdisc_standard_id — codelist_acn references codelist and codelist_term but lacks a link to the CDISC standard version, unlike peer codelist tables (codelist_ageu',
-    `codelist_id` BIGINT COMMENT 'Foreign key reference to the parent codelist in datamanagement.codelist for the ACN codelist (NCI C66767).',
-    `codelist_term_id` BIGINT COMMENT 'Foreign key reference to the codelist term in datamanagement.codelist_term representing this ACN value.',
-    `created_timestamp` TIMESTAMP COMMENT 'The date and time when this ACN codelist entry was first created in the data management system.',
-    `definition` STRING COMMENT 'The formal definition of the action taken term as specified in CDISC Controlled Terminology, describing the meaning and usage context.',
-    `effective_end_date` DATE COMMENT 'The date when this ACN term was deprecated or retired from active use; null indicates the term is currently active.',
-    `effective_start_date` DATE COMMENT 'The date when this ACN term became effective and available for use in clinical trial data collection and submission.',
-    `extensible_flag` BOOLEAN COMMENT 'Indicates whether the ACN codelist allows sponsor-defined extensions beyond the standard CDISC terms.',
-    `modified_timestamp` TIMESTAMP COMMENT 'The date and time when this ACN codelist entry was last updated or modified in the data management system.',
-    `nci_concept_code` STRING COMMENT 'The NCI Thesaurus concept code (C-code) uniquely identifying this action taken term within the NCI controlled vocabulary.',
-    `package_version` STRING COMMENT 'The CDISC Controlled Terminology package version (YYYY-MM-DD format) from which this ACN term was sourced.',
-    `preferred_term` STRING COMMENT 'The preferred display term for the action taken value, used for human-readable reporting and presentation.',
-    `sort_order` BIGINT COMMENT 'Numeric value defining the display order of this action taken term within the ACN codelist for user interface presentation.',
-    `submission_value` DECIMAL(18,2) COMMENT 'The standardized CDISC submission value for the action taken with study treatment in response to an adverse event.',
-    `synonym` STRING COMMENT 'Alternative term or synonym for the action taken value, used for mapping verbatim terms to standardized CDISC terminology.',
-    `term_status` STRING COMMENT 'Current lifecycle status of the action taken term within the CDISC Controlled Terminology governance process.',
-    CONSTRAINT pk_codelist_acn PRIMARY KEY(`codelist_acn_id`)
-) COMMENT 'Reference table for CDISC Controlled Terminology ACN codelist';
-
-CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` (
-    `codelist_aesev_id` BIGINT COMMENT 'Primary key for codelist_aesev',
-    `cdisc_standard_id` BIGINT COMMENT 'add column cdisc_standard_id (BIGINT) with FK to datamanagement.cdisc_standard.cdisc_standard_id — codelist_aesev lacks a link to the CDISC standard version, unlike peer codelist tables',
-    `codelist_id` BIGINT COMMENT 'Foreign key reference to the parent AESEV codelist in the codelist master table.',
-    `codelist_term_id` BIGINT COMMENT 'add column codelist_term_id (BIGINT) with FK to datamanagement.codelist_term.codelist_term_id — codelist_aesev references only codelist but not codelist_term, unlike peer codelist tables (codelist_acn, codelist_out, codelist_race, etc.)',
-    `codelist_term_definition` STRING COMMENT 'The official CDISC definition describing the meaning and clinical interpretation of this severity level.',
-    `created_timestamp` TIMESTAMP COMMENT 'The date and time when this AESEV codelist term record was first created in the data management system.',
-    `display_order` BIGINT COMMENT 'Numeric sequence indicating the recommended display order for this severity term in user interfaces and reports (lower numbers appear first).',
-    `effective_end_date` DATE COMMENT 'The date after which this AESEV term is no longer valid for use; null indicates the term remains current and active.',
-    `effective_start_date` DATE COMMENT 'The date from which this AESEV term became valid and available for use in clinical trial data collection and submission.',
-    `extensible_flag` BOOLEAN COMMENT 'Indicates whether the AESEV codelist allows sponsor-defined extensions beyond the standard CDISC terms for protocol-specific severity scales.',
-    `last_modified_timestamp` TIMESTAMP COMMENT 'The date and time when this AESEV codelist term record was most recently updated or modified.',
-    `nci_concept_code` STRING COMMENT 'The NCI Thesaurus C-code uniquely identifying this severity term within the NCI controlled vocabulary (format: C followed by 5-8 digits).',
-    `package_version` STRING COMMENT 'The CDISC Controlled Terminology package version identifier (YYYY-MM-DD format) from which this AESEV term was sourced.',
-    `preferred_term_flag` BOOLEAN COMMENT 'Indicates whether this term is the preferred representation within the AESEV codelist for regulatory submission purposes.',
-    `submission_value` DECIMAL(18,2) COMMENT 'The standardized CDISC submission value for adverse event severity used in regulatory datasets (MILD, MODERATE, SEVERE).',
-    `synonym_list` STRING COMMENT 'Comma-separated list of alternative terms or synonyms recognized for this severity level across different coding systems or legacy terminologies.',
-    `term_status` STRING COMMENT 'Current lifecycle status of the controlled terminology term indicating whether it is active for use, deprecated, retired, or provisional.',
-    CONSTRAINT pk_codelist_aesev PRIMARY KEY(`codelist_aesev_id`)
-) COMMENT 'Reference table for CDISC Controlled Terminology AESEV codelist';
-
-CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` (
-    `codelist_ncomplt_id` BIGINT COMMENT 'Primary key for codelist_ncomplt',
-    `cdisc_standard_id` BIGINT COMMENT 'Foreign key reference to the CDISC standard (SDTM, ADaM, CDASH) to which this controlled terminology term applies.',
-    `codelist_id` BIGINT COMMENT 'Foreign key reference to the parent NCOMPLT codelist in the codelist registry.',
-    `codelist_term_id` BIGINT COMMENT 'add column codelist_term_id (BIGINT) with FK to datamanagement.codelist_term.codelist_term_id — codelist_ncomplt references cdisc_standard and codelist but not codelist_term, unlike peer codelist tables',
-    `created_timestamp` TIMESTAMP COMMENT 'Timestamp when this controlled terminology term record was first created in the reference data management system.',
-    `definition` STRING COMMENT 'Detailed textual definition of the non-completion reason term, explaining its intended use and scope within clinical trial disposition reporting.',
-    `effective_date` DATE COMMENT 'Date when this controlled terminology term became effective and available for use in clinical trial data collection and submission.',
-    `expiration_date` DATE COMMENT 'Date when this controlled terminology term was deprecated or retired and should no longer be used for new data collection.',
-    `extensibility_flag` BOOLEAN COMMENT 'Boolean indicator specifying whether the NCOMPLT codelist allows sponsor-defined extensions beyond the standard CDISC terms.',
-    `modified_timestamp` TIMESTAMP COMMENT 'Timestamp when this controlled terminology term record was last modified or updated in the reference data management system.',
-    `nci_concept_code` STRING COMMENT 'National Cancer Institute (NCI) Thesaurus concept code (C-code) uniquely identifying this controlled terminology term.',
-    `notation` STRING COMMENT 'Additional usage notes or guidance for applying this non-completion reason term in clinical trial disposition data collection.',
-    `package_version` STRING COMMENT 'CDISC Controlled Terminology package version identifier indicating the release version in which this term was published or last modified.',
-    `parent_concept_code` STRING COMMENT 'NCI concept code of the parent term in the terminology hierarchy, supporting hierarchical navigation and grouping of non-completion reasons.',
-    `preferred_term` STRING COMMENT 'The human-readable preferred term label for the non-completion reason, used for display and reporting purposes.',
-    `sort_order` BIGINT COMMENT 'Numeric sequence value controlling the display order of non-completion reason terms in user interfaces and reports.',
-    `submission_value` DECIMAL(18,2) COMMENT 'The standardized CDISC submission value for the non-completion reason term, used in regulatory submissions and SDTM datasets.',
-    `synonym` STRING COMMENT 'Alternative synonym or alias for the non-completion reason term, supporting legacy mappings and cross-reference.',
-    `term_status` STRING COMMENT 'Current lifecycle status of the controlled terminology term indicating whether it is active for use or has been deprecated or retired.',
-    CONSTRAINT pk_codelist_ncomplt PRIMARY KEY(`codelist_ncomplt_id`)
-) COMMENT 'Reference table for CDISC Controlled Terminology NCOMPLT codelist';
-
-CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` (
-    `codelist_route_id` BIGINT COMMENT 'Primary key for codelist_route',
-    `cdisc_standard_id` BIGINT COMMENT 'add column cdisc_standard_id (BIGINT) with FK to datamanagement.cdisc_standard.cdisc_standard_id — codelist_route lacks a link to the CDISC standard version, unlike peer codelist tables',
-    `codelist_id` BIGINT COMMENT 'Foreign key reference to the parent ROUTE codelist (NCI C66729) in the codelist master table.',
-    `codelist_term_id` BIGINT COMMENT 'add column codelist_term_id (BIGINT) with FK to datamanagement.codelist_term.codelist_term_id — codelist_route references only codelist but not codelist_term, unlike peer codelist tables',
-    `administration_method` STRING COMMENT 'The specific technique or procedure used to administer medication via this route, providing additional context beyond the route itself.',
-    `anatomical_site` STRING COMMENT 'The anatomical location or body system associated with this route of administration when applicable.',
-    `created_timestamp` TIMESTAMP COMMENT 'The date and time when this codelist route term record was first created in the data management system.',
-    `definition` STRING COMMENT 'The formal definition of the route of administration term as published in CDISC Controlled Terminology and NCI Thesaurus.',
-    `display_order` BIGINT COMMENT 'The recommended sort order for displaying this route term in user interfaces and pick lists within electronic data capture systems.',
-    `effective_end_date` DATE COMMENT 'The date after which this route of administration term is deprecated or retired from active use; null indicates currently active.',
-    `effective_start_date` DATE COMMENT 'The date from which this route of administration term became valid and available for use in clinical trial data collection.',
-    `ema_preferred_term` STRING COMMENT 'The EMA-preferred terminology for this route of administration used in regulatory submissions to the European Medicines Agency.',
-    `extensible_flag` BOOLEAN COMMENT 'Indicates whether the ROUTE codelist allows sponsor-defined extensions beyond the published CDISC terms.',
-    `external_code` STRING COMMENT 'The corresponding code for this route of administration in external terminology systems such as SNOMED CT or MedDRA.',
-    `fda_preferred_term` STRING COMMENT 'The FDA-preferred terminology for this route of administration used in regulatory submissions to the United States FDA.',
-    `invasive_flag` BOOLEAN COMMENT 'Indicates whether this route of administration requires penetration of body tissues or cavities, relevant for safety and monitoring protocols.',
-    `last_modified_timestamp` TIMESTAMP COMMENT 'The date and time when this codelist route term record was most recently updated or revised.',
-    `mapping_source` STRING COMMENT 'The external terminology system or standard from which this route term was originally mapped or harmonized.',
-    `nci_concept_code` STRING COMMENT 'The NCI Thesaurus concept code (C-code) uniquely identifying this route of administration term in the NCI Enterprise Vocabulary Services.',
-    `package_version` STRING COMMENT 'The CDISC Controlled Terminology package version from which this route term was sourced, enabling version-specific validation.',
-    `parent_concept_code` STRING COMMENT 'The NCI concept code of the parent term in the route of administration hierarchy, enabling hierarchical navigation and grouping.',
-    `pmda_preferred_term` STRING COMMENT 'The PMDA-preferred terminology for this route of administration used in regulatory submissions to the Japanese PMDA.',
-    `preferred_term` STRING COMMENT 'The human-readable preferred label for the route of administration as defined in CDISC Controlled Terminology.',
-    `publication_date` DATE COMMENT 'The date when the CDISC Controlled Terminology package containing this route term was officially published.',
-    `route_category` STRING COMMENT 'High-level classification grouping of the route of administration for analytical and reporting purposes.',
-    `submission_value` DECIMAL(18,2) COMMENT 'The standardized CDISC submission value for the route of administration term used in regulatory datasets.',
-    `synonym_list` STRING COMMENT 'Pipe-separated list of alternative terms and synonyms for this route of administration recognized in clinical practice.',
-    `systemic_effect_flag` BOOLEAN COMMENT 'Indicates whether this route of administration typically results in systemic distribution of the drug throughout the body.',
-    `term_status` STRING COMMENT 'The lifecycle status of the controlled terminology term indicating whether it is currently approved for use in submissions.',
-    `usage_notes` STRING COMMENT 'Additional guidance and clarifications for proper application of this route term in clinical trial data collection and coding.',
-    CONSTRAINT pk_codelist_route PRIMARY KEY(`codelist_route_id`)
-) COMMENT 'Reference table for CDISC Controlled Terminology ROUTE codelist';
-
-CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` (
-    `codelist_frm_id` BIGINT COMMENT 'Primary key for codelist_frm',
-    `cdisc_standard_id` BIGINT COMMENT 'Foreign key reference to the CDISC standard (SDTM, ADaM, CDASH) that governs the use of this pharmaceutical dosage form codelist.',
-    `codelist_id` BIGINT COMMENT 'Foreign key reference to the parent codelist in datamanagement.codelist for the FRM codelist (NCI C66726).',
-    `codelist_term_id` BIGINT COMMENT 'add column codelist_term_id (BIGINT) with FK to datamanagement.codelist_term.codelist_term_id — codelist_frm references cdisc_standard and codelist but not codelist_term, unlike peer codelist tables',
-    `created_timestamp` TIMESTAMP COMMENT 'The date and time when this FRM codelist term record was first created in the data management system.',
-    `definition` STRING COMMENT 'The formal definition of the pharmaceutical dosage form as specified in CDISC Controlled Terminology and NCI Thesaurus.',
-    `display_order` BIGINT COMMENT 'Numeric sequence for ordering pharmaceutical dosage form terms in user interfaces and pick lists.',
-    `effective_end_date` DATE COMMENT 'The date after which this pharmaceutical dosage form term is no longer valid; null indicates the term is currently active.',
-    `effective_start_date` DATE COMMENT 'The date from which this pharmaceutical dosage form term became valid in the CDISC Controlled Terminology package.',
-    `extensible_flag` BOOLEAN COMMENT 'Indicates whether the FRM codelist allows sponsor-defined extensions beyond the standard CDISC terms.',
-    `last_updated_timestamp` TIMESTAMP COMMENT 'The date and time when this FRM codelist term record was most recently modified.',
-    `nci_concept_code` STRING COMMENT 'The NCI Thesaurus concept code (C-code) uniquely identifying this pharmaceutical dosage form term in the NCI EVS vocabulary.',
-    `package_version` STRING COMMENT 'The CDISC Controlled Terminology package version from which this FRM term was sourced (e.g., 2023-12-15, 2024-03-29).',
-    `preferred_term` STRING COMMENT 'The human-readable preferred label for the pharmaceutical dosage form as defined in CDISC Controlled Terminology.',
-    `submission_value` DECIMAL(18,2) COMMENT 'The standardized code value submitted in CDISC datasets for pharmaceutical dosage form (e.g., TABLET, CAPSULE, SOLUTION).',
-    `synonym_list` STRING COMMENT 'Pipe-separated list of alternative terms and synonyms for this pharmaceutical dosage form recognized in clinical practice.',
-    `term_status` STRING COMMENT 'Current lifecycle status of the pharmaceutical dosage form term within the CDISC Controlled Terminology framework.',
-    `usage_notes` STRING COMMENT 'Additional guidance on when and how to apply this pharmaceutical dosage form term in clinical data collection and SDTM mapping.',
-    CONSTRAINT pk_codelist_frm PRIMARY KEY(`codelist_frm_id`)
-) COMMENT 'Reference table for CDISC Controlled Terminology FRM codelist';
-
-CREATE OR REPLACE TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` (
-    `codelist_unit_id` BIGINT COMMENT 'Primary key for codelist_unit',
-    `cdisc_standard_id` BIGINT COMMENT 'Foreign key reference to the CDISC standard (e.g., SDTM, ADaM, CDASH) to which this unit codelist applies.',
-    `codelist_id` BIGINT COMMENT 'Foreign key reference to the parent UNIT codelist in the codelist reference table.',
-    `codelist_term_id` BIGINT COMMENT 'add column codelist_term_id (BIGINT) with FK to datamanagement.codelist_term.codelist_term_id — unit codelist should reference the standard codelist_term structure',
-    `base_unit` STRING COMMENT 'The base or reference unit to which this unit can be converted (e.g., gram for milligram).',
-    `conversion_factor` DECIMAL(18,6) COMMENT 'Numeric factor used to convert this unit to a base or standard unit within the same category.',
-    `created_timestamp` TIMESTAMP COMMENT 'The date and time when this codelist unit record was first created in the system.',
-    `definition` STRING COMMENT 'The formal definition of the unit term as provided by CDISC or NCI Thesaurus.',
-    `display_order` BIGINT COMMENT 'Numeric sequence for ordering unit terms in user interfaces and reports.',
-    `effective_date` DATE COMMENT 'The date from which this unit term became valid and available for use in clinical data submissions.',
-    `expiration_date` DATE COMMENT 'The date after which this unit term is no longer valid for new submissions; null if still active.',
-    `extensible_flag` BOOLEAN COMMENT 'Indicates whether sponsors may extend this codelist with additional terms beyond the standard set.',
-    `modified_timestamp` TIMESTAMP COMMENT 'The date and time when this codelist unit record was last updated.',
-    `nci_concept_code` STRING COMMENT 'The NCI Thesaurus concept code uniquely identifying this unit term (e.g., C71620 for UNIT codelist).',
-    `package_version` STRING COMMENT 'The version identifier of the CDISC CT package from which this unit term was sourced (e.g., 2023-12-15).',
-    `preferred_term` STRING COMMENT 'The human-readable preferred label for the unit of measure as defined in CDISC Controlled Terminology.',
-    `publication_date` DATE COMMENT 'The date when the CT package containing this unit term was officially published by CDISC.',
-    `si_unit_flag` BOOLEAN COMMENT 'Indicates whether this unit is part of the International System of Units (SI) standard.',
-    `codelist_unit_status` STRING COMMENT 'Current lifecycle status of the unit term within the CDISC Controlled Terminology.',
-    `submission_value` DECIMAL(18,2) COMMENT 'The standardized code value submitted to regulatory authorities for unit of measure (e.g., kg, mg, mL, YEARS).',
-    `synonym_list` STRING COMMENT 'Pipe-separated list of alternative terms or abbreviations for this unit (e.g., kilogram|kg|KG).',
-    `ucum_code` STRING COMMENT 'The UCUM standard code for this unit of measure, enabling interoperability across systems.',
-    `unit_category` STRING COMMENT 'The classification category of the unit (e.g., mass, volume, time, length, temperature, concentration).',
-    `usage_note` STRING COMMENT 'Additional guidance or context on when and how to use this unit term in clinical data collection.',
-    CONSTRAINT pk_codelist_unit PRIMARY KEY(`codelist_unit_id`)
-) COMMENT 'Reference table for CDISC Controlled Terminology UNIT codelist';
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_dataset` ALTER COLUMN `sdtm_dataset_id` SET TAGS ('dbx_business_glossary_term' = 'Study Data Tabulation Model (SDTM) Dataset ID');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_dataset` ALTER COLUMN `sdtm_dataset_id` SET TAGS ('dbx_standard' = 'SDTM');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_dataset` ALTER COLUMN `sdtm_dataset_id` SET TAGS ('dbx_implements' = 'SDTM.DOMAIN');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_mapping` ALTER COLUMN `sdtm_mapping_id` SET TAGS ('dbx_business_glossary_term' = 'Study Data Tabulation Model (SDTM) Mapping ID');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_mapping` ALTER COLUMN `sdtm_mapping_id` SET TAGS ('dbx_standard' = 'SDTM');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_mapping` ALTER COLUMN `sdtm_mapping_id` SET TAGS ('dbx_implements' = 'SDTM.DOMAIN');
-
 ALTER SCHEMA `clinical_trials_ecm`.`datamanagement` SET TAGS ('dbx_division' = 'operations');
 
 ALTER SCHEMA `clinical_trials_ecm`.`datamanagement` SET TAGS ('dbx_domain' = 'datamanagement');
@@ -1715,7 +1422,7 @@ ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`define_document` ALTER COLUM
 
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`ehr_source_system` ADD CONSTRAINT `fk_datamanagement_ehr_source_system_study_id` FOREIGN KEY (`study_id`) REFERENCES `clinical_trials_ecm`.`study`.`study`(`study_id`);
 
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`ehr_source_system` SET TAGS ('dbx_data_type' = 'master_data');
+ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`ehr_source_system` SET TAGS ('dbx_data_type' = 'reference_data');
 
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`ehr_source_system` SET TAGS ('dbx_domain' = 'datamanagement');
 
@@ -1793,91 +1500,11 @@ ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` SET TAGS ('dbx_sch
 
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` SET TAGS ('dbx_database_name' = 'datamanagement');
 
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ageu_codelist` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ageu_codelist_record` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist` SET TAGS ('dbx_pii_special_category' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist` SET TAGS ('dbx_gdpr_article_9' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist` SET TAGS ('dbx_pii_sensitive' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist` SET TAGS ('dbx_gdpr_article9_special_category' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist` SET TAGS ('dbx_pii_special_category_gdpr_art9' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist_record` SET TAGS ('dbx_pii_special_category' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist_record` SET TAGS ('dbx_gdpr_article_9' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist_record` SET TAGS ('dbx_pii_sensitive' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist_record` SET TAGS ('dbx_gdpr_article9_special_category' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist_record` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist_record` SET TAGS ('dbx_pii_special_category_gdpr_art9' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `ethnic_codelist_record` SET TAGS ('dbx_special_category_pii' = 'true');
+ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `short_name` SET TAGS ('dbx_pii_name' = 'true');
 
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `codelist_name` SET TAGS ('dbx_pii_name' = 'true');
 
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `nci_concept_code` SET TAGS ('dbx_implements' = 'CodeList.nciCode');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `nci_concept_code` SET TAGS ('dbx_standard' = 'CDISC_CT');
-
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist` SET TAGS ('dbx_pii_special_category' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist` SET TAGS ('dbx_gdpr_article_9' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist` SET TAGS ('dbx_pii_sensitive' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist` SET TAGS ('dbx_gdpr_article9_special_category' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist` SET TAGS ('dbx_pii_special_category_gdpr_art9' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist_record` SET TAGS ('dbx_pii_special_category' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist_record` SET TAGS ('dbx_gdpr_article_9' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist_record` SET TAGS ('dbx_pii_sensitive' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist_record` SET TAGS ('dbx_gdpr_article9_special_category' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist_record` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist_record` SET TAGS ('dbx_pii_special_category_gdpr_art9' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `race_codelist_record` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `route_codelist` SET TAGS ('dbx_codelist' = 'ROUTE');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `route_codelist_record` SET TAGS ('dbx_codelist' = 'ROUTE');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `route_codelist_record` SET TAGS ('dbx_route_codelist' = 'ROUTE');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `route_codelist_record` SET TAGS ('dbx_codelist_record' = 'ROUTE');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `sex_codelist` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `sex_codelist_record` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `short_name` SET TAGS ('dbx_pii_name' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `submission_value` SET TAGS ('dbx_implements' = 'CodeList.submissionValue');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist` ALTER COLUMN `submission_value` SET TAGS ('dbx_standard' = 'CDISC_CT');
 
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_term` ADD CONSTRAINT `fk_datamanagement_codelist_term_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
 
@@ -3041,6 +2668,12 @@ ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_dataset` SET TAGS ('dbx
 
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_dataset` SET TAGS ('dbx_database_name' = 'datamanagement');
 
+ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_dataset` ALTER COLUMN `sdtm_dataset_id` SET TAGS ('dbx_business_glossary_term' = 'Study Data Tabulation Model (SDTM) Dataset ID');
+
+ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_dataset` ALTER COLUMN `sdtm_dataset_id` SET TAGS ('dbx_standard' = 'SDTM');
+
+ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_dataset` ALTER COLUMN `sdtm_dataset_id` SET TAGS ('dbx_implements' = 'SDTM.DOMAIN');
+
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_dataset` ALTER COLUMN `dmp_id` SET TAGS ('dbx_business_glossary_term' = 'Dmp Id (Foreign Key)');
 
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_dataset` ALTER COLUMN `sdtm_submission_id` SET TAGS ('dbx_business_glossary_term' = 'Submission Package ID');
@@ -3142,6 +2775,12 @@ ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_mapping` SET TAGS ('dbx
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_mapping` SET TAGS ('dbx_schema' = 'datamanagement');
 
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_mapping` SET TAGS ('dbx_database_name' = 'datamanagement');
+
+ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_mapping` ALTER COLUMN `sdtm_mapping_id` SET TAGS ('dbx_business_glossary_term' = 'Study Data Tabulation Model (SDTM) Mapping ID');
+
+ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_mapping` ALTER COLUMN `sdtm_mapping_id` SET TAGS ('dbx_standard' = 'SDTM');
+
+ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_mapping` ALTER COLUMN `sdtm_mapping_id` SET TAGS ('dbx_implements' = 'SDTM.DOMAIN');
 
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`sdtm_mapping` ALTER COLUMN `compliance_sop_id` SET TAGS ('dbx_business_glossary_term' = 'Sop Id (Foreign Key)');
 
@@ -3932,335 +3571,3 @@ ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`ehr_fhir_crosswalk` SET TAGS
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`ehr_fhir_crosswalk` ALTER COLUMN `ehr_fhir_crosswalk_id` SET TAGS ('dbx_business_glossary_term' = 'ehr_fhir_crosswalk Identifier');
 
 ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`ehr_fhir_crosswalk` ALTER COLUMN `trial_subject_id` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` ADD CONSTRAINT `fk_datamanagement_codelist_sex_cdisc_standard_id` FOREIGN KEY (`cdisc_standard_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`cdisc_standard`(`cdisc_standard_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` ADD CONSTRAINT `fk_datamanagement_codelist_sex_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` ADD CONSTRAINT `fk_datamanagement_codelist_sex_codelist_term_id` FOREIGN KEY (`codelist_term_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist_term`(`codelist_term_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` SET TAGS ('dbx_data_type' = 'reference_data');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` SET TAGS ('dbx_domain' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` SET TAGS ('dbx_division' = 'operations');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` SET TAGS ('dbx_subdomain' = 'terminology_control');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` SET TAGS ('dbx_schema' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` SET TAGS ('dbx_database_name' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` ALTER COLUMN `codelist_sex_id` SET TAGS ('dbx_business_glossary_term' = 'codelist_sex Identifier');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` ALTER COLUMN `codelist_sex_id` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_sex` ALTER COLUMN `codelist_sex_status` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ADD CONSTRAINT `fk_datamanagement_codelist_race_cdisc_standard_id` FOREIGN KEY (`cdisc_standard_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`cdisc_standard`(`cdisc_standard_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ADD CONSTRAINT `fk_datamanagement_codelist_race_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ADD CONSTRAINT `fk_datamanagement_codelist_race_codelist_term_id` FOREIGN KEY (`codelist_term_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist_term`(`codelist_term_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` SET TAGS ('dbx_data_type' = 'reference_data');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` SET TAGS ('dbx_domain' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` SET TAGS ('dbx_division' = 'operations');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` SET TAGS ('dbx_subdomain' = 'terminology_control');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` SET TAGS ('dbx_schema' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` SET TAGS ('dbx_database_name' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `codelist_race_id` SET TAGS ('dbx_business_glossary_term' = 'codelist_race Identifier');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `codelist_race_id` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `codelist_race_id` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `cdisc_standard_id` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `codelist_id` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `codelist_term_id` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `created_timestamp` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `definition` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `effective_date` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `expiration_date` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `extensible_flag` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `modified_timestamp` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `nci_concept_code` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `notes` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `package_version` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `preferred_term` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `publication_date` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `regulatory_submission_flag` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `sponsor_defined_flag` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `codelist_race_status` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `codelist_race_status` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `submission_value` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `synonym_list` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_race` ALTER COLUMN `term_order` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ADD CONSTRAINT `fk_datamanagement_codelist_ethnic_cdisc_standard_id` FOREIGN KEY (`cdisc_standard_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`cdisc_standard`(`cdisc_standard_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ADD CONSTRAINT `fk_datamanagement_codelist_ethnic_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` SET TAGS ('dbx_data_type' = 'reference_data');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` SET TAGS ('dbx_domain' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` SET TAGS ('dbx_division' = 'operations');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` SET TAGS ('dbx_subdomain' = 'terminology_control');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` SET TAGS ('dbx_schema' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` SET TAGS ('dbx_database_name' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `codelist_ethnic_id` SET TAGS ('dbx_business_glossary_term' = 'codelist_ethnic Identifier');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `codelist_ethnic_id` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `cdisc_standard_id` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `codelist_id` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `created_timestamp` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `definition` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `display_order` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `effective_date` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `expiration_date` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `extensible_flag` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `modified_timestamp` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `nci_concept_code` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `package_version` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `preferred_term` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `submission_value` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `synonym` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ethnic` ALTER COLUMN `term_status` SET TAGS ('dbx_special_category_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` ADD CONSTRAINT `fk_datamanagement_codelist_ageu_cdisc_standard_id` FOREIGN KEY (`cdisc_standard_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`cdisc_standard`(`cdisc_standard_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` ADD CONSTRAINT `fk_datamanagement_codelist_ageu_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` ADD CONSTRAINT `fk_datamanagement_codelist_ageu_codelist_term_id` FOREIGN KEY (`codelist_term_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist_term`(`codelist_term_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` SET TAGS ('dbx_data_type' = 'reference_data');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` SET TAGS ('dbx_domain' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` SET TAGS ('dbx_division' = 'operations');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` SET TAGS ('dbx_subdomain' = 'terminology_control');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` SET TAGS ('dbx_schema' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` SET TAGS ('dbx_database_name' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` ALTER COLUMN `codelist_ageu_id` SET TAGS ('dbx_business_glossary_term' = 'codelist_ageu Identifier');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` ALTER COLUMN `codelist_ageu_id` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ageu` ALTER COLUMN `usage_note` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` ADD CONSTRAINT `fk_datamanagement_codelist_out_cdisc_standard_id` FOREIGN KEY (`cdisc_standard_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`cdisc_standard`(`cdisc_standard_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` ADD CONSTRAINT `fk_datamanagement_codelist_out_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` ADD CONSTRAINT `fk_datamanagement_codelist_out_codelist_term_id` FOREIGN KEY (`codelist_term_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist_term`(`codelist_term_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` SET TAGS ('dbx_data_type' = 'reference_data');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` SET TAGS ('dbx_domain' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` SET TAGS ('dbx_division' = 'operations');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` SET TAGS ('dbx_subdomain' = 'terminology_control');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` SET TAGS ('dbx_schema' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` SET TAGS ('dbx_database_name' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` ALTER COLUMN `codelist_out_id` SET TAGS ('dbx_business_glossary_term' = 'codelist_out Identifier');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_out` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` ADD CONSTRAINT `fk_datamanagement_codelist_acn_cdisc_standard_id` FOREIGN KEY (`cdisc_standard_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`cdisc_standard`(`cdisc_standard_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` ADD CONSTRAINT `fk_datamanagement_codelist_acn_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` ADD CONSTRAINT `fk_datamanagement_codelist_acn_codelist_term_id` FOREIGN KEY (`codelist_term_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist_term`(`codelist_term_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` SET TAGS ('dbx_data_type' = 'reference_data');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` SET TAGS ('dbx_domain' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` SET TAGS ('dbx_division' = 'operations');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` SET TAGS ('dbx_subdomain' = 'terminology_control');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` SET TAGS ('dbx_schema' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` SET TAGS ('dbx_database_name' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` ALTER COLUMN `codelist_acn_id` SET TAGS ('dbx_business_glossary_term' = 'codelist_acn Identifier');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_acn` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` ADD CONSTRAINT `fk_datamanagement_codelist_aesev_cdisc_standard_id` FOREIGN KEY (`cdisc_standard_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`cdisc_standard`(`cdisc_standard_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` ADD CONSTRAINT `fk_datamanagement_codelist_aesev_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` ADD CONSTRAINT `fk_datamanagement_codelist_aesev_codelist_term_id` FOREIGN KEY (`codelist_term_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist_term`(`codelist_term_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` SET TAGS ('dbx_data_type' = 'reference_data');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` SET TAGS ('dbx_domain' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` SET TAGS ('dbx_division' = 'operations');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` SET TAGS ('dbx_subdomain' = 'terminology_control');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` SET TAGS ('dbx_schema' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` SET TAGS ('dbx_database_name' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` ALTER COLUMN `codelist_aesev_id` SET TAGS ('dbx_business_glossary_term' = 'codelist_aesev Identifier');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_aesev` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` ADD CONSTRAINT `fk_datamanagement_codelist_ncomplt_cdisc_standard_id` FOREIGN KEY (`cdisc_standard_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`cdisc_standard`(`cdisc_standard_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` ADD CONSTRAINT `fk_datamanagement_codelist_ncomplt_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` ADD CONSTRAINT `fk_datamanagement_codelist_ncomplt_codelist_term_id` FOREIGN KEY (`codelist_term_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist_term`(`codelist_term_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` SET TAGS ('dbx_data_type' = 'reference_data');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` SET TAGS ('dbx_domain' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` SET TAGS ('dbx_division' = 'operations');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` SET TAGS ('dbx_subdomain' = 'terminology_control');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` SET TAGS ('dbx_schema' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` SET TAGS ('dbx_database_name' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` ALTER COLUMN `codelist_ncomplt_id` SET TAGS ('dbx_business_glossary_term' = 'codelist_ncomplt Identifier');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_ncomplt` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` ADD CONSTRAINT `fk_datamanagement_codelist_route_cdisc_standard_id` FOREIGN KEY (`cdisc_standard_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`cdisc_standard`(`cdisc_standard_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` ADD CONSTRAINT `fk_datamanagement_codelist_route_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` ADD CONSTRAINT `fk_datamanagement_codelist_route_codelist_term_id` FOREIGN KEY (`codelist_term_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist_term`(`codelist_term_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` SET TAGS ('dbx_data_type' = 'reference_data');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` SET TAGS ('dbx_domain' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` SET TAGS ('dbx_division' = 'operations');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` SET TAGS ('dbx_subdomain' = 'terminology_control');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` SET TAGS ('dbx_schema' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` SET TAGS ('dbx_database_name' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` ALTER COLUMN `codelist_route_id` SET TAGS ('dbx_business_glossary_term' = 'codelist_route Identifier');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_route` ALTER COLUMN `usage_notes` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` ADD CONSTRAINT `fk_datamanagement_codelist_frm_cdisc_standard_id` FOREIGN KEY (`cdisc_standard_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`cdisc_standard`(`cdisc_standard_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` ADD CONSTRAINT `fk_datamanagement_codelist_frm_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` ADD CONSTRAINT `fk_datamanagement_codelist_frm_codelist_term_id` FOREIGN KEY (`codelist_term_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist_term`(`codelist_term_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` SET TAGS ('dbx_data_type' = 'reference_data');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` SET TAGS ('dbx_domain' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` SET TAGS ('dbx_division' = 'operations');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` SET TAGS ('dbx_subdomain' = 'terminology_control');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` SET TAGS ('dbx_schema' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` SET TAGS ('dbx_database_name' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` ALTER COLUMN `codelist_frm_id` SET TAGS ('dbx_business_glossary_term' = 'codelist_frm Identifier');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_frm` ALTER COLUMN `usage_notes` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` ADD CONSTRAINT `fk_datamanagement_codelist_unit_cdisc_standard_id` FOREIGN KEY (`cdisc_standard_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`cdisc_standard`(`cdisc_standard_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` ADD CONSTRAINT `fk_datamanagement_codelist_unit_codelist_id` FOREIGN KEY (`codelist_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist`(`codelist_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` ADD CONSTRAINT `fk_datamanagement_codelist_unit_codelist_term_id` FOREIGN KEY (`codelist_term_id`) REFERENCES `clinical_trials_ecm`.`datamanagement`.`codelist_term`(`codelist_term_id`);
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` SET TAGS ('dbx_data_type' = 'reference_data');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` SET TAGS ('dbx_domain' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` SET TAGS ('dbx_division' = 'operations');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` SET TAGS ('dbx_subdomain' = 'terminology_control');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` SET TAGS ('dbx_schema' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` SET TAGS ('dbx_database_name' = 'datamanagement');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` ALTER COLUMN `codelist_unit_id` SET TAGS ('dbx_business_glossary_term' = 'codelist_unit Identifier');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` ALTER COLUMN `package_version` SET TAGS ('dbx_pii' = 'true');
-
-ALTER TABLE `clinical_trials_ecm`.`datamanagement`.`codelist_unit` ALTER COLUMN `usage_note` SET TAGS ('dbx_pii' = 'true');

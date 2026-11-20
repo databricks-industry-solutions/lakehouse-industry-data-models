@@ -1,5 +1,5 @@
 -- Schema for Domain: safety | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:34
+-- Generated on: 2026-11-20 10:03:00
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`safety` COMMENT 'Manages adverse events (AE), serious adverse events (SAE), suspected unexpected serious adverse reactions (SUSAR), and safety signal detection. Owns MedDRA coding (SOC/PT/LLT), CTCAE severity grading, causality assessments, expedited regulatory reporting';
 

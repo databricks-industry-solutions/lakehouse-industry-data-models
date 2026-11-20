@@ -1,5 +1,5 @@
 -- Schema for Domain: site | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:34
+-- Generated on: 2026-11-20 10:03:00
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`site` COMMENT 'Manages investigational sites including feasibility assessment, site selection, activation, PI qualifications, CRC assignments, IRB/IEC approval records, site performance metrics, monitoring visit scheduling, and close-out.';
 

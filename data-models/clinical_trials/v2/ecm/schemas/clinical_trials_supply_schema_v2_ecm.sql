@@ -1,5 +1,5 @@
 -- Schema for Domain: supply | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:35
+-- Generated on: 2026-11-20 10:03:01
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`supply` COMMENT 'Manages investigational medicinal product (IMP) and clinical supply chain operations. Owns drug supply planning, depot and site inventory, randomization kits, dispensing records via RTSM (Medidata Rave), expiry management, returns and destruction';
 

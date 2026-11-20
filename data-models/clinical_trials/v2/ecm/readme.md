@@ -1,6 +1,6 @@
 # Clinical_Trials Lakehouse Data Model
 
-**v2_ecm** generated using Vibe Modelling Agent on November 19, 2026 at 04:30 PM
+**v2_ecm** generated using Vibe Modelling Agent on November 20, 2026 at 09:58 AM
 
 This document outlines a vibed Lakehouse data model for the Clinical_Trials business that can be deployed to Databricks Platform. The model is structured into business-aligned domains and denormalized data products, optimized for analytical workloads.
 
@@ -67,17 +67,17 @@ v2/ecm/
 | Model Scope | ECM (Expanded Coverage Model) |
 | Total Domains | 20 |
 | Total Subdomains | 67 |
-| Total Products | 456 |
-| Total Attributes | 16159 |
-| Primary Keys | 455 |
-| Foreign Keys | 3304 |
-| Avg Attributes/Product | 35.4 |
+| Total Products | 445 |
+| Total Attributes | 15922 |
+| Primary Keys | 444 |
+| Foreign Keys | 3272 |
+| Avg Attributes/Product | 35.8 |
 | Metric Views | 0 |
 
 ## Business Summary
 | Business | Industry Alignment | Model Scope | Description | References | Version |
 |---|---|---|---|---|---|
-| Clinical_Trials | clinical-research | ECM (Expanded Coverage Model) | Clinical Trials is a specialized industry that designs, manages, and monitors clinical research studies for pharmaceutical and biotech sponsors, providing data analytics, regulatory expertise, and patient recruitment to accelerate drug development. | FDA (U.S. Food and Drug Administration), EMA (European Medicines Agency), ICH (International Council for Harmonisation of Technical Requirements for Pharmaceuticals for Human Use), MHRA (Medicines and Healthcare products Regulatory Agency - UK), PMDA (Pharmaceuticals and Medical Devices Agency - Japan), TGA (Therapeutic Goods Administration - Australia), Health Canada, CDISC (Clinical Data Interchange Standards Consortium), WHO (World Health Organization - International Clinical Trials Registry Platform), OHRP (Office for Human Research Protections - U.S.), ISO 14155 (Clinical Investigation of Medical Devices), 21 CFR Part 11 (Electronic Records and Signatures), EU Clinical Trials Regulation (EU CTR 536/2014), GDPR (General Data Protection Regulation - patient data privacy), HIPAA (Health Insurance Portability and Accountability Act - U.S. patient data), SOX (Sarbanes-Oxley Act - financial reporting controls) | 13 |
+| Clinical_Trials | clinical-research | ECM (Expanded Coverage Model) | Clinical Trials is a specialized industry that designs, manages, and monitors clinical research studies for pharmaceutical and biotech sponsors, providing data analytics, regulatory expertise, and patient recruitment to accelerate drug development. | FDA (U.S. Food and Drug Administration), EMA (European Medicines Agency), ICH (International Council for Harmonisation of Technical Requirements for Pharmaceuticals for Human Use), MHRA (Medicines and Healthcare products Regulatory Agency - UK), PMDA (Pharmaceuticals and Medical Devices Agency - Japan), TGA (Therapeutic Goods Administration - Australia), Health Canada, CDISC (Clinical Data Interchange Standards Consortium), WHO (World Health Organization - International Clinical Trials Registry Platform), OHRP (Office for Human Research Protections - U.S.), ISO 14155 (Clinical Investigation of Medical Devices), 21 CFR Part 11 (Electronic Records and Signatures), EU Clinical Trials Regulation (EU CTR 536/2014), GDPR (General Data Protection Regulation - patient data privacy), HIPAA (Health Insurance Portability and Accountability Act - U.S. patient data), SOX (Sarbanes-Oxley Act - financial reporting controls) | 17 |
 
 ## Business Domains & Subdomains
 
@@ -155,7 +155,7 @@ v2/ecm/
 
 | Domain | Division | Total Subdomains | Description | Total Products |
 |---|---|---|---|---|
-| datamanagement | operations | 3 | Governs clinical data collection, validation, and lock processes. Owns EDC/eCRF design and build (Medidata Rave), data validation rules, query management, discrepancy resolution, medical coding (MedDRA, WHO-DD), database lock (DBL) workflows, DMP, CDISC | 37 |
+| datamanagement | operations | 3 | Governs clinical data collection, validation, and lock processes. Owns EDC/eCRF design and build (Medidata Rave), data validation rules, query management, discrepancy resolution, medical coding (MedDRA, WHO-DD), database lock (DBL) workflows, DMP, CDISC | 26 |
 
 **Subdomains:** electronic_capture, standards_mapping, terminology_control
 
@@ -187,19 +187,8 @@ v2/ecm/
 | standards_mapping | sdtm_mapping | master_data | Detail-level record defining a single source-to-target transformation rule between a raw EDC eCRF field and a CDISC SDTM variable within a parent sdtm_dataset. | 44 |
 | standards_mapping | sdtm_variable_spec |  | SDTM variable specification. | 8 |
 | standards_mapping | value_level_metadata |  | Define-XML value level metadata. | 21 |
-| terminology_control | codelist |  | CDISC Controlled Terminology codelist reference table. Includes UNIT codelist (NCI C71620) for dose and age units, SEX (NCI C66731), RACE (NCI C74457), ETHNIC (NCI C66790), AGEU (NCI C66781), OUT (NCI C66768), ACN (NCI C66767), AESEV (NCI C66769), NCOMPLT | 32 |
-| terminology_control | codelist_acn |  | Reference table for CDISC Controlled Terminology ACN codelist | 17 |
-| terminology_control | codelist_aesev |  | Reference table for CDISC Controlled Terminology AESEV codelist | 17 |
-| terminology_control | codelist_ageu |  | Reference table for CDISC Controlled Terminology AGEU codelist | 18 |
-| terminology_control | codelist_ethnic |  | Reference table for CDISC Controlled Terminology ETHNIC codelist | 16 |
-| terminology_control | codelist_frm |  | Reference table for CDISC Controlled Terminology FRM codelist | 18 |
-| terminology_control | codelist_ncomplt |  | Reference table for CDISC Controlled Terminology NCOMPLT codelist | 19 |
-| terminology_control | codelist_out |  | Reference table for CDISC Controlled Terminology OUT codelist | 17 |
-| terminology_control | codelist_race |  | Reference table for CDISC Controlled Terminology RACE codelist | 21 |
-| terminology_control | codelist_route |  | Reference table for CDISC Controlled Terminology ROUTE codelist | 30 |
-| terminology_control | codelist_sex |  | Reference table for CDISC Controlled Terminology SEX codelist | 17 |
-| terminology_control | codelist_term |  | CDISC Controlled Terminology codelist term/member. | 7 |
-| terminology_control | codelist_unit |  | Reference table for CDISC Controlled Terminology UNIT codelist | 24 |
+| terminology_control | codelist |  | CDISC Controlled Terminology codelist reference table. Includes UNIT codelist (NCI C71620) for dose and age units, SEX (NCI C66731), RACE (NCI C74457), ETHNIC (NCI C66790), AGEU (NCI C66781), OUT (NCI C66768), ACN (NCI C66767), AESEV (NCI C66769), NCOMPLT | 8 |
+| terminology_control | codelist_term |  | CDISC Controlled Terminology codelist term/member. | 8 |
 | terminology_control | coding_assignment | transactional_data | Transactional record of medical coding assignments applied to verbatim terms collected in eCRFs. Captures verbatim term, coding dictionary (MedDRA or WHO-DD), dictionary version, assigned code, preferred term (PT), system organ class (SOC), lowest level | 45 |
 
 <a id="domain-laboratory"></a>

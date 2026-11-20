@@ -1,5 +1,5 @@
 -- Schema for Domain: agreement | Business: Clinical_Trials | Version: v2_ecm
--- Generated on: 2026-11-19 16:37:31
+-- Generated on: 2026-11-20 10:02:57
 
 CREATE DATABASE IF NOT EXISTS `clinical_trials_ecm`.`agreement` COMMENT 'Stores study contracts, master service agreements, amendments, scope of work documents, change orders, and service-level agreements. Governs the legal and commercial relationship between sponsor and CRO including billing milestones and deliverable';
 

@@ -1,4 +1,4 @@
--- Metric views for domain: supply | Business: Clinical_Trials | Version: 13 | Generated on: 2026-11-19 16:37:37
+-- Metric views for domain: supply | Business: Clinical_Trials | Version: 17 | Generated on: 2026-11-20 10:03:07
 
 CREATE OR REPLACE VIEW `clinical_trials_ecm`.`_metrics`.`supply_depot_inventory`
 WITH METRICS
