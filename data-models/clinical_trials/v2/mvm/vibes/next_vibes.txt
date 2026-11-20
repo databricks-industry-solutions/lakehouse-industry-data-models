@@ -1,0 +1,32 @@
+**Model Quality Score: 88.15/100**
+
+The two in-scope changes requested by the user vibe (retyping datamanagement.codelist_term.submission_value and datamanagement.codelist_term.decoded_value from DECIMAL(18,2) to STRING) are the only permitted edits; both target an in-scope, allowed product and are consistent with the stated business semantics (CDISC submission values and decode strings). No scope violations are required. The model graph is well-connected with zero isolated products, zero siloed tables, and zero unlinked _id columns. The findings below are the only actionable items; all fall within the vibe scope or are reported for the next iteration.
+**PRIORITY 1 — rename_attribute: datamanagement.codelist_term** — retype column submission_value from DECIMAL(18,2) to STRING (vibe change 1); it holds CDISC submission values such as M, F, or HISPANIC OR LATINO that cannot be represented numerically.
+**PRIORITY 2 — rename_attribute: datamanagement.codelist_term** — retype column decoded_value from DECIMAL(18,2) to STRING (vibe change 2); it holds the human-readable decode of the term, which is free text rather than a decimal.
+No other improvements are in scope. All 171 frozen products, 92 metric views, 14 domain records, and model-level metadata must remain byte-identical. Any static-analysis findings on base entities outside datamanagement.codelist_term (naming, FK integrity, attribute completeness) are deferred to next_vibes and are NOT to be fixed in this run per the VIBE SCOPE FENCE.
+
+Other known issues from static analysis (10):
+  - Subdomain 'subject_management' appears in 2 domains: consent, subject. Consider renaming to qualified form.
+  - Product 'monitoring.escalation_record' has 39 outgoing FKs (max recommended: 25). Consider splitting into multiple products or refactoring as a junction.
+  - Product 'monitoring.sdv_record' has 29 outgoing FKs (max recommended: 25). Consider splitting into multiple products or refactoring as a junction.
+  - Product 'monitoring.visit_deviation_finding' has 29 outgoing FKs (max recommended: 25). Consider splitting into multiple products or refactoring as a junction.
+  - Product 'monitoring.visit_finding' has 29 outgoing FKs (max recommended: 25). Consider splitting into multiple products or refactoring as a junction.
+  - Product 'compliance.quality_event' has 27 outgoing FKs (max recommended: 25). Consider splitting into multiple products or refactoring as a junction.
+  - 26 attribute(s) match person-data patterns but lack pii_ tags
+  - 2 attribute(s) have datatypes inconsistent with their column name pattern
+  - Corporate division holds 3/14 domains (21%) - exceeds the 20% cap (Operations+Business must be >=80%). Relocate or reclassify.
+  - 32 attribute(s) carry a business_glossary_term that is a placeholder or the column's own name, not a business term (e.g., safety.dsur_signal_summary.dsur_signal_summary_id, safety.dsur_signal_summary.created_timestamp, safety.dsur_signal_summary.dsmb_review_outcome_in_period, safety.dsur_signal_summary.dsur_narrative_section, safety.dsur_signal_summary.new_vs_ongoing_flag)
+**Vibe adherence: 100.0% (4/4 in-scope VREQs applied) | Structural quality: 93/100 (reported separately, NOT blended)**
+## VIBE SCOPE SUMMARY
+- vibe_scope: Some Domains -> datamanagement
+- frozen this run: 14 domain record(s), 171 product(s), 92 metric view(s)
+- in-scope adherence: 100.0% over 4 in-scope VREQ(s)
+- scope_rejected: 0 | blocked (scope_dependency_conflict): 0 | fence violations: 0 | authorized out-of-scope links (P4): 0
+- fence restores: 206
+
+
+Deterministic score: 88.15/100 (LLM assessment: 98/100)
+
+## MISSED VIBES (carried from the previous run — apply these THIS run; user directives first)
+
+- Constrain the evolution to exactly two changes; freeze everything else in the model. (target: *) [missed: orchestrator status=partial]
