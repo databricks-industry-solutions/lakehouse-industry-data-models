@@ -1,0 +1,106 @@
+{
+  "sources": {
+    "sdtm": {
+      "name": "CDISC SDTM",
+      "repository": "cdisc-org/COSMoS",
+      "url": "https://raw.githubusercontent.com/cdisc-org/COSMoS",
+      "commit_sha": "031429b1d14823721991cd23ee88a11616686ce3",
+      "license": "MIT",
+      "license_url": "https://github.com/cdisc-org/COSMoS/blob/main/LICENSE",
+      "description": "CDISC COSMoS SDTM dataset specializations export. Covers the SDTM variables used by published biomedical-concept specializations, not the full SDTMIG, so validation against it is conservative.",
+      "files": {
+        "specializations": {
+          "path": "export/cdisc_sdtm_dataset_specializations_latest.csv",
+          "cache_as": "sdtm_specializations.csv"
+        }
+      }
+    },
+    "usdm": {
+      "name": "CDISC USDM (DDF-RA v4)",
+      "repository": "cdisc-org/DDF-RA",
+      "url": "https://raw.githubusercontent.com/cdisc-org/DDF-RA",
+      "commit_sha": "aa303cb32f5d3ceecc68a16803e26720d2c1fc26",
+      "license": "MIT",
+      "license_url": "https://github.com/cdisc-org/DDF-RA/blob/main/LICENSE",
+      "description": "CDISC DDF-RA (USDM v4) OpenAPI deliverable, used for class and attribute names",
+      "files": {
+        "api": {
+          "path": "Deliverables/API/USDM_API.json",
+          "cache_as": "usdm_api.json"
+        }
+      }
+    },
+    "omop": {
+      "name": "OHDSI OMOP CDM v5.4",
+      "repository": "OHDSI/CommonDataModel",
+      "url": "https://raw.githubusercontent.com/OHDSI/CommonDataModel",
+      "commit_sha": "4a910305b2cb74a4fc2b2c34baf44eb0542ff03f",
+      "license": "Apache License 2.0",
+      "license_url": "https://github.com/OHDSI/CommonDataModel/blob/main/DESCRIPTION",
+      "description": "OHDSI Observational Medical Outcomes Partnership (OMOP) Common Data Model v5.4 - field-level specification",
+      "files": {
+        "fields": {
+          "path": "inst/csv/OMOP_CDMv5.4_Field_Level.csv",
+          "cache_as": "omop_cdm_v5.4_fields.csv"
+        }
+      }
+    },
+    "fhir": {
+      "name": "HL7 FHIR R4/R5",
+      "url": "https://www.hl7.org/fhir/",
+      "version": "R4/R5",
+      "license": "CC0 1.0",
+      "license_url": "https://www.hl7.org/fhir/license.html",
+      "description": "Fast Healthcare Interoperability Resources - ResearchStudy, ResearchSubject, AdverseEvent, Observation, MedicationStatement, Condition, Patient resources",
+      "resources": [
+        "ResearchStudy",
+        "ResearchSubject",
+        "AdverseEvent",
+        "Observation",
+        "MedicationStatement",
+        "Condition",
+        "Patient"
+      ]
+    },
+    "sentinel": {
+      "name": "FDA Sentinel CDM",
+      "url": "https://www.sentinelinitiative.org/",
+      "license": "Public",
+      "license_url": "https://www.sentinelinitiative.org/about-sentinel/sentinel-data-and-documentation",
+      "description": "FDA Sentinel Common Data Model - tables and field names for adverse event reporting",
+      "note": "Curated field list in rules file with citation URL; no machine-readable public DDL",
+      "reference_tables": [
+        "dem",
+        "enr",
+        "med",
+        "diag",
+        "lab",
+        "proc",
+        "death"
+      ]
+    },
+    "pcornet": {
+      "name": "PCORnet CDM",
+      "url": "https://pcornet.org/pcornet-common-data-model/",
+      "license": "Public",
+      "license_url": "https://pcornet.org/",
+      "description": "Patient-Centered Outcomes Research Network (PCORnet) Common Data Model - tables and field names",
+      "note": "Curated field list in rules file with citation URL; no machine-readable public DDL",
+      "reference_tables": [
+        "DEMOGRAPHIC",
+        "ENROLLMENT",
+        "ENCOUNTER",
+        "DIAGNOSIS",
+        "PROCEDURES",
+        "VITAL",
+        "LAB_RESULT_CM",
+        "MEDICATION",
+        "CONDITION",
+        "DEATH",
+        "DISPENSING",
+        "PROVIDER",
+        "FACILITY"
+      ]
+    }
+  }
+}

@@ -1,0 +1,6 @@
+domain,product,attribute,standard,standard_version,target_entity,target_element,match_type,confidence,evidence,source_ref
+study,endpoint,endpoint_name,USDM,4.0,Endpoint,name,derived,high,Attribute name: endpoint_name,Endpoint name (study design)
+study,endpoint,endpoint_description,USDM,4.0,Endpoint,description,derived,high,Attribute name: endpoint_description,Endpoint description (study design)
+study,arm,arm_name,USDM,4.0,StudyArm,name,derived,high,Attribute name: arm_name,Study arm name
+study,epoch,epoch_name,USDM,4.0,StudyEpoch,name,derived,high,Attribute name: epoch_name,Study epoch name
+study,eligibility_criterion,criterion_text,USDM,4.0,EligibilityCriterion,description,derived,high,Attribute name: criterion_text,Eligibility criterion text

@@ -1,0 +1,3 @@
+domain,product,attribute,standard,standard_version,target_entity,target_element,match_type,confidence,evidence,source_ref
+terminology,meddra_pt,pt_code,OMOP,5.4,condition_occurrence,condition_source_value,derived,medium,mapped from meddra_pt.pt_code,"MedDRA PT code, reached from safety.adverse_event.meddra_pt_id"
+safety,adverse_event,onset_date,OMOP,5.4,condition_occurrence,condition_start_date,derived,medium,Attribute name: onset_date,Condition (adverse event) start date
